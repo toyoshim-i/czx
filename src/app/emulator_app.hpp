@@ -62,7 +62,7 @@ private:
 
     void ensure_data_dirs();
     std::string default_media_dir_for_core() const;
-    bool activate_core(int index);
+    bool activate_core(int index, const std::string& initial_media = {});
     void destroy_active_core();
     void render_core_error_screen();
     czx::video::MenuViewModel build_menu_vm() const;

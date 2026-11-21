@@ -88,7 +88,7 @@ void EmulatorApp::destroy_active_core() {
     core_inst_ = nullptr;
 }
 
-bool EmulatorApp::activate_core(int index) {
+bool EmulatorApp::activate_core(int index, const std::string& initial_media) {
     if (registry_.count() == 0) return false;
     const int wrapped = (index % static_cast<int>(registry_.count()) + static_cast<int>(registry_.count())) %
                         static_cast<int>(registry_.count());
@@ -110,6 +110,7 @@ bool EmulatorApp::activate_core(int index) {
     host.video_frame = cb_video_frame;
     host.audio_samples = cb_audio_samples;
     host.log = cb_log;
+    host.initial_media = initial_media.empty() ? nullptr : initial_media.c_str();
 
     core_inst_ = core_api_->create(core_api_, &host);
     if (!core_inst_) {
@@ -272,6 +273,15 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
                               ? core_api_->get_media_label(core_inst_)
                               : nullptr;
         vm.preset_or_media_label = lbl ? lbl : "None";
+        const auto& l = vm.preset_or_media_label;
+        if (l.size() >= 4) {
+            auto eq = [](char a, char b) {
+                return ((a >= 'A' && a <= 'Z') ? static_cast<char>(a - 'A' + 'a') : a) == b;
+            };
+            const size_t n = l.size();
+            vm.is_tape_media = eq(l[n - 4], '.') && eq(l[n - 3], 't') &&
+                               eq(l[n - 2], 'a') && eq(l[n - 1], 'p');
+        }
     } else if (core_api_ && core_inst_ && core_api_->get_preset_name) {
         vm.preset_or_media_label = core_api_->get_preset_name(core_inst_, preset_index_);
     } else {
@@ -371,10 +381,17 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
         case czx::video::MenuAction::EjectMedia:
             if (core_api_ && core_inst_ && core_api_->eject_media &&
                 core_api_->eject_media(core_inst_)) {
-                const char* lbl = (core_api_->get_media_label)
-                                      ? core_api_->get_media_label(core_inst_)
-                                      : "EJECTED";
-                show_toast(lbl);
+                if (vm.is_tape_media) {
+                    menu_.set_open(false);
+                    router_.set_menu_open(false);
+                    hud_.menu_open = false;
+                    show_toast("TAPE PLAY");
+                } else {
+                    const char* lbl = (core_api_->get_media_label)
+                                          ? core_api_->get_media_label(core_inst_)
+                                          : "EJECTED";
+                    show_toast(lbl);
+                }
             }
             break;
         case czx::video::MenuAction::CycleDisplayModePrev:
@@ -499,18 +516,11 @@ int EmulatorApp::run() {
     cfg_.platform.headless = (cfg_.headless_frames > 0);
     platform_ = czx::platform::create_platform_bundle(cfg_.platform);
 
-    if (!activate_core(initial_idx)) {
+    if (!activate_core(initial_idx, cfg_.media_path)) {
         if (cfg_.headless_frames > 0) {
             return 1;
         }
         show_toast("ROM REQUIRED");
-    }
-
-    if (!cfg_.media_path.empty() && core_inst_ && core_api_->load_media) {
-        if (!core_api_->load_media(core_inst_, cfg_.media_path.c_str())) {
-            std::fprintf(stderr, "czx: failed to load media: %s\n", cfg_.media_path.c_str());
-            return 1;
-        }
     }
 
     czx::input::RouterCallbacks rcb{};

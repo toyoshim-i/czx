@@ -25,7 +25,10 @@ public:
 
     struct Symbols;
     const Symbols& symbols() const noexcept { return *syms_; }
-    const retro_system_info& system_info() const noexcept { return sys_info_; }
+    bool need_fullpath() const noexcept { return need_fullpath_; }
+    bool open_library();
+    void close_library() noexcept;
+    bool is_library_open() const noexcept { return dl_ != nullptr && syms_ != nullptr; }
     void update_av_timing(double fps, double sample_rate);
     void set_last_error(std::string msg) { last_error_ = std::move(msg); }
     const char* last_error() const noexcept { return last_error_.empty() ? nullptr : last_error_.c_str(); }
@@ -38,8 +41,8 @@ private:
     std::string last_error_;
     void* dl_ = nullptr;
     bool loaded_ = false;
+    bool need_fullpath_ = false;
     std::unique_ptr<Symbols> syms_;
-    retro_system_info sys_info_{};
     czx_core_desc_t desc_{};
     czx_core_api_t api_{};
 };

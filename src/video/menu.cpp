@@ -114,7 +114,7 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
     const std::array<Row, kItemCount> rows = {{
         {"Core", core_val.c_str()},
         {vm.has_media_browser ? "Load Media" : "Preset", media_val.c_str()},
-        {"Eject/Swap", vm.can_eject ? "[Enter]" : "(N/A)"},
+        {vm.is_tape_media ? "Tape Play" : "Eject/Swap", vm.can_eject ? "[Enter]" : "(N/A)"},
         {"Display", display_mode_name(vm.display_mode)},
         {"Aspect", aspect_policy_name(vm.aspect_policy)},
         {"Borders", vm.show_borders ? "Show Full" : "Crop Active"},

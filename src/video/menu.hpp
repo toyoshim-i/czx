@@ -32,6 +32,7 @@ struct MenuViewModel {
     std::string preset_or_media_label;
     bool has_media_browser = false;
     bool can_eject = false;
+    bool is_tape_media = false;
     int src_width = 0;
     int src_height = 0;
     DisplayMode display_mode = DisplayMode::OverflowFit;

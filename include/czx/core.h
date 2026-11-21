@@ -120,6 +120,7 @@ typedef struct czx_host {
     void (*video_frame)(void* user_data, const czx_frame_t* frame);
     void (*audio_samples)(void* user_data, const int16_t* stereo_s16, size_t frame_count);
     void (*log)(void* user_data, int level, const char* msg);
+    const char* initial_media;
 } czx_host_t;
 
 typedef struct czx_core_desc {

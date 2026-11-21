@@ -110,6 +110,10 @@ bool is_floppy_disk_ext(const std::string& path) {
            ext == ".d81" || ext == ".d82";
 }
 
+bool is_tape_ext(const std::string& path) {
+    return to_lower_copy(fs::path(path).extension().string()) == ".tap";
+}
+
 uint16_t rgb1555_to_rgb565(uint16_t p) noexcept {
     const uint16_t r5 = static_cast<uint16_t>((p >> 10) & 0x1Fu);
     const uint16_t g5 = static_cast<uint16_t>((p >> 5) & 0x1Fu);
@@ -120,9 +124,8 @@ uint16_t rgb1555_to_rgb565(uint16_t p) noexcept {
 
 class LibretroCoreInstance {
 public:
-    LibretroCoreInstance(LibretroCoreLoader* loader, const czx_host_t* host,
-                         const retro_system_info& sys_info, std::string extensions)
-        : loader_(loader), sys_info_(sys_info), extensions_(std::move(extensions)) {
+    LibretroCoreInstance(LibretroCoreLoader* loader, const czx_host_t* host, std::string extensions)
+        : loader_(loader), need_fullpath_(loader->need_fullpath()), extensions_(std::move(extensions)) {
         if (host) host_ = *host;
         is_applewin_ = (loader_->id().find("applewin") != std::string::npos);
         is_vice_ = (loader_->id().find("vice") != std::string::npos);
@@ -136,62 +139,14 @@ public:
     }
 
     ~LibretroCoreInstance() {
-        const auto& syms = loader_->symbols();
-        if (game_loaded_ && syms.retro_unload_game) {
-            syms.retro_unload_game();
-            game_loaded_ = false;
-        }
-        if (initialized_ && syms.retro_deinit) {
-            syms.retro_deinit();
-            initialized_ = false;
-        }
+        teardown_core();
         if (g_active_instance == this) {
             g_active_instance = nullptr;
         }
     }
 
     bool init() {
-        g_active_instance = this;
-        const auto& syms = loader_->symbols();
-        loader_->set_last_error({});
-        shutdown_requested_ = false;
-
-        std::string rom_err;
-        if (!check_required_roms(rom_err)) {
-            loader_->set_last_error(rom_err);
-            log(3, rom_err.c_str());
-            return false;
-        }
-
-        if (is_applewin_) {
-            setenv("CZX_APPLE2_ROM_DIR", system_dir_.c_str(), 1);
-        }
-
-        seed_default_options();
-        load_user_config();
-
-        syms.retro_set_environment(cb_env);
-        syms.retro_set_video_refresh(cb_video);
-        syms.retro_set_audio_sample(cb_audio_sample);
-        syms.retro_set_audio_sample_batch(cb_audio_batch);
-        syms.retro_set_input_poll(cb_input_poll);
-        syms.retro_set_input_state(cb_input_state);
-
-        syms.retro_init();
-        initialized_ = true;
-
-        if (support_no_game_) {
-            if (!syms.retro_load_game(nullptr) || shutdown_requested_) {
-                if (!loader_->last_error()) {
-                    loader_->set_last_error("Core init failed.\nCheck external ROM files in:\n" + system_dir_);
-                }
-                log(3, loader_->last_error());
-                return false;
-            }
-            game_loaded_ = true;
-            refresh_av_info();
-        }
-        return true;
+        return start_core(host_.initial_media);
     }
 
     void set_data_dir(const std::string& dir) {
@@ -226,13 +181,30 @@ public:
         if (path.empty()) return false;
 
         // Hot-swap floppy images when already running and core exposes disk control.
-        if (has_media_ && has_disk_control() && is_floppy_disk_ext(path)) {
+        if (has_media_ && has_disk_control() &&
+            is_floppy_disk_ext(media_path_) && is_floppy_disk_ext(path)) {
             if (hot_swap_disk(path)) {
                 media_path_ = path;
                 media_label_ = fs::path(path).filename().string();
                 ejected_ = false;
                 return true;
             }
+        }
+
+        if (is_vice_) {
+            const std::string target = path;
+            teardown_core();
+            if (start_core(target.c_str())) {
+                return true;
+            }
+            const std::string err = loader_->last_error() ? loader_->last_error() : "Failed to load media";
+            (void)start_core(nullptr);
+            loader_->set_last_error(err);
+            return false;
+        }
+
+        if (!loader_->is_library_open()) {
+            return start_core(path.c_str());
         }
 
         const auto& syms = loader_->symbols();
@@ -247,7 +219,7 @@ public:
         std::vector<uint8_t> buf;
         retro_game_info info{};
         info.path = path.c_str();
-        if (!sys_info_.need_fullpath) {
+        if (!need_fullpath_) {
             std::ifstream ifs(path, std::ios::binary | std::ios::ate);
             if (!ifs.is_open()) {
                 log(3, ("failed to open media: " + path).c_str());
@@ -283,6 +255,11 @@ public:
 
     bool eject_media() {
         g_active_instance = this;
+        if (is_vice_ && has_media_ && is_tape_ext(media_path_)) {
+            pulsed_retrok_ = RETROK_KP_PLUS;
+            pulsed_frames_ = 2;
+            return true;
+        }
         if (!has_disk_control()) {
             return false;
         }
@@ -301,9 +278,21 @@ public:
 
     void run_frame() {
         g_active_instance = this;
-        if (!game_loaded_) return;
+        if (!game_loaded_ || !loader_->is_library_open()) return;
         audio_out_frame_.clear();
+        if (pulsed_frames_ > 0 && pulsed_retrok_ < retro_key_down_.size()) {
+            retro_key_down_[pulsed_retrok_] = true;
+        }
         loader_->symbols().retro_run();
+        if (pulsed_frames_ > 0) {
+            --pulsed_frames_;
+            if (pulsed_frames_ == 0) {
+                if (pulsed_retrok_ < retro_key_down_.size()) {
+                    retro_key_down_[pulsed_retrok_] = false;
+                }
+                pulsed_retrok_ = RETROK_UNKNOWN;
+            }
+        }
         if (!audio_out_frame_.empty() && host_.audio_samples) {
             host_.audio_samples(host_.user_data, audio_out_frame_.data(), audio_out_frame_.size() / 2u);
         }
@@ -382,7 +371,7 @@ private:
 
     LibretroCoreLoader* loader_;
     czx_host_t host_{};
-    retro_system_info sys_info_{};
+    bool need_fullpath_ = false;
     retro_system_av_info av_info_{};
     std::string extensions_;
     bool is_applewin_ = false;
@@ -415,6 +404,8 @@ private:
     std::array<bool, RETROK_LAST> retro_key_down_{};
     bool phys_shift_held_ = false;
     int synthetic_shift_count_ = 0;
+    uint32_t pulsed_retrok_ = RETROK_UNKNOWN;
+    int pulsed_frames_ = 0;
 
     std::vector<uint16_t> cached_16_;
     std::vector<uint32_t> cached_32_;
@@ -473,6 +464,128 @@ private:
         return true;
     }
 
+    void teardown_core() {
+        g_active_instance = this;
+        clear_held_inputs();
+        if (loader_->is_library_open()) {
+            const auto& syms = loader_->symbols();
+            if (game_loaded_ && syms.retro_unload_game) {
+                syms.retro_unload_game();
+            }
+            if (initialized_ && syms.retro_deinit) {
+                syms.retro_deinit();
+            }
+        }
+        game_loaded_ = false;
+        initialized_ = false;
+        support_no_game_ = false;
+        shutdown_requested_ = false;
+        has_disk_ctrl_ = false;
+        has_disk_ctrl_ext_ = false;
+        disk_ctrl_ = {};
+        disk_ctrl_ext_ = {};
+        keyboard_cb_ = nullptr;
+        option_dirty_ = false;
+        pixel_format_ = RETRO_PIXEL_FORMAT_0RGB1555;
+        audio_resample_pos_ = 0.0;
+        loader_->close_library();
+    }
+
+    bool start_core(const char* media_path) {
+        g_active_instance = this;
+        loader_->set_last_error({});
+        shutdown_requested_ = false;
+
+        std::string rom_err;
+        if (!check_required_roms(rom_err)) {
+            loader_->set_last_error(rom_err);
+            log(3, rom_err.c_str());
+            return false;
+        }
+
+        if (is_applewin_) {
+            setenv("CZX_APPLE2_ROM_DIR", system_dir_.c_str(), 1);
+        }
+
+        if (!loader_->open_library()) {
+            loader_->set_last_error("Failed to open core library");
+            return false;
+        }
+
+        const auto& syms = loader_->symbols();
+        options_.clear();
+        seed_default_options();
+        load_user_config();
+
+        syms.retro_set_environment(cb_env);
+        syms.retro_set_video_refresh(cb_video);
+        syms.retro_set_audio_sample(cb_audio_sample);
+        syms.retro_set_audio_sample_batch(cb_audio_batch);
+        syms.retro_set_input_poll(cb_input_poll);
+        syms.retro_set_input_state(cb_input_state);
+
+        syms.retro_init();
+        initialized_ = true;
+
+        if (media_path && media_path[0] != '\0') {
+            std::vector<uint8_t> buf;
+            retro_game_info info{};
+            info.path = media_path;
+            if (!need_fullpath_) {
+                std::ifstream ifs(media_path, std::ios::binary | std::ios::ate);
+                if (!ifs.is_open()) {
+                    loader_->set_last_error("Failed to open media:\n" + std::string(media_path));
+                    log(3, loader_->last_error());
+                    teardown_core();
+                    return false;
+                }
+                const auto sz = ifs.tellg();
+                if (sz > 0) {
+                    buf.resize(static_cast<size_t>(sz));
+                    ifs.seekg(0);
+                    ifs.read(reinterpret_cast<char*>(buf.data()), sz);
+                }
+                info.data = buf.data();
+                info.size = buf.size();
+            }
+
+            if (!syms.retro_load_game(&info) || shutdown_requested_) {
+                loader_->set_last_error("Failed to load media:\n" + std::string(media_path));
+                log(3, loader_->last_error());
+                teardown_core();
+                return false;
+            }
+
+            game_loaded_ = true;
+            has_media_ = true;
+            ejected_ = false;
+            media_path_ = media_path;
+            media_label_ = fs::path(media_path).filename().string();
+            refresh_av_info();
+            return true;
+        }
+
+        if (support_no_game_) {
+            if (!syms.retro_load_game(nullptr) || shutdown_requested_) {
+                if (!loader_->last_error()) {
+                    loader_->set_last_error("Core init failed.\nCheck external ROM files in:\n" + system_dir_);
+                }
+                log(3, loader_->last_error());
+                teardown_core();
+                return false;
+            }
+            game_loaded_ = true;
+            has_media_ = false;
+            ejected_ = false;
+            media_path_.clear();
+            media_label_ = "None";
+            refresh_av_info();
+            return true;
+        }
+
+        return true;
+    }
+
     void log(int level, const char* msg) const {
         if (host_.log) {
             host_.log(host_.user_data, level, msg);
@@ -489,6 +602,12 @@ private:
             options_["vice_c64_model"] = "C64 PAL auto";
             options_["vice_joyport"] = "2";
             options_["vice_autoloadwarp"] = "enabled";
+            options_["vice_datasette_hotkeys"] = "enabled";
+            options_["vice_mapper_datasette_start"] = "RETROK_KP_PLUS";
+            options_["vice_mapper_datasette_stop"] = "RETROK_KP_MINUS";
+            options_["vice_mapper_datasette_rewind"] = "---";
+            options_["vice_mapper_datasette_forward"] = "---";
+            options_["vice_mapper_datasette_reset"] = "---";
         }
     }
 
@@ -585,7 +704,7 @@ private:
         retro_game_info info{};
         info.path = path.c_str();
         std::vector<uint8_t> buf;
-        if (!sys_info_.need_fullpath) {
+        if (!need_fullpath_) {
             std::ifstream ifs(path, std::ios::binary | std::ios::ate);
             if (!ifs.is_open()) {
                 disk_set_eject_(false);
@@ -627,6 +746,8 @@ private:
         }
         synthetic_shift_count_ = 0;
         phys_shift_held_ = false;
+        pulsed_retrok_ = RETROK_UNKNOWN;
+        pulsed_frames_ = 0;
         retro_key_down_.fill(false);
         joy_state_ = {0, 0};
     }
@@ -1021,8 +1142,7 @@ const czx_core_desc_t* lr_get_desc(const czx_core_api_t* api) {
 czx_core_instance_t* lr_create(const czx_core_api_t* api, const czx_host_t* host) {
     auto* loader = static_cast<LibretroCoreLoader*>(api ? api->api_data : nullptr);
     if (!loader) return nullptr;
-    auto inst = std::make_unique<LibretroCoreInstance>(
-        loader, host, loader->system_info(), loader->extensions());
+    auto inst = std::make_unique<LibretroCoreInstance>(loader, host, loader->extensions());
     if (!inst->init()) {
         return nullptr;
     }
@@ -1083,31 +1203,22 @@ const char* lr_get_last_error(const czx_core_api_t* api) {
 LibretroCoreLoader::LibretroCoreLoader() = default;
 
 LibretroCoreLoader::~LibretroCoreLoader() {
+    close_library();
+}
+
+void LibretroCoreLoader::close_library() noexcept {
+    syms_.reset();
     if (dl_) {
         dlclose(dl_);
         dl_ = nullptr;
     }
 }
 
-void LibretroCoreLoader::update_av_timing(double fps, double) {
-    if (fps > 1.0 && fps < 240.0) {
-        desc_.fps_num = static_cast<uint32_t>(std::lround(fps * 1000.0));
-        desc_.fps_den = 1000u;
-    }
-    desc_.audio_sample_rate = 44100u;
-}
-
-bool LibretroCoreLoader::load(const std::string& so_path) {
-    if (dl_) {
-        dlclose(dl_);
-        dl_ = nullptr;
-    }
-    loaded_ = false;
-    so_path_ = so_path;
-
-    void* dl = dlopen(so_path.c_str(), RTLD_LOCAL | RTLD_NOW);
+bool LibretroCoreLoader::open_library() {
+    close_library();
+    void* dl = dlopen(so_path_.c_str(), RTLD_LOCAL | RTLD_NOW);
     if (!dl) {
-        std::fprintf(stderr, "czx: dlopen(%s) failed: %s\n", so_path.c_str(), dlerror());
+        std::fprintf(stderr, "czx: dlopen(%s) failed: %s\n", so_path_.c_str(), dlerror());
         return false;
     }
 
@@ -1116,7 +1227,7 @@ bool LibretroCoreLoader::load(const std::string& so_path) {
         using FnType = std::remove_reference_t<decltype(fn)>;
         fn = reinterpret_cast<FnType>(dlsym(dl, name));
         if (required && !fn) {
-            std::fprintf(stderr, "czx: missing symbol %s in %s\n", name, so_path.c_str());
+            std::fprintf(stderr, "czx: missing symbol %s in %s\n", name, so_path_.c_str());
             return false;
         }
         return true;
@@ -1145,15 +1256,36 @@ bool LibretroCoreLoader::load(const std::string& so_path) {
         return false;
     }
 
-    sys_info_ = {};
-    syms->retro_get_system_info(&sys_info_);
-
-    id_ = derive_core_id(so_path);
-    display_name_ = derive_display_name(id_, sys_info_.library_name);
-    extensions_ = sys_info_.valid_extensions ? sys_info_.valid_extensions : "";
-    // Copy library strings safely out of core pointer if needed: store in desc_ using our owned strings.
     dl_ = dl;
     syms_ = std::move(syms);
+    return true;
+}
+
+void LibretroCoreLoader::update_av_timing(double fps, double) {
+    if (fps > 1.0 && fps < 240.0) {
+        desc_.fps_num = static_cast<uint32_t>(std::lround(fps * 1000.0));
+        desc_.fps_den = 1000u;
+    }
+    desc_.audio_sample_rate = 44100u;
+}
+
+bool LibretroCoreLoader::load(const std::string& so_path) {
+    close_library();
+    loaded_ = false;
+    so_path_ = so_path;
+
+    if (!open_library()) {
+        return false;
+    }
+
+    retro_system_info sys_info{};
+    syms_->retro_get_system_info(&sys_info);
+
+    need_fullpath_ = sys_info.need_fullpath;
+    id_ = derive_core_id(so_path);
+    display_name_ = derive_display_name(id_, sys_info.library_name);
+    extensions_ = sys_info.valid_extensions ? sys_info.valid_extensions : "";
+    close_library();
 
     desc_.api_version = CZX_CORE_API_VERSION;
     desc_.id = id_.c_str();

@@ -907,6 +907,9 @@ private:
         if (is_applewin_) {
             options_["applewin_floppy_multidrive"] = "enabled";
         } else if (is_vice_) {
+            if (loader_->id() == "vice_x64") {
+                options_["vice_sid_engine"] = "FastSID";
+            }
             options_["vice_resid_sampling"] = "fast";
             options_["vice_drive_true_emulation"] = "enabled";
             options_["vice_zoom_mode"] = "none";

@@ -1,0 +1,96 @@
+ROOT_DIR ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
+CZX_DIR  := $(ROOT_DIR)/cmake/emuz700_czx
+CSCP_SRC := $(ROOT_DIR)/third_party/takeda-cscp-emulators/src
+OBJ_DIR  ?= $(ROOT_DIR)/build/cores-emuz700
+OUT_SO   ?= $(ROOT_DIR)/build/cores/emuz700_libretro.so
+
+CXX       ?= g++
+OPT_FLAGS ?= -O3
+LDFLAGS   ?=
+
+CPPFLAGS_COMMON := \
+	-D_MZ700 \
+	-D_USE_SDL \
+	-D_RGB565 \
+	-I$(CZX_DIR) \
+	-I$(CSCP_SRC) \
+	-I$(ROOT_DIR)/include
+
+CXXFLAGS_COMMON := \
+	-std=gnu++17 \
+	$(OPT_FLAGS) \
+	-fPIC \
+	-fvisibility=hidden \
+	-fno-gnu-unique
+
+CXXFLAGS_UPSTREAM := \
+	$(CXXFLAGS_COMMON) \
+	-Wno-narrowing \
+	-Wno-unused-parameter \
+	-Wno-sign-compare \
+	-Wno-format-truncation \
+	-Wno-class-memaccess \
+	-Wno-misleading-indentation \
+	-Wno-unused-variable \
+	-Wno-unused-but-set-variable \
+	-Wno-write-strings
+
+CXXFLAGS_CZX := \
+	$(CXXFLAGS_COMMON) \
+	-Wall -Wextra -Wno-unused-parameter
+
+UPSTREAM_SRCS := \
+	fifo.cpp \
+	fileio.cpp \
+	vm/and.cpp \
+	vm/datarec.cpp \
+	vm/disk.cpp \
+	vm/event.cpp \
+	vm/i8253.cpp \
+	vm/i8255.cpp \
+	vm/io.cpp \
+	vm/mb8877.cpp \
+	vm/noise.cpp \
+	vm/pcm1bit.cpp \
+	vm/z80.cpp \
+	vm/z80sio.cpp \
+	vm/mz700/cmos.cpp \
+	vm/mz700/emm.cpp \
+	vm/mz700/floppy.cpp \
+	vm/mz700/joystick.cpp \
+	vm/mz700/kanji.cpp \
+	vm/mz700/keyboard.cpp \
+	vm/mz700/memory.cpp \
+	vm/mz700/mz700.cpp \
+	vm/mz700/quickdisk.cpp \
+	vm/mz700/ramfile.cpp
+
+CZX_SRCS := \
+	common_wrap.cpp \
+	libretro.cpp
+
+OBJS := \
+	$(patsubst %.cpp,$(OBJ_DIR)/upstream/%.o,$(UPSTREAM_SRCS)) \
+	$(patsubst %.cpp,$(OBJ_DIR)/czx/%.o,$(CZX_SRCS))
+
+.PHONY: all clean
+
+all: $(OUT_SO)
+
+$(OUT_SO): $(OBJS) $(CZX_DIR)/link.T
+	@mkdir -p $(dir $@)
+	$(CXX) -shared -o $@ $(OBJS) \
+		-Wl,--version-script=$(CZX_DIR)/link.T \
+		-Wl,--no-undefined \
+		$(LDFLAGS) -lm -lpthread
+
+$(OBJ_DIR)/upstream/%.o: $(CSCP_SRC)/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CPPFLAGS_COMMON) $(CXXFLAGS_UPSTREAM) -include $(CZX_DIR)/preinclude.h -c $< -o $@
+
+$(OBJ_DIR)/czx/%.o: $(CZX_DIR)/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CPPFLAGS_COMMON) $(CXXFLAGS_CZX) -Wno-write-strings -c $< -o $@
+
+clean:
+	rm -rf $(OBJ_DIR) $(OUT_SO)

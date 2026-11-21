@@ -72,5 +72,12 @@ echo "Building blueMSX (libretro, x86_64)..."
     "$SRC_DIR/blueMSX-libretro/system/bluemsx" \
     "$ROOT_DIR/build/bluemsx-data"
 
+echo "Building EmuZ-700 (libretro, x86_64, external ROMs)..."
+make -f "$ROOT_DIR/cmake/emuz700_czx/Makefile.czx" -j"$(nproc)" \
+    ROOT_DIR="$ROOT_DIR" \
+    OBJ_DIR="$ROOT_DIR/build/cores-emuz700" \
+    OUT_SO="$OUT_DIR/emuz700_libretro.so" \
+    OPT_FLAGS="-O3"
+
 echo "Built host cores in $OUT_DIR:"
 ls -lh "$OUT_DIR"

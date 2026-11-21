@@ -89,6 +89,14 @@ docker run --rm \
             LDFLAGS="-static-libgcc -static-libstdc++"
         cp -f "bluemsx_libretro.so" /workspace/dist-arm64/cores/
         make -f Makefile.libretro clean >/dev/null 2>&1 || true
+
+        make -f /workspace/cmake/emuz700_czx/Makefile.czx -j"$NPROC" \
+            ROOT_DIR=/workspace \
+            OBJ_DIR=/workspace/build-arm64-emuz700 \
+            OUT_SO=/workspace/dist-arm64/cores/emuz700_libretro.so \
+            CXX=aarch64-linux-gnu-g++ \
+            OPT_FLAGS="-O3 -mcpu=cortex-a53" \
+            LDFLAGS="-static-libgcc -static-libstdc++"
     '
 
 "$ROOT_DIR/scripts/stage-bluemsx-data.sh" \

@@ -13,3 +13,7 @@
 [submodule "third_party/blueMSX-libretro"]
 	path = third_party/blueMSX-libretro
 	url = https://github.com/libretro/blueMSX-libretro.git
+[submodule "third_party/takeda-cscp-emulators"]
+	path = third_party/takeda-cscp-emulators
+	url = https://github.com/mc68-net/takeda-cscp-emulators.git
+	branch = vendor

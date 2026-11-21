@@ -29,6 +29,7 @@ int core_sort_priority(const std::string& id) {
     if (id == "quasi88") return 3;
     if (id == "np2kai") return 4;
     if (id == "bluemsx") return 5;
+    if (id == "emuz700") return 6;
     return 10;
 }
 

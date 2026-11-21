@@ -106,6 +106,7 @@ std::string derive_display_name(const std::string& id, const char* lib_name) {
     if (id == "quasi88") return "PC-8801 (QUASI88)";
     if (id == "np2kai") return "PC-9801 (NP2kai)";
     if (id == "bluemsx") return "MSX (blueMSX)";
+    if (id == "emuz700") return "MZ-700 (EmuZ-700)";
     if (lib_name && lib_name[0] != '\0') return lib_name;
     return id;
 }
@@ -167,6 +168,12 @@ bool is_tape_ext(const std::string& path) {
     return to_lower_copy(fs::path(path).extension().string()) == ".tap";
 }
 
+bool is_mz700_tape_ext(const std::string& path) {
+    const std::string ext = to_lower_copy(fs::path(path).extension().string());
+    return ext == ".mzt" || ext == ".mzf" || ext == ".m12" || ext == ".wav" ||
+           ext == ".cas" || ext == ".tap" || ext == ".t77";
+}
+
 bool is_pc98_hdd_ext(const std::string& path) {
     const std::string ext = to_lower_copy(fs::path(path).extension().string());
     return ext == ".hdi" || ext == ".nhd" || ext == ".thd" || ext == ".vhd" ||
@@ -200,6 +207,7 @@ public:
         is_quasi88_ = (loader_->id().find("quasi88") != std::string::npos);
         is_np2kai_ = (loader_->id().find("np2kai") != std::string::npos);
         is_bluemsx_ = (loader_->id().find("bluemsx") != std::string::npos);
+        is_emuz700_ = (loader_->id().find("emuz700") != std::string::npos);
         if (const char* dd = std::getenv("CZX_DATA_DIR"); dd && dd[0] != '\0') {
             set_data_dir(dd);
         } else if (const char* home = std::getenv("HOME"); home && home[0] != '\0') {
@@ -269,6 +277,9 @@ public:
             fs::create_directories(fs::path(system_dir_) / "Machines" / "Shared Roms", ec);
             fs::create_directories(fs::path(system_dir_) / "Databases", ec);
             seed_bluemsx_open_data(fs::path(system_dir_));
+        } else if (is_emuz700_) {
+            system_dir_ = (fs::path(data_dir_) / "roms" / "mz700").string();
+            fs::create_directories(system_dir_, ec);
         } else {
             system_dir_ = (fs::path(data_dir_) / "roms").string();
             fs::create_directories(system_dir_, ec);
@@ -302,7 +313,7 @@ public:
             }
         }
 
-        if (is_vice_ || is_quasi88_ || is_np2kai_ || is_bluemsx_) {
+        if (is_vice_ || is_quasi88_ || is_np2kai_ || is_bluemsx_ || is_emuz700_) {
             const bool ok = reload_core_with_media(path);
             if (ok) {
                 drive_paths_[0] = path;
@@ -363,7 +374,8 @@ public:
 
     bool eject_media() {
         g_active_instance = this;
-        if (is_vice_ && has_media_ && is_tape_ext(media_path_)) {
+        if ((is_vice_ && has_media_ && is_tape_ext(media_path_)) ||
+            (is_emuz700_ && has_media_ && is_mz700_tape_ext(media_path_))) {
             pulsed_retrok_ = RETROK_KP_PLUS;
             pulsed_frames_ = 2;
             return true;
@@ -673,6 +685,7 @@ private:
     bool is_quasi88_ = false;
     bool is_np2kai_ = false;
     bool is_bluemsx_ = false;
+    bool is_emuz700_ = false;
 
     std::string data_dir_;
     std::string system_dir_;
@@ -845,6 +858,34 @@ private:
             if (!has_real && !has_cbios) {
                 err_out = "Place blueMSX Machines/ and Databases/ in:\n" + system_dir_ +
                           "/\n(Run install-on-device.sh to install open-source C-BIOS & Databases)";
+                return false;
+            }
+        } else if (is_emuz700_) {
+            static constexpr std::array<const char*, 7> kMzIplAliases = {
+                "IPL.ROM", "1Z-009A.ROM", "1Z-009B.ROM",
+                "1Z009A.ROM", "1Z009B.ROM", "MZ700IPL.ROM", "NEWMON7.ROM",
+            };
+            static constexpr std::array<const char*, 6> kMzFontAliases = {
+                "FONT.ROM", "MZ700FON.JP", "MZ700FON.DAT",
+                "MZ700FON.ROM", "CGROM.ROM", "MZ700FONT.ROM",
+            };
+            const fs::path mz_dir(system_dir_);
+            auto any_exists = [&](const auto& list) {
+                for (const char* f : list) {
+                    if (rom_file_exists(mz_dir, f, true)) return true;
+                }
+                return false;
+            };
+            const bool has_ipl = any_exists(kMzIplAliases);
+            const bool has_font = any_exists(kMzFontAliases);
+            if (!has_ipl || !has_font) {
+                err_out = "Place MZ-700 ROMs in:\n" + system_dir_ + "/\nMissing:";
+                if (!has_ipl) {
+                    err_out += "\n  IPL.ROM (or 1Z-009A/B, NEWMON7.ROM)";
+                }
+                if (!has_font) {
+                    err_out += "\n  FONT.ROM (or MZ700FON.JP / MZ700FON.DAT)";
+                }
                 return false;
             }
         }
@@ -1040,6 +1081,9 @@ private:
             options_["bluemsx_ym2413_enable"] = "enabled";
             options_["bluemsx_overscan"] = "disabled";
             options_["bluemsx_auto_rewind_cas"] = "ON";
+        } else if (is_emuz700_) {
+            options_["emuz700_joystick"] = "JOY-700";
+            options_["emuz700_tape_sound"] = "disabled";
         }
     }
 
@@ -1299,6 +1343,9 @@ private:
                 frame.par_num = 1;
                 frame.par_den = 1;
             }
+        } else if (is_emuz700_) {
+            frame.par_num = 1;
+            frame.par_den = 1;
         } else if (av_info_.geometry.aspect_ratio > 0.0f && frame.height > 0) {
             const double par = static_cast<double>(av_info_.geometry.aspect_ratio) *
                                static_cast<double>(frame.height) / static_cast<double>(frame.width);
@@ -1371,7 +1418,7 @@ private:
             if (port >= joy_state_.size()) return 0;
             const uint32_t b = joy_state_[port];
             uint16_t mask = 0;
-            if (is_applewin_ || is_quasi88_ || is_bluemsx_) {
+            if (is_applewin_ || is_quasi88_ || is_bluemsx_ || is_emuz700_) {
                 if (b & CZX_JOY_FIRE1) mask |= (1u << RETRO_DEVICE_ID_JOYPAD_A);
                 if (b & CZX_JOY_FIRE2) mask |= (1u << RETRO_DEVICE_ID_JOYPAD_B);
             } else if (is_np2kai_) {

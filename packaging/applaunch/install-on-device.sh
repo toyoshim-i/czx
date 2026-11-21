@@ -27,9 +27,10 @@ DATA_DIR="${CZX_DATA_DIR:-$HOME/czx}"
 mkdir -p "$DATA_DIR/roms/apple2" "$DATA_DIR/roms/vice/C64" "$DATA_DIR/roms/vice/DRIVES" \
     "$DATA_DIR/roms/quasi88" "$DATA_DIR/roms/np2kai" \
     "$DATA_DIR/roms/bluemsx/Machines/Shared Roms" "$DATA_DIR/roms/bluemsx/Databases" \
-    "$DATA_DIR/roms/g800" \
+    "$DATA_DIR/roms/g800" "$DATA_DIR/roms/mz700" \
     "$DATA_DIR/media/apple2" "$DATA_DIR/media/c64" \
-    "$DATA_DIR/media/pc88" "$DATA_DIR/media/pc98" "$DATA_DIR/media/msx" "$DATA_DIR/media/g800" \
+    "$DATA_DIR/media/pc88" "$DATA_DIR/media/pc98" "$DATA_DIR/media/msx" \
+    "$DATA_DIR/media/g800" "$DATA_DIR/media/mz700" \
     "$DATA_DIR/saves" "$DATA_DIR/config"
 
 if [ -d "$DIR/bluemsx-data" ]; then
@@ -45,4 +46,4 @@ if command -v systemctl >/dev/null 2>&1; then
         systemctl --user restart APPLaunch.service || true
 fi
 
-echo "Done. Put media files in $DATA_DIR/media/{apple2,c64,pc88,pc98,msx,g800}."
+echo "Done. Put media files in $DATA_DIR/media/{apple2,c64,pc88,pc98,msx,g800,mz700}."

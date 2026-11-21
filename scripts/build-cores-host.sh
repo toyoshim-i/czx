@@ -58,5 +58,19 @@ echo "Building NP2kai (libretro, x86_64)..."
     make -f Makefile.libretro clean >/dev/null 2>&1 || true
 )
 
+echo "Building blueMSX (libretro, x86_64)..."
+(
+    cd "$SRC_DIR/blueMSX-libretro"
+    make -f Makefile.libretro clean >/dev/null 2>&1 || true
+    make -f Makefile.libretro -j"$(nproc)" platform=unix \
+        CC="gcc -Wno-incompatible-pointer-types -Wno-implicit-function-declaration" \
+        OPTIMIZE="-O3"
+    cp -f "bluemsx_libretro.so" "$OUT_DIR/"
+    make -f Makefile.libretro clean >/dev/null 2>&1 || true
+)
+"$ROOT_DIR/scripts/stage-bluemsx-data.sh" \
+    "$SRC_DIR/blueMSX-libretro/system/bluemsx" \
+    "$ROOT_DIR/build/bluemsx-data"
+
 echo "Built host cores in $OUT_DIR:"
 ls -lh "$OUT_DIR"

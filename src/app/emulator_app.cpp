@@ -66,10 +66,13 @@ void EmulatorApp::ensure_data_dirs() {
     fs::create_directories(root / "roms" / "vice" / "DRIVES", ec);
     fs::create_directories(root / "roms" / "quasi88", ec);
     fs::create_directories(root / "roms" / "np2kai", ec);
+    fs::create_directories(root / "roms" / "bluemsx" / "Machines" / "Shared Roms", ec);
+    fs::create_directories(root / "roms" / "bluemsx" / "Databases", ec);
     fs::create_directories(root / "media" / "apple2", ec);
     fs::create_directories(root / "media" / "c64", ec);
     fs::create_directories(root / "media" / "pc88", ec);
     fs::create_directories(root / "media" / "pc98", ec);
+    fs::create_directories(root / "media" / "msx", ec);
     fs::create_directories(root / "saves", ec);
     fs::create_directories(root / "config", ec);
 }
@@ -90,6 +93,9 @@ std::string EmulatorApp::default_media_dir_for_core() const {
     }
     if (id.find("np2kai") != std::string::npos && fs::is_directory(media_root / "pc98", ec)) {
         return (media_root / "pc98").string();
+    }
+    if (id.find("bluemsx") != std::string::npos && fs::is_directory(media_root / "msx", ec)) {
+        return (media_root / "msx").string();
     }
     return media_root.string();
 }

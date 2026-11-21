@@ -17,6 +17,7 @@
 #include <map>
 #include <string>
 #include <string_view>
+#include <unistd.h>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -104,8 +105,51 @@ std::string derive_display_name(const std::string& id, const char* lib_name) {
     if (id == "vice_x64") return "C64 (VICE x64)";
     if (id == "quasi88") return "PC-8801 (QUASI88)";
     if (id == "np2kai") return "PC-9801 (NP2kai)";
+    if (id == "bluemsx") return "MSX (blueMSX)";
     if (lib_name && lib_name[0] != '\0') return lib_name;
     return id;
+}
+
+std::string executable_dir() {
+    char buf[1024] = {};
+    const ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n <= 0) return {};
+    buf[n] = '\0';
+    return fs::path(buf).parent_path().string();
+}
+
+void seed_bluemsx_open_data(const fs::path& dst_root) {
+    std::error_code ec;
+    const bool has_cbios = fs::is_regular_file(
+        dst_root / "Machines" / "MSX2+ - C-BIOS" / "cbios_main_msx2+.rom", ec);
+    const bool has_db = fs::is_regular_file(dst_root / "Databases" / "msxromdb.xml", ec);
+    if (has_cbios && has_db) return;
+
+    std::vector<fs::path> candidates;
+    const std::string exe_dir = executable_dir();
+    if (!exe_dir.empty()) {
+        candidates.push_back(fs::path(exe_dir) / "bluemsx-data");
+    }
+    candidates.emplace_back("/usr/share/APPLaunch/share/czx/bluemsx");
+
+    for (const auto& src : candidates) {
+        if (!fs::is_regular_file(src / "Machines" / "MSX2+ - C-BIOS" / "cbios_main_msx2+.rom", ec)) {
+            continue;
+        }
+        constexpr auto kOpts = fs::copy_options::recursive | fs::copy_options::skip_existing;
+        if (fs::is_directory(src / "Databases", ec)) {
+            fs::copy(src / "Databases", dst_root / "Databases", kOpts, ec);
+        }
+        if (fs::is_directory(src / "Machines", ec)) {
+            fs::copy(src / "Machines", dst_root / "Machines", kOpts, ec);
+        }
+        return;
+    }
+}
+
+bool is_msx_disk_ext(const std::string& path) {
+    const std::string ext = to_lower_copy(fs::path(path).extension().string());
+    return ext == ".dsk" || ext == ".m3u";
 }
 
 bool is_floppy_disk_ext(const std::string& path) {
@@ -155,6 +199,7 @@ public:
         is_vice_ = (loader_->id().find("vice") != std::string::npos);
         is_quasi88_ = (loader_->id().find("quasi88") != std::string::npos);
         is_np2kai_ = (loader_->id().find("np2kai") != std::string::npos);
+        is_bluemsx_ = (loader_->id().find("bluemsx") != std::string::npos);
         if (const char* dd = std::getenv("CZX_DATA_DIR"); dd && dd[0] != '\0') {
             set_data_dir(dd);
         } else if (const char* home = std::getenv("HOME"); home && home[0] != '\0') {
@@ -219,6 +264,11 @@ public:
         } else if (is_np2kai_) {
             system_dir_ = (fs::path(data_dir_) / "roms").string();
             fs::create_directories(fs::path(system_dir_) / "np2kai", ec);
+        } else if (is_bluemsx_) {
+            system_dir_ = (fs::path(data_dir_) / "roms" / "bluemsx").string();
+            fs::create_directories(fs::path(system_dir_) / "Machines" / "Shared Roms", ec);
+            fs::create_directories(fs::path(system_dir_) / "Databases", ec);
+            seed_bluemsx_open_data(fs::path(system_dir_));
         } else {
             system_dir_ = (fs::path(data_dir_) / "roms").string();
             fs::create_directories(system_dir_, ec);
@@ -252,7 +302,7 @@ public:
             }
         }
 
-        if (is_vice_ || is_quasi88_ || is_np2kai_) {
+        if (is_vice_ || is_quasi88_ || is_np2kai_ || is_bluemsx_) {
             const bool ok = reload_core_with_media(path);
             if (ok) {
                 drive_paths_[0] = path;
@@ -622,6 +672,7 @@ private:
     bool is_vice_ = false;
     bool is_quasi88_ = false;
     bool is_np2kai_ = false;
+    bool is_bluemsx_ = false;
 
     std::string data_dir_;
     std::string system_dir_;
@@ -711,6 +762,26 @@ private:
     int16_t audio_prev_r_ = 0;
     bool audio_has_prev_ = false;
 
+    const char* detect_default_bluemsx_machine() const {
+        const fs::path machines = fs::path(system_dir_) / "Machines";
+        const fs::path shared = machines / "Shared Roms";
+        if (rom_file_exists(machines / "MSX2+", "config.ini", false) &&
+            rom_file_exists(shared, "MSX2P.rom", false) &&
+            rom_file_exists(shared, "MSX2PEXT.rom", false)) {
+            return "MSX2+";
+        }
+        if (rom_file_exists(machines / "MSX2", "config.ini", false) &&
+            rom_file_exists(shared, "MSX2.rom", false) &&
+            rom_file_exists(shared, "MSX2EXT.rom", false)) {
+            return "MSX2";
+        }
+        if (rom_file_exists(machines / "MSX", "config.ini", false) &&
+            rom_file_exists(shared, "MSX.rom", false)) {
+            return "MSX";
+        }
+        return "MSX2+ - C-BIOS";
+    }
+
     bool check_required_roms(std::string& err_out) const {
         if (is_applewin_) {
             static constexpr std::array<const char*, 3> kAppleRoms = {
@@ -765,6 +836,16 @@ private:
             if (!rom_file_exists(np2_dir, "bios.rom", true)) {
                 log(1, ("np2kai: bios.rom not found in " + np2_dir.string() +
                         "; using built-in HLE BIOS (optional real PC-98 ROMs: bios.rom, itf.rom, sound.rom, font.rom/font.bmp)").c_str());
+            }
+        } else if (is_bluemsx_) {
+            const fs::path cbios_dir = fs::path(system_dir_) / "Machines" / "MSX2+ - C-BIOS";
+            const bool has_real = std::string_view(detect_default_bluemsx_machine()) != "MSX2+ - C-BIOS";
+            const bool has_cbios = rom_file_exists(cbios_dir, "config.ini", false) &&
+                                   rom_file_exists(cbios_dir, "cbios_main_msx2+.rom", false);
+            if (!has_real && !has_cbios) {
+                err_out = "Place blueMSX Machines/ and Databases/ in:\n" + system_dir_ +
+                          "/\n(Run install-on-device.sh to install open-source C-BIOS & Databases)";
+                return false;
             }
         }
         return true;
@@ -825,6 +906,19 @@ private:
         options_.clear();
         seed_default_options();
         load_user_config();
+
+        if (is_bluemsx_ && media_path && media_path[0] != '\0' && is_msx_disk_ext(media_path)) {
+            const auto it = options_.find("bluemsx_msxtype");
+            if (it != options_.end() && it->second.find("C-BIOS") != std::string::npos) {
+                const std::string msg =
+                    "MSX disk images (.dsk/.m3u) require real MSX BIOS + Disk ROMs in:\n" +
+                    system_dir_ + "/Machines/Shared Roms/\n(e.g. MSX2P.rom, MSX2PEXT.rom, PANASONICDISK.rom)";
+                loader_->set_last_error(msg);
+                log(3, msg.c_str());
+                teardown_core();
+                return false;
+            }
+        }
 
         syms.retro_set_environment(cb_env);
         syms.retro_set_video_refresh(cb_video);
@@ -940,6 +1034,12 @@ private:
             options_["np2kai_inputmouse"] = "ON";
             options_["np2kai_keyrepeat"] = "OFF";
             options_["np2kai_skipline"] = "Full 255 lines";
+        } else if (is_bluemsx_) {
+            options_["bluemsx_msxtype"] = detect_default_bluemsx_machine();
+            options_["bluemsx_vdp_synctype"] = "60Hz";
+            options_["bluemsx_ym2413_enable"] = "enabled";
+            options_["bluemsx_overscan"] = "disabled";
+            options_["bluemsx_auto_rewind_cas"] = "ON";
         }
     }
 
@@ -1179,6 +1279,26 @@ private:
                 frame.crop_w = 320;
                 frame.crop_h = 200;
             }
+        } else if (is_bluemsx_) {
+            frame.flags = CZX_FRAME_HAS_BORDER;
+            if (frame.width == 544 && frame.height == 240) {
+                frame.par_num = 1;
+                frame.par_den = 2;
+                frame.crop_x = 16;
+                frame.crop_y = 14;
+                frame.crop_w = 512;
+                frame.crop_h = 212;
+            } else if (frame.width == 272 && frame.height == 240) {
+                frame.par_num = 1;
+                frame.par_den = 1;
+                frame.crop_x = 8;
+                frame.crop_y = 14;
+                frame.crop_w = 256;
+                frame.crop_h = 212;
+            } else {
+                frame.par_num = 1;
+                frame.par_den = 1;
+            }
         } else if (av_info_.geometry.aspect_ratio > 0.0f && frame.height > 0) {
             const double par = static_cast<double>(av_info_.geometry.aspect_ratio) *
                                static_cast<double>(frame.height) / static_cast<double>(frame.width);
@@ -1251,7 +1371,7 @@ private:
             if (port >= joy_state_.size()) return 0;
             const uint32_t b = joy_state_[port];
             uint16_t mask = 0;
-            if (is_applewin_ || is_quasi88_) {
+            if (is_applewin_ || is_quasi88_ || is_bluemsx_) {
                 if (b & CZX_JOY_FIRE1) mask |= (1u << RETRO_DEVICE_ID_JOYPAD_A);
                 if (b & CZX_JOY_FIRE2) mask |= (1u << RETRO_DEVICE_ID_JOYPAD_B);
             } else if (is_np2kai_) {

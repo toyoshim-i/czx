@@ -10,6 +10,7 @@
 - **Commodore 64 (`vice_x64sc_libretro.so` / `vice_x64_libretro.so`)** — Cycle-exact `VICE x64sc` (MOS 6569/6581, 1541-II true drive emulation, PRG/D64/G64/TAP/T64/CRT) plus lighter `VICE x64`, built with `-USE_EMBEDDED` for external ROM loading.
 - **PC-8801 (`quasi88_libretro.so`)** — `QUASI88` (PC-8801mkIISR, N88-BASIC V2/V1H/V1S/N-BASIC, OPNA/OPN, D88/T88/CMT/M3U) with built-in clean-room pseudo BIOS fallback and external NEC ROM support.
 - **PC-9801 (`np2kai_libretro.so`)** — `Neko Project II kai` (PC-9801VX, 2.4576 MHz ×4, PC9801-86 FM sound, FDI/HDM/D88/NHD/HDI) with built-in clean-room HLE BIOS fallback and external NEC ROM support.
+- **MSX / MSX2 / MSX2+ (`bluemsx_libretro.so`)** — `blueMSX` (MSX/MSX2/MSX2+, V9938/V9958, PSG/YM2413/SCC, ROM/MX1/MX2/DSK/CAS/M3U) with open-source C-BIOS (2-Clause BSD) for cartridge boot and external MSX BIOS/Disk ROM support.
 - **Built-in Resolution Test Core (`test_pattern`)** — Interactive `280×192`, `560×192`, `320×200`, `384×272`, and `640×400` patterns.
 
 ## Display Scaling & Scroll Modes
@@ -45,14 +46,16 @@ On startup, `czx` creates `$CZX_DATA_DIR` (default `~/czx`):
 │   ├── apple2/      # .dsk / .do / .po / .nib / .woz / .2mg / .zip
 │   ├── c64/         # .prg / .d64 / .g64 / .tap / .t64 / .crt / .zip
 │   ├── pc88/        # .d88 / .t88 / .cmt / .m3u / .zip
-│   └── pc98/        # .fdi / .hdm / .d88 / .nhd / .hdi / .zip
+│   ├── pc98/        # .fdi / .hdm / .d88 / .nhd / .hdi / .zip
+│   └── msx/         # .rom / .mx1 / .mx2 / .dsk / .cas / .m3u / .zip
 ├── roms/
 │   ├── apple2/      # Required: Apple2e_Enhanced.rom, Apple2e_Enhanced_Video.rom, DISK2.rom
 │   ├── vice/
 │   │   ├── C64/     # Required: kernal-901227-03.bin, basic-901226-01.bin, chargen-901225-01.bin
 │   │   └── DRIVES/  # Required: dos1541ii-251968-03.bin (+ optional 1541/1571/1581/JiffyDOS ROMs)
 │   ├── quasi88/     # Optional: N88.ROM, N88_0..3.ROM, N88N.ROM, DISK.ROM, FONT.ROM, KANJI1.ROM
-│   └── np2kai/      # Optional: bios.rom, itf.rom, sound.rom, font.rom / font.bmp
+│   ├── np2kai/      # Optional: bios.rom, itf.rom, sound.rom, font.rom / font.bmp
+│   └── bluemsx/     # Open-source C-BIOS & Databases; real MSX BIOS/Disk ROMs in Machines/Shared Roms/
 ├── saves/           # Battery RAM / VICE vicerc
 └── config/          # Optional per-core libretro key=value overrides (<core_id>.cfg)
 ```
@@ -63,6 +66,7 @@ Required and optional user-supplied ROM files:
 - **Commodore 64 (`~/czx/roms/vice/`)**: `C64/kernal-901227-03.bin` (8 KiB), `C64/basic-901226-01.bin` (8 KiB), `C64/chargen-901225-01.bin` (4 KiB), and `DRIVES/dos1541ii-251968-03.bin` (16 KiB).
 - **PC-8801 (`~/czx/roms/quasi88/`)**: `quasi88-libretro` includes a clean-room pseudo BIOS fallback, but for full software compatibility place real PC-88 ROMs (`N88.ROM`, `N88_0.ROM`–`N88_3.ROM`, `N88N.ROM`, `DISK.ROM`, `FONT.ROM`, `KANJI1.ROM`) here.
 - **PC-9801 (`~/czx/roms/np2kai/`)**: `NP2kai` includes a built-in HLE BIOS fallback, but for full compatibility (including Japanese text and authentic OPNA/BIOS calls) place `bios.rom`, `itf.rom`, `sound.rom`, and `font.rom` / `font.bmp` here. Avoid placing optional `d8000.rom` unless needed for HDDs, as it can stall floppy boots.
+- **MSX / MSX2 / MSX2+ (`~/czx/roms/bluemsx/`)**: `czx` ships open-source C-BIOS (`MSX2+ - C-BIOS`, `MSX2 - C-BIOS`, `MSX - C-BIOS`) and XML `Databases/` for cartridge boot. For MSX-BASIC and `.dsk` disk software, place real MSX BIOS and Disk ROMs (e.g., `MSX2P.rom`, `MSX2PEXT.rom`, `MSX2PMUS.rom`, `PANASONICDISK.rom`, `XBASIC2.rom`, `MSXKANJI.rom`) in `~/czx/roms/bluemsx/Machines/Shared Roms/`.
 
 If any required ROM is missing, `czx` displays an on-screen **ROM FILES REQUIRED** prompt listing the target folder and missing files so you can switch cores (`Alt + 8`) or add the ROMs without crashing.
 
@@ -70,7 +74,7 @@ Insert or hot-swap disks anytime via `Alt + 8` → **Load Media** (`F/X` move, `
 
 ## Build & Test on PC
 
-Clone with submodules (`git clone --recurse-submodules`, or initialize them non-recursively via `./scripts/prepare-cores-src.sh` / `git submodule update --init --depth 1 third_party/AppleWin third_party/vice-libretro third_party/quasi88-libretro third_party/NP2kai`):
+Clone with submodules (`git clone --recurse-submodules`, or initialize them non-recursively via `./scripts/prepare-cores-src.sh` / `git submodule update --init --depth 1 third_party/AppleWin third_party/vice-libretro third_party/quasi88-libretro third_party/NP2kai third_party/blueMSX-libretro`):
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release

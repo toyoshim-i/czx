@@ -78,7 +78,22 @@ docker run --rm \
             NP2KAI_VERSION=rev.22 NP2KAI_HASH="$NP2KAI_HASH"
         cp -f "np2kai_libretro.so" /workspace/dist-arm64/cores/
         make -f Makefile.libretro clean >/dev/null 2>&1 || true
+
+        cd /workspace/third_party/blueMSX-libretro
+        make -f Makefile.libretro clean >/dev/null 2>&1 || true
+        make -f Makefile.libretro -j"$NPROC" platform=unix \
+            CC="aarch64-linux-gnu-gcc -Wno-incompatible-pointer-types -Wno-implicit-function-declaration" \
+            CXX=aarch64-linux-gnu-g++ \
+            AR=aarch64-linux-gnu-ar \
+            OPTIMIZE="-O3 -mcpu=cortex-a53" \
+            LDFLAGS="-static-libgcc -static-libstdc++"
+        cp -f "bluemsx_libretro.so" /workspace/dist-arm64/cores/
+        make -f Makefile.libretro clean >/dev/null 2>&1 || true
     '
+
+"$ROOT_DIR/scripts/stage-bluemsx-data.sh" \
+    "$ROOT_DIR/third_party/blueMSX-libretro/system/bluemsx" \
+    "$DIST_DIR/bluemsx-data"
 
 cp -f "$ROOT_DIR/packaging/applaunch/czx.desktop" "$DIST_DIR/"
 cp -f "$ROOT_DIR/packaging/applaunch/czx.png" "$DIST_DIR/"

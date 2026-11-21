@@ -10,3 +10,6 @@
 [submodule "third_party/NP2kai"]
 	path = third_party/NP2kai
 	url = https://github.com/libretro/NP2kai.git
+[submodule "third_party/blueMSX-libretro"]
+	path = third_party/blueMSX-libretro
+	url = https://github.com/libretro/blueMSX-libretro.git

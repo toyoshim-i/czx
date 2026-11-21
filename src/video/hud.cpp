@@ -158,7 +158,9 @@ void render_hud(uint16_t* fb_rgb565, const HudState& hud, const ViewportLayout& 
         bool active;
     };
 
-    const char* joy_label = (hud.input_mode == 2) ? "JP2" : ((hud.input_mode == 1) ? "JP1" : "KBD");
+    const char* joy_label = (hud.input_mode == 3) ? "MSE"
+                          : ((hud.input_mode == 2) ? "JP2"
+                          : ((hud.input_mode == 1) ? "JP1" : "KBD"));
     const bool joy_active = (hud.input_mode != 0);
 
     const std::array<Slot, 5> slots = {{

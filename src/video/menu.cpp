@@ -103,8 +103,9 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
     const std::string media_val = truncate_tail_px(vm.preset_or_media_label, 178, 1);
     const std::string d1_val = truncate_tail_px(vm.drive1_label, 178, 1);
     const std::string d2_val = truncate_tail_px(vm.drive2_label, 178, 1);
-    const char* input_label = (vm.input_mode == 2) ? "Joy P2 (FZXC)"
-                            : ((vm.input_mode == 1) ? "Joy P1 (FZXC)" : "Keyboard");
+    const char* input_label = (vm.input_mode == 3) ? "Mouse (FZXC)"
+                            : ((vm.input_mode == 2) ? "Joy P2 (FZXC)"
+                            : ((vm.input_mode == 1) ? "Joy P1 (FZXC)" : "Keyboard"));
 
     struct Row {
         const char* label;

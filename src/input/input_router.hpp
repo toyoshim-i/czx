@@ -4,6 +4,7 @@
 #include "input/keycodes.hpp"
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace czx::input {
@@ -12,6 +13,7 @@ enum class InputMode {
     Keyboard = 0,
     Joystick = 1,
     JoystickP2 = 2,
+    Mouse = 3,
 };
 
 enum class HostCommand {
@@ -34,6 +36,7 @@ struct RouterCallbacks {
     void (*on_menu_key)(void* user_data, const czx_key_event_t& ev) = nullptr;
     void (*on_guest_key)(void* user_data, const czx_key_event_t& ev) = nullptr;
     void (*on_guest_joystick)(void* user_data, uint32_t port, uint32_t buttons) = nullptr;
+    void (*on_guest_mouse)(void* user_data, int32_t dx, int32_t dy, uint32_t buttons) = nullptr;
     void* user_data = nullptr;
 };
 
@@ -59,6 +62,8 @@ public:
 private:
     static constexpr int kTapPanStepPx = 8;
     static constexpr double kHoldPanSpeedPxPerSec = 180.0;
+    static constexpr int kTapMouseStepPx = 4;
+    static constexpr double kHoldMouseSpeedPxPerSec = 160.0;
 
     RouterCallbacks cb_{};
     InputMode input_mode_ = InputMode::Keyboard;
@@ -82,15 +87,26 @@ private:
     double pan_acc_y_ = 0.0;
 
     uint32_t joy_buttons_ = 0;
+    bool mouse_up_ = false;
+    bool mouse_down_ = false;
+    bool mouse_left_ = false;
+    bool mouse_right_ = false;
+    double mouse_acc_x_ = 0.0;
+    double mouse_acc_y_ = 0.0;
+    uint32_t mouse_buttons_ = 0;
     std::vector<czx_key_t> consumed_host_keys_;
+    std::vector<std::pair<czx_key_t, czx_key_t>> fn_mapped_keys_;
 
     bool consume_if_tracked_release(czx_key_t key, bool pressed);
     void track_host_press(czx_key_t key);
     void clear_pan_hold();
+    void clear_mouse_state();
     void update_modifier(czx_key_t key, bool pressed);
     bool handle_alt_shortcut(const RawKeyEvent& raw);
+    RawKeyEvent apply_fn_chord(const RawKeyEvent& raw);
     bool handle_pan_key(czx_key_t key, bool pressed, bool repeat);
     bool handle_joystick_key(czx_key_t key, bool pressed);
+    bool handle_mouse_key(czx_key_t key, bool pressed, bool repeat);
     uint32_t resolve_codepoint(const RawKeyEvent& raw) const noexcept;
 };
 

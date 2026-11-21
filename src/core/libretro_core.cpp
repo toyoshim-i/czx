@@ -405,6 +405,19 @@ public:
         }
     }
 
+    void on_mouse(int32_t dx, int32_t dy, uint32_t buttons) {
+        mouse_pending_dx_ += dx;
+        mouse_pending_dy_ += dy;
+        mouse_buttons_ = buttons;
+    }
+
+    void latch_mouse_poll() {
+        mouse_latched_dx_ = static_cast<int16_t>(std::clamp<int32_t>(mouse_pending_dx_, -32768, 32767));
+        mouse_latched_dy_ = static_cast<int16_t>(std::clamp<int32_t>(mouse_pending_dy_, -32768, 32767));
+        mouse_pending_dx_ = 0;
+        mouse_pending_dy_ = 0;
+    }
+
     bool set_option(const char* key, const char* value) {
         if (!key || !value) return false;
         options_[key] = value;
@@ -673,6 +686,11 @@ private:
 
     std::map<std::string, std::string> options_;
     std::array<uint32_t, 2> joy_state_{0, 0};
+    int32_t mouse_pending_dx_ = 0;
+    int32_t mouse_pending_dy_ = 0;
+    int16_t mouse_latched_dx_ = 0;
+    int16_t mouse_latched_dy_ = 0;
+    uint32_t mouse_buttons_ = 0;
     std::array<HeldKey, 256> active_keys_{};
     std::array<bool, RETROK_LAST> retro_key_down_{};
     bool phys_shift_held_ = false;
@@ -915,7 +933,8 @@ private:
             options_["np2kai_clk_mult"] = "4";
             options_["np2kai_SNDboard"] = "PC9801-86";
             options_["np2kai_keyboard"] = "Us";
-            options_["np2kai_joymode"] = "Arrows";
+            options_["np2kai_joymode"] = "Atari Joypad";
+            options_["np2kai_inputmouse"] = "ON";
             options_["np2kai_keyrepeat"] = "OFF";
             options_["np2kai_skipline"] = "Full 255 lines";
         }
@@ -1060,6 +1079,11 @@ private:
         pulsed_frames_ = 0;
         retro_key_down_.fill(false);
         joy_state_ = {0, 0};
+        mouse_pending_dx_ = 0;
+        mouse_pending_dy_ = 0;
+        mouse_latched_dx_ = 0;
+        mouse_latched_dy_ = 0;
+        mouse_buttons_ = 0;
     }
 
     void handle_video(const void* data, unsigned width, unsigned height, size_t pitch) {
@@ -1216,8 +1240,16 @@ private:
             if (port >= joy_state_.size()) return 0;
             const uint32_t b = joy_state_[port];
             uint16_t mask = 0;
-            if (b & CZX_JOY_FIRE1) mask |= (1u << RETRO_DEVICE_ID_JOYPAD_B);
-            if (b & CZX_JOY_FIRE2) mask |= (1u << RETRO_DEVICE_ID_JOYPAD_A);
+            if (is_applewin_ || is_quasi88_) {
+                if (b & CZX_JOY_FIRE1) mask |= (1u << RETRO_DEVICE_ID_JOYPAD_A);
+                if (b & CZX_JOY_FIRE2) mask |= (1u << RETRO_DEVICE_ID_JOYPAD_B);
+            } else if (is_np2kai_) {
+                if (b & CZX_JOY_FIRE1) mask |= (1u << RETRO_DEVICE_ID_JOYPAD_A);
+                if (b & CZX_JOY_FIRE2) mask |= (1u << RETRO_DEVICE_ID_JOYPAD_Y);
+            } else {
+                if (b & CZX_JOY_FIRE1) mask |= (1u << RETRO_DEVICE_ID_JOYPAD_B);
+                if (b & CZX_JOY_FIRE2) mask |= (1u << RETRO_DEVICE_ID_JOYPAD_A);
+            }
             if (b & CZX_JOY_UP)    mask |= (1u << RETRO_DEVICE_ID_JOYPAD_UP);
             if (b & CZX_JOY_DOWN)  mask |= (1u << RETRO_DEVICE_ID_JOYPAD_DOWN);
             if (b & CZX_JOY_LEFT)  mask |= (1u << RETRO_DEVICE_ID_JOYPAD_LEFT);
@@ -1229,6 +1261,17 @@ private:
                 return (mask & (1u << id)) ? 1 : 0;
             }
             return 0;
+        }
+        if (device == RETRO_DEVICE_MOUSE) {
+            if (port != 0) return 0;
+            switch (id) {
+                case RETRO_DEVICE_ID_MOUSE_X:      return mouse_latched_dx_;
+                case RETRO_DEVICE_ID_MOUSE_Y:      return mouse_latched_dy_;
+                case RETRO_DEVICE_ID_MOUSE_LEFT:   return (mouse_buttons_ & CZX_MOUSE_LEFT) ? 1 : 0;
+                case RETRO_DEVICE_ID_MOUSE_RIGHT:  return (mouse_buttons_ & CZX_MOUSE_RIGHT) ? 1 : 0;
+                case RETRO_DEVICE_ID_MOUSE_MIDDLE: return (mouse_buttons_ & CZX_MOUSE_MIDDLE) ? 1 : 0;
+                default: return 0;
+            }
         }
         if (device == RETRO_DEVICE_KEYBOARD && id < retro_key_down_.size()) {
             return retro_key_down_[id] ? 1 : 0;
@@ -1314,7 +1357,11 @@ private:
                 return true;
 
             case RETRO_ENVIRONMENT_GET_INPUT_DEVICE_CAPABILITIES:
-                if (data) *static_cast<uint64_t*>(data) = (1ULL << RETRO_DEVICE_JOYPAD) | (1ULL << RETRO_DEVICE_KEYBOARD);
+                if (data) {
+                    *static_cast<uint64_t*>(data) = (1ULL << RETRO_DEVICE_JOYPAD) |
+                                                    (1ULL << RETRO_DEVICE_KEYBOARD) |
+                                                    (1ULL << RETRO_DEVICE_MOUSE);
+                }
                 return true;
 
             case RETRO_ENVIRONMENT_GET_INPUT_MAX_USERS:
@@ -1459,7 +1506,9 @@ private:
         if (g_active_instance) g_active_instance->handle_audio(data, frames);
         return frames;
     }
-    static void RETRO_CALLCONV cb_input_poll(void) {}
+    static void RETRO_CALLCONV cb_input_poll(void) {
+        if (g_active_instance) g_active_instance->latch_mouse_poll();
+    }
     static int16_t RETRO_CALLCONV cb_input_state(unsigned port, unsigned device, unsigned index, unsigned id) {
         return g_active_instance ? g_active_instance->query_input(port, device, index, id) : 0;
     }
@@ -1517,6 +1566,10 @@ void lr_on_key(czx_core_instance_t* inst, const czx_key_event_t* ev) {
 
 void lr_on_joystick(czx_core_instance_t* inst, uint32_t port, uint32_t buttons) {
     if (inst) reinterpret_cast<LibretroCoreInstance*>(inst)->on_joystick(port, buttons);
+}
+
+void lr_on_mouse(czx_core_instance_t* inst, int32_t dx, int32_t dy, uint32_t buttons) {
+    if (inst) reinterpret_cast<LibretroCoreInstance*>(inst)->on_mouse(dx, dy, buttons);
 }
 
 bool lr_set_option(czx_core_instance_t* inst, const char* key, const char* value) {
@@ -1690,6 +1743,7 @@ bool LibretroCoreLoader::load(const std::string& so_path) {
         lr_load_media_in_drive,
         lr_load_dual_media,
         lr_eject_drive,
+        lr_on_mouse,
     };
 
     loaded_ = true;

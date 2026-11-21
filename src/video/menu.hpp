@@ -48,7 +48,7 @@ struct MenuViewModel {
     AspectPolicy aspect_policy = AspectPolicy::ParAware;
     bool show_borders = false;
     MarginFill margin_fill = MarginFill::Auto;
-    int input_mode = 0;  // 0=Keyboard, 1=Joy P1, 2=Joy P2
+    int input_mode = 0;  // 0=Keyboard, 1=Joy P1, 2=Joy P2, 3=Mouse
 };
 
 class OverlayMenu {

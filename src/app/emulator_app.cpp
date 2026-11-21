@@ -377,12 +377,14 @@ void EmulatorApp::handle_host_command(czx::input::HostCommand cmd) {
             set_display_mode(czx::video::DisplayMode::AspectFit);
             break;
         case czx::input::HostCommand::ToggleInputMode: {
-            const int next_i = (static_cast<int>(router_.input_mode()) + 1) % 3;
+            const int next_i = (static_cast<int>(router_.input_mode()) + 1) % 4;
             const auto next = static_cast<czx::input::InputMode>(next_i);
             router_.set_input_mode(next);
             hud_.input_mode = next_i;
-            show_toast(next_i == 2 ? "INPUT: JOYSTICK P2"
-                                   : (next_i == 1 ? "INPUT: JOYSTICK P1" : "INPUT: KEYBOARD"));
+            show_toast(next_i == 3 ? "INPUT: MOUSE"
+                                   : (next_i == 2 ? "INPUT: JOYSTICK P2"
+                                                  : (next_i == 1 ? "INPUT: JOYSTICK P1"
+                                                                 : "INPUT: KEYBOARD")));
             break;
         }
         case czx::input::HostCommand::ToggleMenu:
@@ -598,6 +600,13 @@ void EmulatorApp::cb_guest_joystick(void* user_data, uint32_t port, uint32_t but
     }
 }
 
+void EmulatorApp::cb_guest_mouse(void* user_data, int32_t dx, int32_t dy, uint32_t buttons) {
+    auto* self = static_cast<EmulatorApp*>(user_data);
+    if (self->core_api_ && self->core_inst_ && self->core_api_->on_mouse) {
+        self->core_api_->on_mouse(self->core_inst_, dx, dy, buttons);
+    }
+}
+
 int EmulatorApp::run() {
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
@@ -636,6 +645,7 @@ int EmulatorApp::run() {
     rcb.on_menu_key = cb_menu_key;
     rcb.on_guest_key = cb_guest_key;
     rcb.on_guest_joystick = cb_guest_joystick;
+    rcb.on_guest_mouse = cb_guest_mouse;
     router_.set_callbacks(rcb);
 
     hud_.display_mode = scaler_cfg_.mode;

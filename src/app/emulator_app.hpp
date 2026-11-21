@@ -89,6 +89,7 @@ private:
     static void cb_menu_key(void* user_data, const czx_key_event_t& ev);
     static void cb_guest_key(void* user_data, const czx_key_event_t& ev);
     static void cb_guest_joystick(void* user_data, uint32_t port, uint32_t buttons);
+    static void cb_guest_mouse(void* user_data, int32_t dx, int32_t dy, uint32_t buttons);
 };
 
 }  // namespace czx::app

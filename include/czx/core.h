@@ -107,6 +107,12 @@ enum {
     CZX_JOY_FIRE2 = 1u << 5,
 };
 
+enum {
+    CZX_MOUSE_LEFT   = 1u << 0,
+    CZX_MOUSE_RIGHT  = 1u << 1,
+    CZX_MOUSE_MIDDLE = 1u << 2,
+};
+
 typedef struct czx_key_event {
     czx_key_t key;
     bool pressed;
@@ -162,6 +168,7 @@ typedef struct czx_core_api {
                             const char* path0, const char* label0,
                             const char* path1, const char* label1);
     bool (*eject_drive)(czx_core_instance_t* inst, uint32_t drive);
+    void (*on_mouse)(czx_core_instance_t* inst, int32_t dx, int32_t dy, uint32_t buttons);
 } czx_core_api_t;
 
 #ifdef __cplusplus

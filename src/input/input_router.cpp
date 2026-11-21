@@ -7,9 +7,35 @@
 
 namespace czx::input {
 
+namespace {
+
+czx_key_t map_fn_chord_key(czx_key_t key) noexcept {
+    switch (key) {
+        case CZX_KEY_1: return CZX_KEY_F1;
+        case CZX_KEY_2: return CZX_KEY_F2;
+        case CZX_KEY_3: return CZX_KEY_F3;
+        case CZX_KEY_4: return CZX_KEY_F4;
+        case CZX_KEY_5: return CZX_KEY_F5;
+        case CZX_KEY_6: return CZX_KEY_F6;
+        case CZX_KEY_7: return CZX_KEY_F7;
+        case CZX_KEY_8: return CZX_KEY_F8;
+        case CZX_KEY_9: return CZX_KEY_F9;
+        case CZX_KEY_0: return CZX_KEY_F10;
+        case CZX_KEY_O: return CZX_KEY_F11;
+        case CZX_KEY_P: return CZX_KEY_F12;
+        default: return CZX_KEY_NONE;
+    }
+}
+
+}  // namespace
+
 void InputRouter::set_menu_open(bool open) {
     menu_open_ = open;
     clear_pan_hold();
+    clear_mouse_state();
+    if (open) {
+        fn_mapped_keys_.clear();
+    }
     if (joy_buttons_ != 0) {
         joy_buttons_ = 0;
         if (cb_.on_guest_joystick) {
@@ -22,6 +48,7 @@ void InputRouter::set_menu_open(bool open) {
 void InputRouter::set_input_mode(InputMode mode) {
     if (input_mode_ == mode) return;
     input_mode_ = mode;
+    clear_mouse_state();
     if (joy_buttons_ != 0) {
         joy_buttons_ = 0;
         if (cb_.on_guest_joystick) {
@@ -48,6 +75,21 @@ void InputRouter::clear_pan_hold() {
     pan_right_ = false;
     pan_acc_x_ = 0.0;
     pan_acc_y_ = 0.0;
+}
+
+void InputRouter::clear_mouse_state() {
+    mouse_up_ = false;
+    mouse_down_ = false;
+    mouse_left_ = false;
+    mouse_right_ = false;
+    mouse_acc_x_ = 0.0;
+    mouse_acc_y_ = 0.0;
+    if (mouse_buttons_ != 0) {
+        mouse_buttons_ = 0;
+        if (cb_.on_guest_mouse) {
+            cb_.on_guest_mouse(cb_.user_data, 0, 0, 0);
+        }
+    }
 }
 
 void InputRouter::update_modifier(czx_key_t key, bool pressed) {
@@ -168,7 +210,7 @@ bool InputRouter::handle_pan_key(czx_key_t key, bool pressed, bool repeat) {
 }
 
 bool InputRouter::handle_joystick_key(czx_key_t key, bool pressed) {
-    if (input_mode_ == InputMode::Keyboard) return false;
+    if (input_mode_ != InputMode::Joystick && input_mode_ != InputMode::JoystickP2) return false;
 
     uint32_t bit = 0;
     switch (key) {
@@ -207,6 +249,99 @@ bool InputRouter::handle_joystick_key(czx_key_t key, bool pressed) {
     if (joy_buttons_ != prev && cb_.on_guest_joystick) {
         const uint32_t port = (input_mode_ == InputMode::JoystickP2) ? 1u : 0u;
         cb_.on_guest_joystick(cb_.user_data, port, joy_buttons_);
+    }
+    return true;
+}
+
+RawKeyEvent InputRouter::apply_fn_chord(const RawKeyEvent& raw) {
+    const auto it = std::find_if(fn_mapped_keys_.begin(), fn_mapped_keys_.end(),
+                                 [&](const auto& kv) { return kv.first == raw.key; });
+    if (!raw.pressed) {
+        if (it != fn_mapped_keys_.end()) {
+            RawKeyEvent mapped{it->second, false, false, 0};
+            fn_mapped_keys_.erase(it);
+            return mapped;
+        }
+        return raw;
+    }
+
+    if (raw.repeat && it != fn_mapped_keys_.end()) {
+        return RawKeyEvent{it->second, true, true, 0};
+    }
+
+    if (fn_held_ && !alt_held()) {
+        const czx_key_t fn_key = map_fn_chord_key(raw.key);
+        if (fn_key != CZX_KEY_NONE) {
+            if (it == fn_mapped_keys_.end()) {
+                fn_mapped_keys_.emplace_back(raw.key, fn_key);
+            } else {
+                it->second = fn_key;
+            }
+            return RawKeyEvent{fn_key, true, raw.repeat, 0};
+        }
+    }
+
+    return raw;
+}
+
+bool InputRouter::handle_mouse_key(czx_key_t key, bool pressed, bool repeat) {
+    if (input_mode_ != InputMode::Mouse) return false;
+
+    uint32_t btn_bit = 0;
+    bool* dir_flag = nullptr;
+    int dir_x = 0;
+    int dir_y = 0;
+
+    switch (key) {
+        case CZX_KEY_F:
+        case CZX_KEY_UP:
+            dir_flag = &mouse_up_;
+            dir_y = -1;
+            break;
+        case CZX_KEY_X:
+        case CZX_KEY_DOWN:
+            dir_flag = &mouse_down_;
+            dir_y = 1;
+            break;
+        case CZX_KEY_Z:
+        case CZX_KEY_LEFT:
+            dir_flag = &mouse_left_;
+            dir_x = -1;
+            break;
+        case CZX_KEY_C:
+        case CZX_KEY_RIGHT:
+            dir_flag = &mouse_right_;
+            dir_x = 1;
+            break;
+        case CZX_KEY_SPACE:
+            btn_bit = CZX_MOUSE_LEFT;
+            break;
+        case CZX_KEY_ENTER:
+            btn_bit = CZX_MOUSE_RIGHT;
+            break;
+        default:
+            return false;
+    }
+
+    if (btn_bit != 0) {
+        const uint32_t prev = mouse_buttons_;
+        if (pressed) {
+            mouse_buttons_ |= btn_bit;
+        } else {
+            mouse_buttons_ &= ~btn_bit;
+        }
+        if (mouse_buttons_ != prev && cb_.on_guest_mouse) {
+            cb_.on_guest_mouse(cb_.user_data, 0, 0, mouse_buttons_);
+        }
+        return true;
+    }
+
+    *dir_flag = pressed;
+    if (pressed && !repeat && cb_.on_guest_mouse) {
+        const bool ctrl = (lctrl_held_ || rctrl_held_);
+        const bool shift = (lshift_held_ || rshift_held_);
+        const int step = ctrl ? 1 : (shift ? kTapMouseStepPx * 2 : kTapMouseStepPx);
+        cb_.on_guest_mouse(cb_.user_data, dir_x * step, dir_y * step, mouse_buttons_);
     }
     return true;
 }
@@ -258,44 +393,75 @@ void InputRouter::handle_raw_key(const RawKeyEvent& raw) {
         return;
     }
 
-    if (handle_joystick_key(raw.key, raw.pressed)) {
+    const RawKeyEvent eff = apply_fn_chord(raw);
+
+    if (handle_joystick_key(eff.key, eff.pressed)) {
+        return;
+    }
+
+    if (handle_mouse_key(eff.key, eff.pressed, eff.repeat)) {
         return;
     }
 
     if (cb_.on_guest_key) {
         czx_key_event_t ev{};
-        ev.key = raw.key;
-        ev.pressed = raw.pressed;
-        ev.repeat = raw.repeat;
+        ev.key = eff.key;
+        ev.pressed = eff.pressed;
+        ev.repeat = eff.repeat;
         ev.mods = modifiers();
-        ev.codepoint = resolve_codepoint(raw);
+        ev.codepoint = resolve_codepoint(eff);
         cb_.on_guest_key(cb_.user_data, ev);
     }
 }
 
 void InputRouter::tick(double dt_sec) {
-    if (menu_open_ || !native_pan_enabled_ || !alt_held() || dt_sec <= 0.0) {
-        return;
-    }
-    const int dir_x = (pan_right_ ? 1 : 0) - (pan_left_ ? 1 : 0);
-    const int dir_y = (pan_down_ ? 1 : 0) - (pan_up_ ? 1 : 0);
-    if (dir_x == 0 && dir_y == 0) {
-        pan_acc_x_ = 0.0;
-        pan_acc_y_ = 0.0;
+    if (menu_open_ || dt_sec <= 0.0) {
         return;
     }
 
-    const double speed = kHoldPanSpeedPxPerSec * ((lshift_held_ || rshift_held_) ? 2.0 : 1.0);
-    pan_acc_x_ += static_cast<double>(dir_x) * speed * dt_sec;
-    pan_acc_y_ += static_cast<double>(dir_y) * speed * dt_sec;
+    auto step_axis = [&](int dir_x, int dir_y, double speed, double& acc_x, double& acc_y,
+                         int& out_dx, int& out_dy) -> bool {
+        if (dir_x == 0 && dir_y == 0) {
+            acc_x = 0.0;
+            acc_y = 0.0;
+            return false;
+        }
+        acc_x += static_cast<double>(dir_x) * speed * dt_sec;
+        acc_y += static_cast<double>(dir_y) * speed * dt_sec;
+        out_dx = static_cast<int>(std::trunc(acc_x));
+        out_dy = static_cast<int>(std::trunc(acc_y));
+        if (out_dx == 0 && out_dy == 0) {
+            return false;
+        }
+        acc_x -= static_cast<double>(out_dx);
+        acc_y -= static_cast<double>(out_dy);
+        return true;
+    };
 
-    const int dx = static_cast<int>(std::trunc(pan_acc_x_));
-    const int dy = static_cast<int>(std::trunc(pan_acc_y_));
-    if (dx != 0 || dy != 0) {
-        pan_acc_x_ -= static_cast<double>(dx);
-        pan_acc_y_ -= static_cast<double>(dy);
-        if (cb_.on_pan) {
+    const bool shift = (lshift_held_ || rshift_held_);
+    if (native_pan_enabled_ && alt_held()) {
+        const int dir_x = (pan_right_ ? 1 : 0) - (pan_left_ ? 1 : 0);
+        const int dir_y = (pan_down_ ? 1 : 0) - (pan_up_ ? 1 : 0);
+        int dx = 0;
+        int dy = 0;
+        if (step_axis(dir_x, dir_y, kHoldPanSpeedPxPerSec * (shift ? 2.0 : 1.0),
+                      pan_acc_x_, pan_acc_y_, dx, dy) &&
+            cb_.on_pan) {
             cb_.on_pan(cb_.user_data, dx, dy);
+        }
+    }
+
+    if (input_mode_ == InputMode::Mouse && !alt_held()) {
+        const int dir_x = (mouse_right_ ? 1 : 0) - (mouse_left_ ? 1 : 0);
+        const int dir_y = (mouse_down_ ? 1 : 0) - (mouse_up_ ? 1 : 0);
+        const bool ctrl = (lctrl_held_ || rctrl_held_);
+        const double mult = ctrl ? 0.25 : (shift ? 2.0 : 1.0);
+        int dx = 0;
+        int dy = 0;
+        if (step_axis(dir_x, dir_y, kHoldMouseSpeedPxPerSec * mult,
+                      mouse_acc_x_, mouse_acc_y_, dx, dy) &&
+            cb_.on_guest_mouse) {
+            cb_.on_guest_mouse(cb_.user_data, dx, dy, mouse_buttons_);
         }
     }
 }

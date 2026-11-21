@@ -23,6 +23,7 @@ struct AppConfig {
     czx::video::DisplayMode display_mode = czx::video::DisplayMode::OverflowFit;
     czx::video::AspectPolicy aspect_policy = czx::video::AspectPolicy::ParAware;
     bool show_borders = false;
+    czx::video::MarginFill margin_fill = czx::video::MarginFill::Auto;
     int headless_frames = 0;
     bool verify_nonblank = false;
     czx::platform::PlatformOptions platform;

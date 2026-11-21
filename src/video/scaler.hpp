@@ -21,6 +21,11 @@ enum class AspectPolicy {
     Crt4x3 = 1,       // Normalize target display aspect ratio to 4:3 CRT
 };
 
+enum class MarginFill {
+    Auto = 0,   // Border extension / scanline border edge fill when CZX_FRAME_HAS_BORDER, else 4-corner average
+    Black = 1,  // Classic black pillarbox / letterbox
+};
+
 struct ViewportLayout {
     int src_x = 0;
     int src_y = 0;
@@ -44,6 +49,7 @@ struct ScalerConfig {
     bool show_borders = false;
     int pan_x = 0;
     int pan_y = 0;
+    MarginFill margin_fill = MarginFill::Auto;
 };
 
 class Scaler {
@@ -82,5 +88,6 @@ private:
 const char* display_mode_name(DisplayMode mode) noexcept;
 const char* display_mode_short(DisplayMode mode) noexcept;
 const char* aspect_policy_name(AspectPolicy policy) noexcept;
+const char* margin_fill_name(MarginFill fill) noexcept;
 
 }  // namespace czx::video

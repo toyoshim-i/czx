@@ -46,6 +46,7 @@ EmulatorApp::EmulatorApp(AppConfig cfg)
     scaler_cfg_.mode = cfg_.display_mode;
     scaler_cfg_.aspect_policy = cfg_.aspect_policy;
     scaler_cfg_.show_borders = cfg_.show_borders;
+    scaler_cfg_.margin_fill = cfg_.margin_fill;
     preset_index_ = cfg_.preset_index;
 }
 
@@ -281,6 +282,7 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
     vm.display_mode = scaler_cfg_.mode;
     vm.aspect_policy = scaler_cfg_.aspect_policy;
     vm.show_borders = scaler_cfg_.show_borders;
+    vm.margin_fill = scaler_cfg_.margin_fill;
     vm.input_mode = static_cast<int>(router_.input_mode());
     return vm;
 }
@@ -391,6 +393,14 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
             scaler_cfg_.show_borders = !scaler_cfg_.show_borders;
             scaler_cfg_.pan_x = 0;
             scaler_cfg_.pan_y = 0;
+            break;
+        case czx::video::MenuAction::ToggleMarginFill:
+            scaler_cfg_.margin_fill =
+                (scaler_cfg_.margin_fill == czx::video::MarginFill::Auto)
+                    ? czx::video::MarginFill::Black
+                    : czx::video::MarginFill::Auto;
+            show_toast(scaler_cfg_.margin_fill == czx::video::MarginFill::Auto ? "MARGIN: AUTO"
+                                                                               : "MARGIN: BLACK");
             break;
         case czx::video::MenuAction::ToggleInputMode:
             handle_host_command(czx::input::HostCommand::ToggleInputMode);

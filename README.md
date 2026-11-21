@@ -28,7 +28,7 @@ Holding `Alt` reveals the 5-slot icon bar aligned above physical keys `4 5 6 7 8
 | `Alt + 5` | Switch to **Axis Fit** (overflow-only downscale) mode |
 | `Alt + 6` | Switch to **Aspect Fit** mode |
 | `Alt + 7` | Cycle **Keyboard** → **Joystick P1** → **Joystick P2** (`F/Z/X/C` + `Space`/`Enter`) |
-| `Alt + 8` | Open / Close **System Menu** (Core, Load Media, Eject, Display, Aspect, Borders, Reset, Quit) |
+| `Alt + 8` | Open / Close **System Menu** (Core, Load Media, Eject, Display, Aspect, Borders, Margin Auto/Black, Reset, Quit) |
 | `Alt + F/Z/X/C` | Scroll viewport in **1:1 Pan** mode (hold `Shift` for 2× speed) |
 
 `SYM` and `Fn` keys pass through intact to the emulated retro computer (TCA8418 `SYM` scancodes map cleanly to shifted/unshifted US keys).

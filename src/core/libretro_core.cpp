@@ -701,6 +701,7 @@ private:
         } else if (is_vice_) {
             frame.par_num = 1;
             frame.par_den = 1;
+            frame.flags = CZX_FRAME_HAS_BORDER;
             if (frame.width == 384 && frame.height == 272) {
                 frame.crop_x = 32;
                 frame.crop_y = 36;

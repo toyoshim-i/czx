@@ -16,6 +16,10 @@ typedef enum czx_pixel_format {
     CZX_PIXEL_ABGR8888 = 2,
 } czx_pixel_format_t;
 
+enum {
+    CZX_FRAME_HAS_BORDER = 1u << 0,
+};
+
 typedef struct czx_frame {
     const void* data;
     uint32_t pitch_bytes;
@@ -30,6 +34,7 @@ typedef struct czx_frame {
     uint16_t par_num;
     uint16_t par_den;
     czx_pixel_format_t format;
+    uint32_t flags;
 } czx_frame_t;
 
 typedef enum czx_key {

@@ -244,6 +244,7 @@ void test_run_frame(czx_core_instance_t* inst) {
     frame.par_num = p.par_num;
     frame.par_den = p.par_den;
     frame.format = p.format;
+    frame.flags = (p.c64_theme && p.crop_w > 0) ? static_cast<uint32_t>(CZX_FRAME_HAS_BORDER) : 0u;
 
     if (st->host.video_frame) {
         st->host.video_frame(st->host.user_data, &frame);

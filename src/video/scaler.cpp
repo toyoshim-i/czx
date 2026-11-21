@@ -42,6 +42,91 @@ const char* aspect_policy_name(AspectPolicy policy) noexcept {
     return "Unknown";
 }
 
+const char* margin_fill_name(MarginFill fill) noexcept {
+    switch (fill) {
+        case MarginFill::Auto:
+            return "Auto";
+        case MarginFill::Black:
+            return "Black";
+    }
+    return "Unknown";
+}
+
+namespace {
+
+void fill_margins(const czx_frame_t& frame, const ScalerConfig& cfg,
+                  const ViewportLayout& layout, uint16_t* dst_rgb565) {
+    if (layout.dst_x == 0 && layout.dst_y == 0 &&
+        layout.dst_w == kLcdWidth && layout.dst_h == kLcdHeight) {
+        return;
+    }
+
+    const int rx = layout.dst_x + layout.dst_w;
+    if (cfg.margin_fill == MarginFill::Auto && (frame.flags & CZX_FRAME_HAS_BORDER) != 0) {
+        for (int y = layout.dst_y; y < layout.dst_y + layout.dst_h; ++y) {
+            uint16_t* row = dst_rgb565 + y * kLcdWidth;
+            if (layout.dst_x > 0) {
+                std::fill_n(row, layout.dst_x, row[layout.dst_x]);
+            }
+            if (rx < kLcdWidth) {
+                std::fill_n(row + rx, kLcdWidth - rx, row[rx - 1]);
+            }
+        }
+        const size_t row_bytes = static_cast<size_t>(kLcdWidth) * sizeof(uint16_t);
+        const uint16_t* top_ref = dst_rgb565 + layout.dst_y * kLcdWidth;
+        for (int y = 0; y < layout.dst_y; ++y) {
+            std::memcpy(dst_rgb565 + y * kLcdWidth, top_ref, row_bytes);
+        }
+        const uint16_t* bot_ref = dst_rgb565 + (layout.dst_y + layout.dst_h - 1) * kLcdWidth;
+        for (int y = layout.dst_y + layout.dst_h; y < kLcdHeight; ++y) {
+            std::memcpy(dst_rgb565 + y * kLcdWidth, bot_ref, row_bytes);
+        }
+        return;
+    }
+
+    uint16_t bg = 0;
+    if (cfg.margin_fill == MarginFill::Auto && frame.data != nullptr &&
+        layout.src_w > 0 && layout.src_h > 0 &&
+        layout.src_x + layout.src_w <= static_cast<int>(frame.width) &&
+        layout.src_y + layout.src_h <= static_cast<int>(frame.height)) {
+        const auto* base = static_cast<const uint8_t*>(frame.data);
+        const uint32_t x0 = static_cast<uint32_t>(layout.src_x);
+        const uint32_t x1 = static_cast<uint32_t>(layout.src_x + layout.src_w - 1);
+        const uint8_t* r0 = base + static_cast<size_t>(layout.src_y) * frame.pitch_bytes;
+        const uint8_t* r1 = base + static_cast<size_t>(layout.src_y + layout.src_h - 1) * frame.pitch_bytes;
+        const uint8_t* rows[4] = {r0, r0, r1, r1};
+        const uint32_t cols[4] = {x0, x1, x0, x1};
+        uint32_t sum_r = 0;
+        uint32_t sum_g = 0;
+        uint32_t sum_b = 0;
+        for (int i = 0; i < 4; ++i) {
+            uint8_t r = 0, g = 0, b = 0;
+            read_pixel_rgb888(rows[i], cols[i], frame.format, r, g, b);
+            sum_r += r;
+            sum_g += g;
+            sum_b += b;
+        }
+        bg = pack_rgb565(
+            static_cast<uint8_t>((sum_r + 2u) / 4u),
+            static_cast<uint8_t>((sum_g + 2u) / 4u),
+            static_cast<uint8_t>((sum_b + 2u) / 4u));
+    }
+
+    for (int y = 0; y < layout.dst_y; ++y) {
+        std::fill_n(dst_rgb565 + y * kLcdWidth, kLcdWidth, bg);
+    }
+    for (int y = layout.dst_y; y < layout.dst_y + layout.dst_h; ++y) {
+        uint16_t* row = dst_rgb565 + y * kLcdWidth;
+        if (layout.dst_x > 0) std::fill_n(row, layout.dst_x, bg);
+        if (rx < kLcdWidth) std::fill_n(row + rx, kLcdWidth - rx, bg);
+    }
+    for (int y = layout.dst_y + layout.dst_h; y < kLcdHeight; ++y) {
+        std::fill_n(dst_rgb565 + y * kLcdWidth, kLcdWidth, bg);
+    }
+}
+
+}  // namespace
+
 void Scaler::AxisTable::ensure(int src, int dst) {
     if (src_len == src && dst_len == dst) {
         return;
@@ -200,6 +285,27 @@ ViewportLayout Scaler::compute_layout(const czx_frame_t& frame, const ScalerConf
             out.dst_h = std::clamp(static_cast<int>(std::lround(eff_h * scale)), 1, kLcdHeight);
             out.dst_x = (kLcdWidth - out.dst_w) / 2;
             out.dst_y = (kLcdHeight - out.dst_h) / 2;
+
+            if (cfg.margin_fill == MarginFill::Auto && (frame.flags & CZX_FRAME_HAS_BORDER) != 0 &&
+                !cfg.show_borders && out.dst_w < kLcdWidth) {
+                const int avail_l = active_x;
+                const int avail_r = static_cast<int>(frame.width) - (active_x + active_w);
+                const int pad_l = (kLcdWidth - out.dst_w) / 2;
+                const int pad_r = kLcdWidth - out.dst_w - pad_l;
+                const double px_per_src_x = static_cast<double>(out.dst_w) / static_cast<double>(active_w);
+                if ((avail_l > 0 || avail_r > 0) && px_per_src_x > 0.0) {
+                    const int ext_dst_l = std::min(pad_l, static_cast<int>(std::floor(avail_l * px_per_src_x + 0.5)));
+                    const int ext_dst_r = std::min(pad_r, static_cast<int>(std::floor(avail_r * px_per_src_x + 0.5)));
+                    const int ext_src_l = std::min(
+                        avail_l, static_cast<int>(std::lround(static_cast<double>(ext_dst_l) / px_per_src_x)));
+                    const int ext_src_r = std::min(
+                        avail_r, static_cast<int>(std::lround(static_cast<double>(ext_dst_r) / px_per_src_x)));
+                    out.src_x = active_x - ext_src_l;
+                    out.src_w = active_w + ext_src_l + ext_src_r;
+                    out.dst_w = out.dst_w + ext_dst_l + ext_dst_r;
+                    out.dst_x = pad_l - ext_dst_l;
+                }
+            }
             break;
         }
     }
@@ -208,9 +314,9 @@ ViewportLayout Scaler::compute_layout(const czx_frame_t& frame, const ScalerConf
 }
 
 ViewportLayout Scaler::render(const czx_frame_t& frame, const ScalerConfig& cfg, uint16_t* dst_rgb565) {
-    std::memset(dst_rgb565, 0, static_cast<size_t>(kLcdWidth * kLcdHeight) * sizeof(uint16_t));
     const ViewportLayout layout = compute_layout(frame, cfg);
     if (!frame.data || layout.src_w <= 0 || layout.src_h <= 0 || layout.dst_w <= 0 || layout.dst_h <= 0) {
+        std::memset(dst_rgb565, 0, static_cast<size_t>(kLcdWidth * kLcdHeight) * sizeof(uint16_t));
         return layout;
     }
 
@@ -219,8 +325,8 @@ ViewportLayout Scaler::render(const czx_frame_t& frame, const ScalerConfig& cfg,
     const int bpp = (frame.format == CZX_PIXEL_RGB565) ? 2 : 4;
     const size_t src_x_bytes = static_cast<size_t>(layout.src_x) * static_cast<size_t>(bpp);
 
-    // Fast path 1: 1:1 unscaled copy (used by NativePan and non-overflowing axes).
     if (layout.src_w == layout.dst_w && layout.src_h == layout.dst_h) {
+        // Fast path 1: 1:1 unscaled copy (used by NativePan and non-overflowing axes).
         for (int dy = 0; dy < layout.dst_h; ++dy) {
             const uint8_t* src_row = base + static_cast<size_t>(layout.src_y + dy) * pitch + src_x_bytes;
             uint16_t* dst_row = dst_rgb565 + (layout.dst_y + dy) * kLcdWidth + layout.dst_x;
@@ -232,11 +338,8 @@ ViewportLayout Scaler::render(const czx_frame_t& frame, const ScalerConfig& cfg,
                 }
             }
         }
-        return layout;
-    }
-
-    // Fast path 2: X is 1:1, resample Y only (typical OverflowFit for Apple II 40-col & C64).
-    if (layout.src_w == layout.dst_w) {
+    } else if (layout.src_w == layout.dst_w) {
+        // Fast path 2: X is 1:1, resample Y only (typical OverflowFit for Apple II 40-col & C64).
         y_table_.ensure(layout.src_h, layout.dst_h);
         for (int dy = 0; dy < layout.dst_h; ++dy) {
             const AxisSpan span = y_table_.spans[static_cast<size_t>(dy)];
@@ -261,68 +364,68 @@ ViewportLayout Scaler::render(const czx_frame_t& frame, const ScalerConfig& cfg,
                     static_cast<uint8_t>(acc_b >> 12));
             }
         }
-        return layout;
-    }
+    } else {
+        // General separable 2-pass area resampling: X (src_w -> dst_w), then Y (src_h -> dst_h).
+        x_table_.ensure(layout.src_w, layout.dst_w);
+        const size_t tmp_stride = static_cast<size_t>(layout.dst_w) * 3u;
+        tmp_rgb_.resize(static_cast<size_t>(layout.src_h) * tmp_stride);
 
-    // General separable 2-pass area resampling: X (src_w -> dst_w), then Y (src_h -> dst_h).
-    x_table_.ensure(layout.src_w, layout.dst_w);
-    const size_t tmp_stride = static_cast<size_t>(layout.dst_w) * 3u;
-    tmp_rgb_.resize(static_cast<size_t>(layout.src_h) * tmp_stride);
-
-    for (int sy = 0; sy < layout.src_h; ++sy) {
-        const uint8_t* src_row = base + static_cast<size_t>(layout.src_y + sy) * pitch + src_x_bytes;
-        uint8_t* tmp_row = tmp_rgb_.data() + static_cast<size_t>(sy) * tmp_stride;
-        for (int dx = 0; dx < layout.dst_w; ++dx) {
-            const AxisSpan span = x_table_.spans[static_cast<size_t>(dx)];
-            uint32_t acc_r = 2048;
-            uint32_t acc_g = 2048;
-            uint32_t acc_b = 2048;
-            for (uint16_t k = 0; k < span.count; ++k) {
-                const Tap tap = x_table_.taps[span.offset + k];
-                uint8_t r = 0, g = 0, b = 0;
-                read_pixel_rgb888(src_row, tap.src_idx, frame.format, r, g, b);
-                acc_r += static_cast<uint32_t>(r) * tap.weight_q12;
-                acc_g += static_cast<uint32_t>(g) * tap.weight_q12;
-                acc_b += static_cast<uint32_t>(b) * tap.weight_q12;
-            }
-            tmp_row[dx * 3 + 0] = static_cast<uint8_t>(acc_r >> 12);
-            tmp_row[dx * 3 + 1] = static_cast<uint8_t>(acc_g >> 12);
-            tmp_row[dx * 3 + 2] = static_cast<uint8_t>(acc_b >> 12);
-        }
-    }
-
-    if (layout.src_h == layout.dst_h) {
-        for (int dy = 0; dy < layout.dst_h; ++dy) {
-            const uint8_t* tmp_row = tmp_rgb_.data() + static_cast<size_t>(dy) * tmp_stride;
-            uint16_t* dst_row = dst_rgb565 + (layout.dst_y + dy) * kLcdWidth + layout.dst_x;
+        for (int sy = 0; sy < layout.src_h; ++sy) {
+            const uint8_t* src_row = base + static_cast<size_t>(layout.src_y + sy) * pitch + src_x_bytes;
+            uint8_t* tmp_row = tmp_rgb_.data() + static_cast<size_t>(sy) * tmp_stride;
             for (int dx = 0; dx < layout.dst_w; ++dx) {
-                dst_row[dx] = pack_rgb565(tmp_row[dx * 3 + 0], tmp_row[dx * 3 + 1], tmp_row[dx * 3 + 2]);
+                const AxisSpan span = x_table_.spans[static_cast<size_t>(dx)];
+                uint32_t acc_r = 2048;
+                uint32_t acc_g = 2048;
+                uint32_t acc_b = 2048;
+                for (uint16_t k = 0; k < span.count; ++k) {
+                    const Tap tap = x_table_.taps[span.offset + k];
+                    uint8_t r = 0, g = 0, b = 0;
+                    read_pixel_rgb888(src_row, tap.src_idx, frame.format, r, g, b);
+                    acc_r += static_cast<uint32_t>(r) * tap.weight_q12;
+                    acc_g += static_cast<uint32_t>(g) * tap.weight_q12;
+                    acc_b += static_cast<uint32_t>(b) * tap.weight_q12;
+                }
+                tmp_row[dx * 3 + 0] = static_cast<uint8_t>(acc_r >> 12);
+                tmp_row[dx * 3 + 1] = static_cast<uint8_t>(acc_g >> 12);
+                tmp_row[dx * 3 + 2] = static_cast<uint8_t>(acc_b >> 12);
             }
         }
-        return layout;
+
+        if (layout.src_h == layout.dst_h) {
+            for (int dy = 0; dy < layout.dst_h; ++dy) {
+                const uint8_t* tmp_row = tmp_rgb_.data() + static_cast<size_t>(dy) * tmp_stride;
+                uint16_t* dst_row = dst_rgb565 + (layout.dst_y + dy) * kLcdWidth + layout.dst_x;
+                for (int dx = 0; dx < layout.dst_w; ++dx) {
+                    dst_row[dx] = pack_rgb565(tmp_row[dx * 3 + 0], tmp_row[dx * 3 + 1], tmp_row[dx * 3 + 2]);
+                }
+            }
+        } else {
+            y_table_.ensure(layout.src_h, layout.dst_h);
+            for (int dy = 0; dy < layout.dst_h; ++dy) {
+                const AxisSpan span = y_table_.spans[static_cast<size_t>(dy)];
+                uint16_t* dst_row = dst_rgb565 + (layout.dst_y + dy) * kLcdWidth + layout.dst_x;
+                for (int dx = 0; dx < layout.dst_w; ++dx) {
+                    uint32_t acc_r = 2048;
+                    uint32_t acc_g = 2048;
+                    uint32_t acc_b = 2048;
+                    for (uint16_t k = 0; k < span.count; ++k) {
+                        const Tap tap = y_table_.taps[span.offset + k];
+                        const uint8_t* tmp_row = tmp_rgb_.data() + static_cast<size_t>(tap.src_idx) * tmp_stride;
+                        acc_r += static_cast<uint32_t>(tmp_row[dx * 3 + 0]) * tap.weight_q12;
+                        acc_g += static_cast<uint32_t>(tmp_row[dx * 3 + 1]) * tap.weight_q12;
+                        acc_b += static_cast<uint32_t>(tmp_row[dx * 3 + 2]) * tap.weight_q12;
+                    }
+                    dst_row[dx] = pack_rgb565(
+                        static_cast<uint8_t>(acc_r >> 12),
+                        static_cast<uint8_t>(acc_g >> 12),
+                        static_cast<uint8_t>(acc_b >> 12));
+                }
+            }
+        }
     }
 
-    y_table_.ensure(layout.src_h, layout.dst_h);
-    for (int dy = 0; dy < layout.dst_h; ++dy) {
-        const AxisSpan span = y_table_.spans[static_cast<size_t>(dy)];
-        uint16_t* dst_row = dst_rgb565 + (layout.dst_y + dy) * kLcdWidth + layout.dst_x;
-        for (int dx = 0; dx < layout.dst_w; ++dx) {
-            uint32_t acc_r = 2048;
-            uint32_t acc_g = 2048;
-            uint32_t acc_b = 2048;
-            for (uint16_t k = 0; k < span.count; ++k) {
-                const Tap tap = y_table_.taps[span.offset + k];
-                const uint8_t* tmp_row = tmp_rgb_.data() + static_cast<size_t>(tap.src_idx) * tmp_stride;
-                acc_r += static_cast<uint32_t>(tmp_row[dx * 3 + 0]) * tap.weight_q12;
-                acc_g += static_cast<uint32_t>(tmp_row[dx * 3 + 1]) * tap.weight_q12;
-                acc_b += static_cast<uint32_t>(tmp_row[dx * 3 + 2]) * tap.weight_q12;
-            }
-            dst_row[dx] = pack_rgb565(
-                static_cast<uint8_t>(acc_r >> 12),
-                static_cast<uint8_t>(acc_g >> 12),
-                static_cast<uint8_t>(acc_b >> 12));
-        }
-    }
+    fill_margins(frame, cfg, layout, dst_rgb565);
     return layout;
 }
 

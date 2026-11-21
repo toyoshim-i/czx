@@ -17,6 +17,7 @@ void print_usage(const char* prog) {
         "  --preset <0..4>               Initial test pattern preset (default: 0)\n"
         "  --borders                     Show overscan/PAL borders when present\n"
         "  --crt43                       Use 4:3 CRT aspect policy in aspect mode\n"
+        "  --margin <auto|black>         Fill letterbox/pillarbox margins (default: auto)\n"
         "  --drm <path>                  Override DRM device path\n"
         "  --fb <path>                   Override fbdev device path\n"
         "  --fbdev                       Prefer fbdev over DRM on device\n"
@@ -63,6 +64,16 @@ int main(int argc, char** argv) {
             cfg.show_borders = true;
         } else if (std::strcmp(arg, "--crt43") == 0) {
             cfg.aspect_policy = czx::video::AspectPolicy::Crt4x3;
+        } else if (std::strcmp(arg, "--margin") == 0 && i + 1 < argc) {
+            const char* mf = argv[++i];
+            if (std::strcmp(mf, "auto") == 0) {
+                cfg.margin_fill = czx::video::MarginFill::Auto;
+            } else if (std::strcmp(mf, "black") == 0) {
+                cfg.margin_fill = czx::video::MarginFill::Black;
+            } else {
+                std::fprintf(stderr, "Unknown margin mode: %s\n", mf);
+                return 2;
+            }
         } else if (std::strcmp(arg, "--drm") == 0 && i + 1 < argc) {
             cfg.platform.drm_device = argv[++i];
         } else if (std::strcmp(arg, "--fb") == 0 && i + 1 < argc) {

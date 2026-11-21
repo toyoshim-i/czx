@@ -1,5 +1,5 @@
 #include "platform/desktop_sdl2.hpp"
-#include "platform/linux_alsa.hpp"
+#include "platform/linux_audio.hpp"
 #include "platform/null_devices.hpp"
 #include "platform/platform.hpp"
 
@@ -24,7 +24,7 @@ PlatformBundle create_platform_bundle(const PlatformOptions& opts) {
         bundle.display = std::make_unique<DesktopSdl2Display>(ctx);
         bundle.input = std::make_unique<DesktopSdl2Input>(ctx);
     }
-    bundle.audio = std::make_unique<LinuxAlsaAudio>();
+    bundle.audio = std::make_unique<LinuxAudio>();
     return bundle;
 }
 

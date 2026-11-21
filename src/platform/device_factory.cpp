@@ -1,4 +1,4 @@
-#include "platform/linux_alsa.hpp"
+#include "platform/linux_audio.hpp"
 #include "platform/linux_drm.hpp"
 #include "platform/linux_evdev.hpp"
 #include "platform/linux_fbdev.hpp"
@@ -40,7 +40,7 @@ PlatformBundle create_platform_bundle(const PlatformOptions& opts) {
     ev->init();
     bundle.input = std::move(ev);
 
-    bundle.audio = std::make_unique<LinuxAlsaAudio>();
+    bundle.audio = std::make_unique<LinuxAudio>();
     return bundle;
 }
 

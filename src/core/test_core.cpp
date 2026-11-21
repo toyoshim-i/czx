@@ -120,7 +120,7 @@ const czx_core_desc_t kDesc = {
     "CZX Resolution & Input Pattern",
     60,
     1,
-    44100,
+    48000,
 };
 
 const czx_core_desc_t* test_get_desc(const czx_core_api_t*) {
@@ -250,7 +250,7 @@ void test_run_frame(czx_core_instance_t* inst) {
         st->host.video_frame(st->host.user_data, &frame);
     }
 
-    constexpr size_t kAudioFrames = 44100 / 60;
+    constexpr size_t kAudioFrames = 48000 / 60;
     st->audio_buf.resize(kAudioFrames * 2u);
     for (size_t i = 0; i < kAudioFrames; ++i) {
         int16_t s = 0;

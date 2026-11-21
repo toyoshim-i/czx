@@ -3,6 +3,7 @@
 #include "platform/platform.hpp"
 
 #include <cstdint>
+#include <string>
 
 namespace czx::platform {
 
@@ -14,6 +15,7 @@ public:
     bool init(uint32_t sample_rate) override;
     void write_samples(const int16_t* stereo_s16, size_t frame_count) override;
     const char* backend_name() const override { return active_ ? "linux-alsa" : "null-audio"; }
+    void cleanup();
 
 private:
     using PcmHandle = void*;
@@ -23,10 +25,12 @@ private:
     using FnPcmRecover = int (*)(PcmHandle, int, int);
     using FnPcmDrain = int (*)(PcmHandle);
     using FnPcmClose = int (*)(PcmHandle);
+    using FnStrerror = const char* (*)(int);
 
     void* dl_ = nullptr;
     PcmHandle pcm_ = nullptr;
     bool active_ = false;
+    uint32_t sample_rate_ = 0;
 
     FnPcmOpen fn_open_ = nullptr;
     FnPcmSetParams fn_set_params_ = nullptr;
@@ -34,8 +38,9 @@ private:
     FnPcmRecover fn_recover_ = nullptr;
     FnPcmDrain fn_drain_ = nullptr;
     FnPcmClose fn_close_ = nullptr;
+    FnStrerror fn_strerror_ = nullptr;
 
-    void cleanup();
+    bool open_device(const char* device, uint32_t sample_rate, std::string& last_err);
 };
 
 }  // namespace czx::platform

@@ -76,6 +76,7 @@ if(UNIX AND NOT APPLE)
             src/platform/linux_fbdev.cpp
             src/platform/linux_evdev.cpp
             src/platform/linux_alsa.cpp
+            src/platform/linux_audio.cpp
             src/platform/device_factory.cpp
         )
         target_include_directories(czx_device_platform PUBLIC
@@ -98,6 +99,7 @@ elseif(CZX_SELECTED_BACKEND STREQUAL "DESKTOP_SDL2")
     add_library(czx_platform STATIC
         src/platform/desktop_sdl2.cpp
         src/platform/linux_alsa.cpp
+        src/platform/linux_audio.cpp
         src/platform/desktop_sdl2_factory.cpp
     )
     target_include_directories(czx_platform PUBLIC
@@ -115,6 +117,7 @@ elseif(CZX_SELECTED_BACKEND STREQUAL "DESKTOP_X11")
     add_library(czx_platform STATIC
         src/platform/desktop_x11.cpp
         src/platform/linux_alsa.cpp
+        src/platform/linux_audio.cpp
         src/platform/desktop_x11_factory.cpp
     )
     target_include_directories(czx_platform PUBLIC

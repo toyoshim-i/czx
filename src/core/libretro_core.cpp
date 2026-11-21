@@ -22,6 +22,9 @@ namespace fs = std::filesystem;
 
 namespace czx::core {
 
+constexpr uint32_t kTargetAudioSampleRate = 48000u;
+constexpr double kTargetAudioSampleRateF = static_cast<double>(kTargetAudioSampleRate);
+
 struct LibretroCoreLoader::Symbols {
     unsigned (*retro_api_version)(void) = nullptr;
     void (*retro_init)(void) = nullptr;
@@ -895,13 +898,14 @@ private:
         if (!data || frames == 0) return;
         const double src_rate = (av_info_.timing.sample_rate > 1000.0)
                                     ? av_info_.timing.sample_rate
-                                    : 44100.0;
-        if (std::abs(src_rate - 44100.0) < 1.0) {
+                                    : kTargetAudioSampleRateF;
+        if (std::abs(src_rate - kTargetAudioSampleRateF) < 1.0) {
             audio_out_frame_.insert(audio_out_frame_.end(), data, data + frames * 2u);
             return;
         }
 
-        const double step = src_rate / 44100.0;
+        const double step = src_rate / kTargetAudioSampleRateF;
+        if (audio_resample_pos_ < 0.0) audio_resample_pos_ = 0.0;
         while (audio_resample_pos_ < static_cast<double>(frames)) {
             const size_t i0 = static_cast<size_t>(audio_resample_pos_);
             const size_t i1 = std::min(i0 + 1, frames - 1);
@@ -1314,7 +1318,7 @@ void LibretroCoreLoader::update_av_timing(double fps, double) {
         desc_.fps_num = static_cast<uint32_t>(std::lround(fps * 1000.0));
         desc_.fps_den = 1000u;
     }
-    desc_.audio_sample_rate = 44100u;
+    desc_.audio_sample_rate = kTargetAudioSampleRate;
 }
 
 bool LibretroCoreLoader::load(const std::string& so_path) {
@@ -1340,7 +1344,7 @@ bool LibretroCoreLoader::load(const std::string& so_path) {
     desc_.name = display_name_.c_str();
     desc_.fps_num = 60;
     desc_.fps_den = 1;
-    desc_.audio_sample_rate = 44100;
+    desc_.audio_sample_rate = kTargetAudioSampleRate;
 
     api_ = czx_core_api_t{
         this,

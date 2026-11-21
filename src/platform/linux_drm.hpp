@@ -2,10 +2,13 @@
 
 #include "platform/platform.hpp"
 
+#include <condition_variable>
 #include <cstdint>
 #include <drm/drm.h>
 #include <drm/drm_mode.h>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace czx::platform {
@@ -34,8 +37,17 @@ private:
     bool has_saved_crtc_ = false;
     bool first_frame_ = true;
     std::vector<uint16_t> prev_frame_;
+    std::vector<uint16_t> pending_frame_;
+    std::vector<uint16_t> upload_frame_;
+    std::mutex present_mtx_;
+    std::condition_variable present_cv_;
+    std::thread present_thread_;
+    bool has_pending_ = false;
+    bool stop_thread_ = false;
 
     bool open_and_configure(const std::string& path);
+    void present_loop();
+    void flush_frame(const uint16_t* rgb565);
     void cleanup();
 };
 

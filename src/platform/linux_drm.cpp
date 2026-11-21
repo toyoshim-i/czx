@@ -37,6 +37,17 @@ LinuxDrmDisplay::~LinuxDrmDisplay() {
 }
 
 void LinuxDrmDisplay::cleanup() {
+    if (present_thread_.joinable()) {
+        {
+            std::lock_guard<std::mutex> lock(present_mtx_);
+            stop_thread_ = true;
+        }
+        present_cv_.notify_one();
+        present_thread_.join();
+    }
+    has_pending_ = false;
+    stop_thread_ = false;
+
     if (fd_ >= 0 && has_saved_crtc_) {
         saved_crtc_.set_connectors_ptr = reinterpret_cast<uint64_t>(&conn_id_);
         saved_crtc_.count_connectors = 1;
@@ -63,6 +74,9 @@ void LinuxDrmDisplay::cleanup() {
         close(fd_);
         fd_ = -1;
     }
+    prev_frame_.clear();
+    pending_frame_.clear();
+    upload_frame_.clear();
 }
 
 bool LinuxDrmDisplay::open_and_configure(const std::string& path) {
@@ -237,8 +251,14 @@ bool LinuxDrmDisplay::open_and_configure(const std::string& path) {
         return false;
     }
 
-    prev_frame_.assign(static_cast<size_t>(video::kLcdWidth * video::kLcdHeight), 0);
+    const size_t frame_pixels = static_cast<size_t>(video::kLcdWidth * video::kLcdHeight);
+    prev_frame_.assign(frame_pixels, 0);
+    pending_frame_.assign(frame_pixels, 0);
+    upload_frame_.assign(frame_pixels, 0);
     first_frame_ = true;
+    has_pending_ = false;
+    stop_thread_ = false;
+    present_thread_ = std::thread(&LinuxDrmDisplay::present_loop, this);
     std::fprintf(stderr, "czx: DRM RGB565 active on %s (%ux%u)\n",
                  path.c_str(), chosen_mode.hdisplay, chosen_mode.vdisplay);
     return true;
@@ -267,6 +287,34 @@ bool LinuxDrmDisplay::init() {
 }
 
 void LinuxDrmDisplay::present(const uint16_t* rgb565) {
+    if (!map_ || !rgb565 || !present_thread_.joinable()) return;
+
+    const size_t copy_bytes =
+        static_cast<size_t>(video::kLcdWidth * video::kLcdHeight) * sizeof(uint16_t);
+    {
+        std::lock_guard<std::mutex> lock(present_mtx_);
+        std::memcpy(pending_frame_.data(), rgb565, copy_bytes);
+        has_pending_ = true;
+    }
+    present_cv_.notify_one();
+}
+
+void LinuxDrmDisplay::present_loop() {
+    for (;;) {
+        {
+            std::unique_lock<std::mutex> lock(present_mtx_);
+            present_cv_.wait(lock, [&]() { return stop_thread_ || has_pending_; });
+            if (stop_thread_) {
+                break;
+            }
+            upload_frame_.swap(pending_frame_);
+            has_pending_ = false;
+        }
+        flush_frame(upload_frame_.data());
+    }
+}
+
+void LinuxDrmDisplay::flush_frame(const uint16_t* rgb565) {
     if (!map_ || !rgb565) return;
 
     int x1 = video::kLcdWidth;

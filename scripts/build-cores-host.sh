@@ -40,9 +40,9 @@ echo "Building QUASI88 (libretro, x86_64)..."
     make clean >/dev/null 2>&1 || true
     CFLAGS="-O3 -Wno-incompatible-pointer-types -Wno-implicit-function-declaration" \
     CXXFLAGS="-O3" \
-    make -j"$(nproc)" platform=unix
+    make -f "$ROOT_DIR/cmake/quasi88_czx/Makefile.czx" -j"$(nproc)" platform=unix
     cp -f "quasi88_libretro.so" "$OUT_DIR/"
-    make clean >/dev/null 2>&1 || true
+    make -f "$ROOT_DIR/cmake/quasi88_czx/Makefile.czx" clean >/dev/null 2>&1 || true
 )
 
 echo "Building NP2kai (libretro, x86_64)..."

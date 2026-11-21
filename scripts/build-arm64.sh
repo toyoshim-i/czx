@@ -59,14 +59,14 @@ docker run --rm \
         done
 
         cd /workspace/third_party/quasi88-libretro
-        make clean >/dev/null 2>&1 || true
+        make -f /workspace/cmake/quasi88_czx/Makefile.czx clean >/dev/null 2>&1 || true
         CFLAGS="-O3 -mcpu=cortex-a53 -Wno-incompatible-pointer-types -Wno-implicit-function-declaration" \
         CXXFLAGS="-O3 -mcpu=cortex-a53" \
         LDFLAGS="-static-libgcc -static-libstdc++" \
-        make -j"$NPROC" platform=unix \
+        make -f /workspace/cmake/quasi88_czx/Makefile.czx -j"$NPROC" platform=unix \
             CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ AR=aarch64-linux-gnu-ar
         cp -f "quasi88_libretro.so" /workspace/dist-arm64/cores/
-        make clean >/dev/null 2>&1 || true
+        make -f /workspace/cmake/quasi88_czx/Makefile.czx clean >/dev/null 2>&1 || true
 
         cd /workspace/third_party/NP2kai/sdl
         make -f Makefile.libretro clean >/dev/null 2>&1 || true

@@ -1,0 +1,8 @@
+CZX_Q88_WRAP_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+include Makefile
+
+$(CORE_DIR)/quasi88.o: $(CZX_Q88_WRAP_DIR)/quasi88_wrap.c $(CORE_DIR)/quasi88.c
+	$(CC) -c $(OBJOUT)$@ $< $(CPPFLAGS) $(CFLAGS)
+
+$(CORE_DIR)/LIBRETRO/libretro.o: $(CZX_Q88_WRAP_DIR)/libretro_wrap.c $(CORE_DIR)/LIBRETRO/libretro.c
+	$(CC) -c $(OBJOUT)$@ $< $(CPPFLAGS) $(CFLAGS)

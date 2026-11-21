@@ -1,0 +1,6 @@
+[submodule "third_party/AppleWin"]
+	path = third_party/AppleWin
+	url = https://github.com/audetto/AppleWin.git
+[submodule "third_party/vice-libretro"]
+	path = third_party/vice-libretro
+	url = https://github.com/libretro/vice-libretro.git

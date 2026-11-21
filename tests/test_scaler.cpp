@@ -2,6 +2,8 @@
 #include "video/pixel.hpp"
 #include "video/scaler.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -249,12 +251,141 @@ void test_hud_render() {
     CHECK(has_hud_pixels);
 }
 
+void verify_against_float_oracle(const czx_frame_t& frame, const ScalerConfig& cfg) {
+    Scaler scaler;
+    std::vector<uint16_t> out(kLcdWidth * kLcdHeight, 0);
+    const auto l = scaler.render(frame, cfg, out.data());
+
+    const auto* base = static_cast<const uint8_t*>(frame.data);
+    for (int dy = 0; dy < l.dst_h; ++dy) {
+        const double sy0 = static_cast<double>(dy) * static_cast<double>(l.src_h) / static_cast<double>(l.dst_h);
+        const double sy1 = static_cast<double>(dy + 1) * static_cast<double>(l.src_h) / static_cast<double>(l.dst_h);
+        const int y0 = std::clamp(static_cast<int>(std::floor(sy0)), 0, l.src_h - 1);
+        const int y1 = std::clamp(static_cast<int>(std::ceil(sy1)) - 1, y0, l.src_h - 1);
+        for (int dx = 0; dx < l.dst_w; ++dx) {
+            const double sx0 = static_cast<double>(dx) * static_cast<double>(l.src_w) / static_cast<double>(l.dst_w);
+            const double sx1 = static_cast<double>(dx + 1) * static_cast<double>(l.src_w) / static_cast<double>(l.dst_w);
+            const int x0 = std::clamp(static_cast<int>(std::floor(sx0)), 0, l.src_w - 1);
+            const int x1 = std::clamp(static_cast<int>(std::ceil(sx1)) - 1, x0, l.src_w - 1);
+
+            double sum_r = 0.0;
+            double sum_g = 0.0;
+            double sum_b = 0.0;
+            double sum_w = 0.0;
+            for (int sy = y0; sy <= y1; ++sy) {
+                const double wy = std::min(sy1, static_cast<double>(sy + 1)) - std::max(sy0, static_cast<double>(sy));
+                const uint8_t* srow = base + static_cast<size_t>(l.src_y + sy) * frame.pitch_bytes;
+                for (int sx = x0; sx <= x1; ++sx) {
+                    const double wx =
+                        std::min(sx1, static_cast<double>(sx + 1)) - std::max(sx0, static_cast<double>(sx));
+                    const double w = wx * wy;
+                    uint8_t r = 0, g = 0, b = 0;
+                    read_pixel_rgb888(srow, static_cast<uint32_t>(l.src_x + sx), frame.format, r, g, b);
+                    sum_r += w * static_cast<double>(r);
+                    sum_g += w * static_cast<double>(g);
+                    sum_b += w * static_cast<double>(b);
+                    sum_w += w;
+                }
+            }
+            const int exp_r5 = static_cast<int>(std::clamp(std::lround(sum_r / sum_w), 0L, 255L)) >> 3;
+            const int exp_g6 = static_cast<int>(std::clamp(std::lround(sum_g / sum_w), 0L, 255L)) >> 2;
+            const int exp_b5 = static_cast<int>(std::clamp(std::lround(sum_b / sum_w), 0L, 255L)) >> 3;
+
+            const uint16_t got = out[(l.dst_y + dy) * kLcdWidth + (l.dst_x + dx)];
+            const int got_r5 = (got >> 11) & 0x1F;
+            const int got_g6 = (got >> 5) & 0x3F;
+            const int got_b5 = got & 0x1F;
+            CHECK(std::abs(got_r5 - exp_r5) <= 1);
+            CHECK(std::abs(got_g6 - exp_g6) <= 1);
+            CHECK(std::abs(got_b5 - exp_b5) <= 1);
+        }
+    }
+}
+
+void test_float_oracle_all_formats() {
+    auto fill_rgb565 = [](int w, int h) {
+        std::vector<uint16_t> buf(static_cast<size_t>(w) * h);
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                const uint8_t r = static_cast<uint8_t>((x * 5 + y * 3) & 0xFF);
+                const uint8_t g = static_cast<uint8_t>((x * 2 + y * 7) & 0xFF);
+                const uint8_t b = static_cast<uint8_t>((x * 9 - y * 2) & 0xFF);
+                buf[static_cast<size_t>(y) * w + x] = pack_rgb565(r, g, b);
+            }
+        }
+        return buf;
+    };
+    auto fill_xrgb = [](int w, int h) {
+        std::vector<uint32_t> buf(static_cast<size_t>(w) * h);
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                const uint32_t r = static_cast<uint32_t>((x * 7 + y * 3) & 0xFF);
+                const uint32_t g = static_cast<uint32_t>((x * 4 + y * 11) & 0xFF);
+                const uint32_t b = static_cast<uint32_t>((x * 13 + y * 5) & 0xFF);
+                buf[static_cast<size_t>(y) * w + x] = (r << 16) | (g << 8) | b;
+            }
+        }
+        return buf;
+    };
+    auto fill_abgr = [](int w, int h) {
+        std::vector<uint32_t> buf(static_cast<size_t>(w) * h);
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                const uint32_t r = static_cast<uint32_t>((x * 3 + y * 9) & 0xFF);
+                const uint32_t g = static_cast<uint32_t>((x * 8 + y * 6) & 0xFF);
+                const uint32_t b = static_cast<uint32_t>((x * 11 + y * 2) & 0xFF);
+                buf[static_cast<size_t>(y) * w + x] = 0xFF000000u | (b << 16) | (g << 8) | r;
+            }
+        }
+        return buf;
+    };
+
+    // 640x400 RGB565 -> 320x170 (OverflowFit 2:1 X) and 272x170 (AspectFit general)
+    {
+        auto buf = fill_rgb565(640, 400);
+        czx_frame_t f{buf.data(), 640u * 2u, 640, 400, 0, 0, 0, 0, 1, 1, CZX_PIXEL_RGB565, 0};
+        verify_against_float_oracle(f, ScalerConfig{DisplayMode::OverflowFit, AspectPolicy::ParAware, false, 0, 0, MarginFill::Black});
+        verify_against_float_oracle(f, ScalerConfig{DisplayMode::AspectFit, AspectPolicy::ParAware, false, 0, 0, MarginFill::Black});
+    }
+    // 560x192 XRGB8888 -> 320x170 and 248x170
+    {
+        auto buf = fill_xrgb(560, 192);
+        czx_frame_t f{buf.data(), 560u * 4u, 560, 192, 0, 0, 0, 0, 1, 2, CZX_PIXEL_XRGB8888, 0};
+        verify_against_float_oracle(f, ScalerConfig{DisplayMode::OverflowFit, AspectPolicy::ParAware, false, 0, 0, MarginFill::Black});
+        verify_against_float_oracle(f, ScalerConfig{DisplayMode::AspectFit, AspectPolicy::ParAware, false, 0, 0, MarginFill::Black});
+    }
+    // 384x272 ABGR8888 (crop 32,36,320,200) -> 320x170 (1:1 X + Y) and 240x170 (full)
+    {
+        auto buf = fill_abgr(384, 272);
+        czx_frame_t f{buf.data(), 384u * 4u, 384, 272, 32, 36, 320, 200, 1, 1, CZX_PIXEL_ABGR8888, CZX_FRAME_HAS_BORDER};
+        verify_against_float_oracle(f, ScalerConfig{DisplayMode::OverflowFit, AspectPolicy::ParAware, false, 0, 0, MarginFill::Auto});
+        verify_against_float_oracle(f, ScalerConfig{DisplayMode::AspectFit, AspectPolicy::ParAware, true, 0, 0, MarginFill::Black});
+    }
+    // 280x192 XRGB8888 -> 227x170 (CRT 4:3, non-multiple-of-16 tail)
+    {
+        auto buf = fill_xrgb(280, 192);
+        czx_frame_t f{buf.data(), 280u * 4u, 280, 192, 0, 0, 0, 0, 1, 1, CZX_PIXEL_XRGB8888, 0};
+        verify_against_float_oracle(f, ScalerConfig{DisplayMode::AspectFit, AspectPolicy::Crt4x3, false, 0, 0, MarginFill::Black});
+    }
+    // X-only resample: 640x160 RGB565 -> 320x160 (2:1) and 500x160 -> 320x160 (general)
+    {
+        auto buf21 = fill_rgb565(640, 160);
+        czx_frame_t f21{buf21.data(), 640u * 2u, 640, 160, 0, 0, 0, 0, 1, 1, CZX_PIXEL_RGB565, 0};
+        verify_against_float_oracle(f21, ScalerConfig{DisplayMode::OverflowFit, AspectPolicy::ParAware, false, 0, 0, MarginFill::Black});
+
+        auto buf_g = fill_rgb565(500, 160);
+        czx_frame_t fg{buf_g.data(), 500u * 2u, 500, 160, 0, 0, 0, 0, 1, 1, CZX_PIXEL_RGB565, 0};
+        verify_against_float_oracle(fg, ScalerConfig{DisplayMode::OverflowFit, AspectPolicy::ParAware, false, 0, 0, MarginFill::Black});
+    }
+}
+
 }  // namespace
 
 int main() {
     test_layouts();
     test_pixel_accuracy_and_resampling();
     test_hud_render();
+    test_float_oracle_all_formats();
     std::printf("test_scaler: all assertions passed\n");
     return 0;
 }

@@ -61,13 +61,9 @@ public:
     ViewportLayout render(const czx_frame_t& frame, const ScalerConfig& cfg, uint16_t* dst_rgb565);
 
 private:
-    struct Tap {
-        uint16_t src_idx;
-        uint16_t weight_q12;
-    };
-
     struct AxisSpan {
-        uint32_t offset;
+        uint16_t src_start;
+        uint32_t tap_offset;
         uint16_t count;
     };
 
@@ -75,14 +71,25 @@ private:
         int src_len = 0;
         int dst_len = 0;
         std::vector<AxisSpan> spans;
-        std::vector<Tap> taps;
+        std::vector<uint8_t> weights_q7;
 
         void ensure(int src, int dst);
     };
 
     AxisTable x_table_;
     AxisTable y_table_;
-    std::vector<uint8_t> tmp_rgb_;
+    std::vector<uint8_t> src_r_;
+    std::vector<uint8_t> src_g_;
+    std::vector<uint8_t> src_b_;
+    alignas(16) uint8_t cur_r_[kLcdWidth]{};
+    alignas(16) uint8_t cur_g_[kLcdWidth]{};
+    alignas(16) uint8_t cur_b_[kLcdWidth]{};
+    alignas(16) uint8_t prev_r_[kLcdWidth]{};
+    alignas(16) uint8_t prev_g_[kLcdWidth]{};
+    alignas(16) uint8_t prev_b_[kLcdWidth]{};
+    alignas(16) uint16_t acc_r_[kLcdWidth]{};
+    alignas(16) uint16_t acc_g_[kLcdWidth]{};
+    alignas(16) uint16_t acc_b_[kLcdWidth]{};
 };
 
 const char* display_mode_name(DisplayMode mode) noexcept;

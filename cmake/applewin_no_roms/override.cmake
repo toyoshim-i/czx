@@ -14,6 +14,13 @@ function(czx_override_applewin_external_roms)
     )
   endif()
 
+  if(TARGET applewin_libretro)
+    get_target_property(_ra2_srcs applewin_libretro SOURCES)
+    list(FILTER _ra2_srcs EXCLUDE REGEX "(^|/)rdirectsound\\.cpp$")
+    list(APPEND _ra2_srcs "${_CZX_APPLEWIN_NO_ROMS_DIR}/rdirectsound_fixed.cpp")
+    set_target_properties(applewin_libretro PROPERTIES SOURCES "${_ra2_srcs}")
+  endif()
+
   file(REMOVE
     "${CMAKE_BINARY_DIR}/resource/apple2roms_data.h"
     "${CMAKE_BINARY_DIR}/resource/apple2roms_data.cpp"

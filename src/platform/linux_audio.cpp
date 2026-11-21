@@ -18,7 +18,6 @@ constexpr int kPaContextTerminated = 6;
 constexpr int kPaStreamReady = 2;
 constexpr int kPaStreamFailed = 3;
 constexpr int kPaStreamTerminated = 4;
-constexpr int kPaStreamAdjustLatency = 0x2000;
 constexpr int kPaSeekRelative = 0;
 
 template <typename Fn>
@@ -220,11 +219,12 @@ bool LinuxPulseAudio::init_with_sink(uint32_t sample_rate, const char* sink_dev)
     fn_stream_set_state_cb_(stream_, on_stream_state, this);
 
     const uint32_t bytes_per_sec = sample_rate * 4u;
-    const uint32_t tlength = std::max<uint32_t>(4u, (bytes_per_sec * 60u / 1000u) & ~3u);
-    const uint32_t prebuf = std::max<uint32_t>(4u, (bytes_per_sec * 20u / 1000u) & ~3u);
-    const PaBufferAttr attr{tlength * 2u, tlength, prebuf, UINT32_MAX, UINT32_MAX};
+    const uint32_t tlength = std::max<uint32_t>(4u, (bytes_per_sec * 120u / 1000u) & ~3u);
+    const uint32_t prebuf = std::max<uint32_t>(4u, (bytes_per_sec * 60u / 1000u) & ~3u);
+    const uint32_t minreq = std::max<uint32_t>(4u, (bytes_per_sec * 20u / 1000u) & ~3u);
+    const PaBufferAttr attr{tlength * 2u, tlength, prebuf, minreq, UINT32_MAX};
 
-    if (fn_stream_connect_playback_(stream_, sink_dev, &attr, kPaStreamAdjustLatency, nullptr, nullptr) < 0) {
+    if (fn_stream_connect_playback_(stream_, sink_dev, &attr, 0, nullptr, nullptr) < 0) {
         const int err = fn_ctx_errno_(ctx_);
         std::fprintf(stderr, "czx: PulseAudio stream connect failed: %s\n",
                      (fn_strerror_ && err) ? fn_strerror_(err) : "stream connect error");

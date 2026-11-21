@@ -58,7 +58,7 @@ bool LinuxAlsaAudio::open_device(const char* device, uint32_t sample_rate, std::
     }
 
     const int param_rc = fn_set_params_(pcm_, kSndPcmFormatS16Le, kSndPcmAccessRwInterleaved,
-                                        2, sample_rate, 1, 60000);
+                                        2, sample_rate, 1, 100000);
     if (param_rc < 0) {
         last_err = std::string(device) + ": snd_pcm_set_params failed (" + format_err(param_rc) + ")";
         fn_close_(pcm_);

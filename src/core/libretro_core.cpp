@@ -689,6 +689,9 @@ private:
 
     std::vector<int16_t> audio_out_frame_;
     double audio_resample_pos_ = 0.0;
+    int16_t audio_prev_l_ = 0;
+    int16_t audio_prev_r_ = 0;
+    bool audio_has_prev_ = false;
 
     bool check_required_roms(std::string& err_out) const {
         if (is_applewin_) {
@@ -773,6 +776,9 @@ private:
         option_dirty_ = false;
         pixel_format_ = RETRO_PIXEL_FORMAT_0RGB1555;
         audio_resample_pos_ = 0.0;
+        audio_prev_l_ = 0;
+        audio_prev_r_ = 0;
+        audio_has_prev_ = false;
         loader_->close_library();
     }
 
@@ -1158,23 +1164,50 @@ private:
                                     : kTargetAudioSampleRateF;
         if (std::abs(src_rate - kTargetAudioSampleRateF) < 1.0) {
             audio_out_frame_.insert(audio_out_frame_.end(), data, data + frames * 2u);
+            audio_prev_l_ = data[(frames - 1u) * 2u];
+            audio_prev_r_ = data[(frames - 1u) * 2u + 1u];
+            audio_has_prev_ = true;
             return;
         }
 
+        if (!audio_has_prev_) {
+            audio_prev_l_ = data[0];
+            audio_prev_r_ = data[1];
+            audio_has_prev_ = true;
+            audio_resample_pos_ = 0.0;
+        }
+
         const double step = src_rate / kTargetAudioSampleRateF;
-        if (audio_resample_pos_ < 0.0) audio_resample_pos_ = 0.0;
-        while (audio_resample_pos_ < static_cast<double>(frames)) {
-            const size_t i0 = static_cast<size_t>(audio_resample_pos_);
-            const size_t i1 = std::min(i0 + 1, frames - 1);
-            const double frac = audio_resample_pos_ - static_cast<double>(i0);
-            const double l = static_cast<double>(data[i0 * 2 + 0]) * (1.0 - frac) +
-                             static_cast<double>(data[i1 * 2 + 0]) * frac;
-            const double r = static_cast<double>(data[i0 * 2 + 1]) * (1.0 - frac) +
-                             static_cast<double>(data[i1 * 2 + 1]) * frac;
+        const double limit = static_cast<double>(frames) - 1.0;
+        while (audio_resample_pos_ < limit) {
+            double l0 = 0.0;
+            double r0 = 0.0;
+            double l1 = 0.0;
+            double r1 = 0.0;
+            double frac = 0.0;
+            if (audio_resample_pos_ < 0.0) {
+                l0 = static_cast<double>(audio_prev_l_);
+                r0 = static_cast<double>(audio_prev_r_);
+                l1 = static_cast<double>(data[0]);
+                r1 = static_cast<double>(data[1]);
+                frac = std::clamp(audio_resample_pos_ + 1.0, 0.0, 1.0);
+            } else {
+                const size_t i0 = static_cast<size_t>(audio_resample_pos_);
+                const size_t i1 = i0 + 1u;
+                l0 = static_cast<double>(data[i0 * 2u + 0u]);
+                r0 = static_cast<double>(data[i0 * 2u + 1u]);
+                l1 = static_cast<double>(data[i1 * 2u + 0u]);
+                r1 = static_cast<double>(data[i1 * 2u + 1u]);
+                frac = audio_resample_pos_ - static_cast<double>(i0);
+            }
+            const double l = l0 * (1.0 - frac) + l1 * frac;
+            const double r = r0 * (1.0 - frac) + r1 * frac;
             audio_out_frame_.push_back(static_cast<int16_t>(std::clamp(std::lround(l), -32768L, 32767L)));
             audio_out_frame_.push_back(static_cast<int16_t>(std::clamp(std::lround(r), -32768L, 32767L)));
             audio_resample_pos_ += step;
         }
+        audio_prev_l_ = data[(frames - 1u) * 2u];
+        audio_prev_r_ = data[(frames - 1u) * 2u + 1u];
         audio_resample_pos_ -= static_cast<double>(frames);
     }
 

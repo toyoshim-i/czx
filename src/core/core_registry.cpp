@@ -1,5 +1,6 @@
 #include "core/core_registry.hpp"
 
+#include "core/g800_core.hpp"
 #include "core/test_core.hpp"
 
 #include <algorithm>
@@ -93,6 +94,7 @@ CoreRegistry CoreRegistry::create_default(const std::string& explicit_core_dir,
         reg.load_libretro_core(so);
     }
 
+    reg.register_core(get_g800_core_api());
     reg.register_core(get_test_core_api());
     return reg;
 }

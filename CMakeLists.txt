@@ -47,6 +47,43 @@ target_compile_options(czx_warnings INTERFACE
     $<$<COMPILE_LANGUAGE:CXX>:-Wno-sign-conversion>
 )
 
+# Patch upstream g800/basic.c runProg() uninitialized pointer order into build dir, leaving third_party/g800 untouched.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/third_party/g800/basic.c" CZX_G800_BASIC_ORIG)
+string(REGEX REPLACE "skipBlank\\(&p\\);[\r\n\t ]+p = buf;" "p = buf;\n\tskipBlank(&p);" CZX_G800_BASIC_PATCHED "${CZX_G800_BASIC_ORIG}")
+if(CZX_G800_BASIC_PATCHED STREQUAL CZX_G800_BASIC_ORIG)
+    message(FATAL_ERROR "Failed to apply runProg() patch to third_party/g800/basic.c")
+endif()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/g800_basic.c" "${CZX_G800_BASIC_PATCHED}")
+
+# Built-in SHARP PC-G850/G815/E200 core (2-Clause BSD, SDL-free C bridge)
+add_library(czx_g800_upstream STATIC
+    cmake/g800_czx/g800_wrap.c
+    third_party/g800/z80.c
+    third_party/g800/z80disasm.c
+    third_party/g800/conf.c
+    third_party/g800/io.c
+    third_party/g800/iocs.c
+    third_party/g800/sio.c
+    third_party/g800/sound.c
+    third_party/g800/util.c
+    third_party/g800/menu.c
+    third_party/g800/monitor.c
+    "${CMAKE_CURRENT_BINARY_DIR}/g800_basic.c"
+    third_party/g800/init.c
+)
+target_include_directories(czx_g800_upstream PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/g800_czx
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/g800
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_compile_definitions(czx_g800_upstream PRIVATE Z80_LITTLEENDIAN=1)
+target_compile_options(czx_g800_upstream PRIVATE
+    -include ${CMAKE_CURRENT_SOURCE_DIR}/cmake/g800_czx/depend.h
+    -w
+    -Wno-incompatible-pointer-types
+    -Wno-implicit-function-declaration
+)
+
 # Core-agnostic runtime library (scaler, HUD, menu, browser, input router, cores, app)
 add_library(czx_runtime STATIC
     src/video/scaler.cpp
@@ -59,6 +96,7 @@ add_library(czx_runtime STATIC
     src/input/input_router.cpp
     src/core/core_registry.cpp
     src/core/d88_image.cpp
+    src/core/g800_core.cpp
     src/core/libretro_keys.cpp
     src/core/libretro_core.cpp
     src/core/test_core.cpp
@@ -67,8 +105,10 @@ add_library(czx_runtime STATIC
 target_include_directories(czx_runtime PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/g800_czx
 )
-target_link_libraries(czx_runtime PUBLIC czx_warnings Threads::Threads ${CMAKE_DL_LIBS})
+target_link_libraries(czx_runtime PUBLIC czx_warnings Threads::Threads ${CMAKE_DL_LIBS} PRIVATE czx_g800_upstream m)
 
 # Device Linux platform library (DRM + fbdev + evdev + dynamic ALSA)
 if(UNIX AND NOT APPLE)

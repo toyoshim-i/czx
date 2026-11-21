@@ -11,6 +11,7 @@
 - **PC-8801 (`quasi88_libretro.so`)** — `QUASI88` (PC-8801mkIISR, N88-BASIC V2/V1H/V1S/N-BASIC, OPNA/OPN, D88/T88/CMT/M3U) with built-in clean-room pseudo BIOS fallback and external NEC ROM support.
 - **PC-9801 (`np2kai_libretro.so`)** — `Neko Project II kai` (PC-9801VX, 2.4576 MHz ×4, PC9801-86 FM sound, FDI/HDM/D88/NHD/HDI) with built-in clean-room HLE BIOS fallback and external NEC ROM support.
 - **MSX / MSX2 / MSX2+ (`bluemsx_libretro.so`)** — `blueMSX` (MSX/MSX2/MSX2+, V9938/V9958, PSG/YM2413/SCC, ROM/MX1/MX2/DSK/CAS/M3U) with open-source C-BIOS (2-Clause BSD) for cartridge boot and external MSX BIOS/Disk ROM support.
+- **SHARP PC-G850 / G815 / E200 (`g800`, built-in)** — `g800` v0.11.4 (2-Clause BSD, built-in compatible BASIC/IOCS + external SHARP ROM support via `~/czx/roms/g800/`, crisp `2×` dot-matrix LCD with status indicators, IHX/HEX/BAS/TXT loading).
 - **Built-in Resolution Test Core (`test_pattern`)** — Interactive `280×192`, `560×192`, `320×200`, `384×272`, and `640×400` patterns.
 
 ## Display Scaling & Scroll Modes
@@ -47,7 +48,8 @@ On startup, `czx` creates `$CZX_DATA_DIR` (default `~/czx`):
 │   ├── c64/         # .prg / .d64 / .g64 / .tap / .t64 / .crt / .zip
 │   ├── pc88/        # .d88 / .t88 / .cmt / .m3u / .zip
 │   ├── pc98/        # .fdi / .hdm / .d88 / .nhd / .hdi / .zip
-│   └── msx/         # .rom / .mx1 / .mx2 / .dsk / .cas / .m3u / .zip
+│   ├── msx/         # .rom / .mx1 / .mx2 / .dsk / .cas / .m3u / .zip
+│   └── g800/        # .ihx / .hex / .bas / .txt
 ├── roms/
 │   ├── apple2/      # Required: Apple2e_Enhanced.rom, Apple2e_Enhanced_Video.rom, DISK2.rom
 │   ├── vice/
@@ -55,7 +57,8 @@ On startup, `czx` creates `$CZX_DATA_DIR` (default `~/czx`):
 │   │   └── DRIVES/  # Required: dos1541ii-251968-03.bin (+ optional 1541/1571/1581/JiffyDOS ROMs)
 │   ├── quasi88/     # Optional: N88.ROM, N88_0..3.ROM, N88N.ROM, DISK.ROM, FONT.ROM, KANJI1.ROM
 │   ├── np2kai/      # Optional: bios.rom, itf.rom, sound.rom, font.rom / font.bmp
-│   └── bluemsx/     # Open-source C-BIOS & Databases; real MSX BIOS/Disk ROMs in Machines/Shared Roms/
+│   ├── bluemsx/     # Open-source C-BIOS & Databases; real MSX BIOS/Disk ROMs in Machines/Shared Roms/
+│   └── g800/        # Optional: base.txt/base.bin + rom00.txt/rom00.bin.. (or g850/, g815/, e200/)
 ├── saves/           # Battery RAM / VICE vicerc
 └── config/          # Optional per-core libretro key=value overrides (<core_id>.cfg)
 ```
@@ -67,6 +70,7 @@ Required and optional user-supplied ROM files:
 - **PC-8801 (`~/czx/roms/quasi88/`)**: `quasi88-libretro` includes a clean-room pseudo BIOS fallback, but for full software compatibility place real PC-88 ROMs (`N88.ROM`, `N88_0.ROM`–`N88_3.ROM`, `N88N.ROM`, `DISK.ROM`, `FONT.ROM`, `KANJI1.ROM`) here.
 - **PC-9801 (`~/czx/roms/np2kai/`)**: `NP2kai` includes a built-in HLE BIOS fallback, but for full compatibility (including Japanese text and authentic OPNA/BIOS calls) place `bios.rom`, `itf.rom`, `sound.rom`, and `font.rom` / `font.bmp` here. Avoid placing optional `d8000.rom` unless needed for HDDs, as it can stall floppy boots.
 - **MSX / MSX2 / MSX2+ (`~/czx/roms/bluemsx/`)**: `czx` ships open-source C-BIOS (`MSX2+ - C-BIOS`, `MSX2 - C-BIOS`, `MSX - C-BIOS`) and XML `Databases/` for cartridge boot. For MSX-BASIC and `.dsk` disk software, place real MSX BIOS and Disk ROMs (e.g., `MSX2P.rom`, `MSX2PEXT.rom`, `MSX2PMUS.rom`, `PANASONICDISK.rom`, `XBASIC2.rom`, `MSXKANJI.rom`) in `~/czx/roms/bluemsx/Machines/Shared Roms/`.
+- **SHARP PC-G850 / G815 / E200 (`~/czx/roms/g800/`)**: Works out of the box with `g800`'s built-in compatible BASIC, IOCS, and machine-language monitor. To run real SHARP ROMs, place `base.txt`/`base.bin` + `rom00.txt`/`rom00.bin`.. in `~/czx/roms/g800/` (or per-model subdirectories `g850/`, `g815/`, `e200/`). Pocket computer special keys: `F1`=BASIC, `F2`=TEXT, `F3`=2ndF, `F4`/`Home`=CLS, `F5`=CAPS, `F6`=KANA, `F7`=CONST, `F8`=ANS, `F9`/`Shift+ESC`=OFF, `F10`=MENU, `ESC`=ON/BRK.
 
 If any required ROM is missing, `czx` displays an on-screen **ROM FILES REQUIRED** prompt listing the target folder and missing files so you can switch cores (`Alt + 8`) or add the ROMs without crashing.
 

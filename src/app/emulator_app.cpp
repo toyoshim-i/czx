@@ -68,11 +68,13 @@ void EmulatorApp::ensure_data_dirs() {
     fs::create_directories(root / "roms" / "np2kai", ec);
     fs::create_directories(root / "roms" / "bluemsx" / "Machines" / "Shared Roms", ec);
     fs::create_directories(root / "roms" / "bluemsx" / "Databases", ec);
+    fs::create_directories(root / "roms" / "g800", ec);
     fs::create_directories(root / "media" / "apple2", ec);
     fs::create_directories(root / "media" / "c64", ec);
     fs::create_directories(root / "media" / "pc88", ec);
     fs::create_directories(root / "media" / "pc98", ec);
     fs::create_directories(root / "media" / "msx", ec);
+    fs::create_directories(root / "media" / "g800", ec);
     fs::create_directories(root / "saves", ec);
     fs::create_directories(root / "config", ec);
 }
@@ -96,6 +98,9 @@ std::string EmulatorApp::default_media_dir_for_core() const {
     }
     if (id.find("bluemsx") != std::string::npos && fs::is_directory(media_root / "msx", ec)) {
         return (media_root / "msx").string();
+    }
+    if (id == "g800" && fs::is_directory(media_root / "g800", ec)) {
+        return (media_root / "g800").string();
     }
     return media_root.string();
 }

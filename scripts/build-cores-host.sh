@@ -34,5 +34,29 @@ for emu in x64sc x64; do
     )
 done
 
+echo "Building QUASI88 (libretro, x86_64)..."
+(
+    cd "$SRC_DIR/quasi88-libretro"
+    make clean >/dev/null 2>&1 || true
+    CFLAGS="-O3 -Wno-incompatible-pointer-types -Wno-implicit-function-declaration" \
+    CXXFLAGS="-O3" \
+    make -j"$(nproc)" platform=unix
+    cp -f "quasi88_libretro.so" "$OUT_DIR/"
+    make clean >/dev/null 2>&1 || true
+)
+
+echo "Building NP2kai (libretro, x86_64)..."
+(
+    cd "$SRC_DIR/NP2kai/sdl"
+    NP2KAI_HASH="$(git -C "$SRC_DIR/NP2kai" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    make -f Makefile.libretro clean >/dev/null 2>&1 || true
+    CFLAGS="-O3 -Wno-incompatible-pointer-types -Wno-implicit-function-declaration" \
+    CXXFLAGS="-O3" \
+    make -f Makefile.libretro -j"$(nproc)" platform=unix \
+        NP2KAI_VERSION=rev.22 NP2KAI_HASH="$NP2KAI_HASH"
+    cp -f "np2kai_libretro.so" "$OUT_DIR/"
+    make -f Makefile.libretro clean >/dev/null 2>&1 || true
+)
+
 echo "Built host cores in $OUT_DIR:"
 ls -lh "$OUT_DIR"

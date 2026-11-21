@@ -8,6 +8,8 @@
 
 - **Apple II (`applewin_libretro.so`)** — High-accuracy `audetto/AppleWin` built strictly for external ROM loading (Apple IIe Enhanced, DHGR/80-col, WOZ/NIB/DSK/PO/2MG, Mockingboard, Disk II control).
 - **Commodore 64 (`vice_x64sc_libretro.so` / `vice_x64_libretro.so`)** — Cycle-exact `VICE x64sc` (MOS 6569/6581, 1541-II true drive emulation, PRG/D64/G64/TAP/T64/CRT) plus lighter `VICE x64`, built with `-USE_EMBEDDED` for external ROM loading.
+- **PC-8801 (`quasi88_libretro.so`)** — `QUASI88` (PC-8801mkIISR, N88-BASIC V2/V1H/V1S/N-BASIC, OPNA/OPN, D88/T88/CMT/M3U) with built-in clean-room pseudo BIOS fallback and external NEC ROM support.
+- **PC-9801 (`np2kai_libretro.so`)** — `Neko Project II kai` (PC-9801VX, 2.4576 MHz ×4, PC9801-86 FM sound, FDI/HDM/D88/NHD/HDI) with built-in clean-room HLE BIOS fallback and external NEC ROM support.
 - **Built-in Resolution Test Core (`test_pattern`)** — Interactive `280×192`, `560×192`, `320×200`, `384×272`, and `640×400` patterns.
 
 ## Display Scaling & Scroll Modes
@@ -41,20 +43,26 @@ On startup, `czx` creates `$CZX_DATA_DIR` (default `~/czx`):
 ~/czx/
 ├── media/
 │   ├── apple2/      # .dsk / .do / .po / .nib / .woz / .2mg / .zip
-│   └── c64/         # .prg / .d64 / .g64 / .tap / .t64 / .crt / .zip
+│   ├── c64/         # .prg / .d64 / .g64 / .tap / .t64 / .crt / .zip
+│   ├── pc88/        # .d88 / .t88 / .cmt / .m3u / .zip
+│   └── pc98/        # .fdi / .hdm / .d88 / .nhd / .hdi / .zip
 ├── roms/
 │   ├── apple2/      # Required: Apple2e_Enhanced.rom, Apple2e_Enhanced_Video.rom, DISK2.rom
-│   └── vice/
-│       ├── C64/     # Required: kernal-901227-03.bin, basic-901226-01.bin, chargen-901225-01.bin
-│       └── DRIVES/  # Required: dos1541ii-251968-03.bin (+ optional 1541/1571/1581/JiffyDOS ROMs)
+│   ├── vice/
+│   │   ├── C64/     # Required: kernal-901227-03.bin, basic-901226-01.bin, chargen-901225-01.bin
+│   │   └── DRIVES/  # Required: dos1541ii-251968-03.bin (+ optional 1541/1571/1581/JiffyDOS ROMs)
+│   ├── quasi88/     # Optional: N88.ROM, N88_0..3.ROM, N88N.ROM, DISK.ROM, FONT.ROM, KANJI1.ROM
+│   └── np2kai/      # Optional: bios.rom, itf.rom, sound.rom, font.rom / font.bmp
 ├── saves/           # Battery RAM / VICE vicerc
 └── config/          # Optional per-core libretro key=value overrides (<core_id>.cfg)
 ```
 
-Required user-supplied ROM files:
+Required and optional user-supplied ROM files:
 
 - **Apple II (`~/czx/roms/apple2/`, matched case-insensitively)**: `Apple2e_Enhanced.rom` (16 KiB), `Apple2e_Enhanced_Video.rom` (4 KiB), `DISK2.rom` (256 B). Additional model/slot ROMs (`Apple2_Plus.rom`, `Mockingboard-D.rom`, etc.) can be placed in the same directory when needed.
 - **Commodore 64 (`~/czx/roms/vice/`)**: `C64/kernal-901227-03.bin` (8 KiB), `C64/basic-901226-01.bin` (8 KiB), `C64/chargen-901225-01.bin` (4 KiB), and `DRIVES/dos1541ii-251968-03.bin` (16 KiB).
+- **PC-8801 (`~/czx/roms/quasi88/`)**: `quasi88-libretro` includes a clean-room pseudo BIOS fallback, but for full software compatibility place real PC-88 ROMs (`N88.ROM`, `N88_0.ROM`–`N88_3.ROM`, `N88N.ROM`, `DISK.ROM`, `FONT.ROM`, `KANJI1.ROM`) here.
+- **PC-9801 (`~/czx/roms/np2kai/`)**: `NP2kai` includes a built-in HLE BIOS fallback, but for full compatibility (including Japanese text and authentic OPNA/BIOS calls) place `bios.rom`, `itf.rom`, `sound.rom`, and `font.rom` / `font.bmp` here. Avoid placing optional `d8000.rom` unless needed for HDDs, as it can stall floppy boots.
 
 If any required ROM is missing, `czx` displays an on-screen **ROM FILES REQUIRED** prompt listing the target folder and missing files so you can switch cores (`Alt + 8`) or add the ROMs without crashing.
 
@@ -62,7 +70,7 @@ Insert or hot-swap disks anytime via `Alt + 8` → **Load Media** (`F/X` move, `
 
 ## Build & Test on PC
 
-Clone with submodules (`git clone --recurse-submodules`), or initialize them via `git submodule update --init third_party/AppleWin third_party/vice-libretro` (`./scripts/prepare-cores-src.sh` also initializes them automatically):
+Clone with submodules (`git clone --recurse-submodules`, or initialize them non-recursively via `./scripts/prepare-cores-src.sh` / `git submodule update --init --depth 1 third_party/AppleWin third_party/vice-libretro third_party/quasi88-libretro third_party/NP2kai`):
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release

@@ -61,8 +61,12 @@ void EmulatorApp::ensure_data_dirs() {
     fs::create_directories(root / "roms" / "apple2", ec);
     fs::create_directories(root / "roms" / "vice" / "C64", ec);
     fs::create_directories(root / "roms" / "vice" / "DRIVES", ec);
+    fs::create_directories(root / "roms" / "quasi88", ec);
+    fs::create_directories(root / "roms" / "np2kai", ec);
     fs::create_directories(root / "media" / "apple2", ec);
     fs::create_directories(root / "media" / "c64", ec);
+    fs::create_directories(root / "media" / "pc88", ec);
+    fs::create_directories(root / "media" / "pc98", ec);
     fs::create_directories(root / "saves", ec);
     fs::create_directories(root / "config", ec);
 }
@@ -77,6 +81,12 @@ std::string EmulatorApp::default_media_dir_for_core() const {
     }
     if (id.find("vice") != std::string::npos && fs::is_directory(media_root / "c64", ec)) {
         return (media_root / "c64").string();
+    }
+    if (id.find("quasi88") != std::string::npos && fs::is_directory(media_root / "pc88", ec)) {
+        return (media_root / "pc88").string();
+    }
+    if (id.find("np2kai") != std::string::npos && fs::is_directory(media_root / "pc98", ec)) {
+        return (media_root / "pc98").string();
     }
     return media_root.string();
 }

@@ -12,8 +12,10 @@ echo "Building ARM64 cross-compile Docker image ($IMAGE_NAME)..."
 docker build -f "$ROOT_DIR/Dockerfile.arm64" -t "$IMAGE_NAME" "$ROOT_DIR"
 
 echo "Cross-compiling czx and libretro cores for ARM64..."
+NP2KAI_HASH="$(git -C "$ROOT_DIR/third_party/NP2kai" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 docker run --rm \
     --user "$(id -u):$(id -g)" \
+    -e NP2KAI_HASH="$NP2KAI_HASH" \
     -v "$ROOT_DIR:/workspace" \
     "$IMAGE_NAME" \
     bash -lc '
@@ -55,6 +57,27 @@ docker run --rm \
             cp -f "vice_${emu}_libretro.so" /workspace/dist-arm64/cores/
             make clean >/dev/null 2>&1 || true
         done
+
+        cd /workspace/third_party/quasi88-libretro
+        make clean >/dev/null 2>&1 || true
+        CFLAGS="-O3 -mcpu=cortex-a53 -Wno-incompatible-pointer-types -Wno-implicit-function-declaration" \
+        CXXFLAGS="-O3 -mcpu=cortex-a53" \
+        LDFLAGS="-static-libgcc -static-libstdc++" \
+        make -j"$NPROC" platform=unix \
+            CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ AR=aarch64-linux-gnu-ar
+        cp -f "quasi88_libretro.so" /workspace/dist-arm64/cores/
+        make clean >/dev/null 2>&1 || true
+
+        cd /workspace/third_party/NP2kai/sdl
+        make -f Makefile.libretro clean >/dev/null 2>&1 || true
+        CFLAGS="-O3 -mcpu=cortex-a53 -Wno-incompatible-pointer-types -Wno-implicit-function-declaration" \
+        CXXFLAGS="-O3 -mcpu=cortex-a53" \
+        LDFLAGS="-static-libgcc -static-libstdc++" \
+        make -f Makefile.libretro -j"$NPROC" platform=unix \
+            CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ AR=aarch64-linux-gnu-ar \
+            NP2KAI_VERSION=rev.22 NP2KAI_HASH="$NP2KAI_HASH"
+        cp -f "np2kai_libretro.so" /workspace/dist-arm64/cores/
+        make -f Makefile.libretro clean >/dev/null 2>&1 || true
     '
 
 cp -f "$ROOT_DIR/packaging/applaunch/czx.desktop" "$DIST_DIR/"

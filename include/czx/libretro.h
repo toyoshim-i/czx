@@ -323,6 +323,16 @@ struct retro_core_options_v2 {
     struct retro_core_option_v2_definition* definitions;
 };
 
+struct retro_core_options_intl {
+    struct retro_core_option_definition* us;
+    struct retro_core_option_definition* local;
+};
+
+struct retro_core_options_v2_intl {
+    struct retro_core_options_v2* us;
+    struct retro_core_options_v2* local;
+};
+
 struct retro_game_info {
     const char* path;
     const void* data;

@@ -25,6 +25,8 @@ int core_sort_priority(const std::string& id) {
     if (id == "applewin") return 0;
     if (id == "vice_x64sc") return 1;
     if (id == "vice_x64") return 2;
+    if (id == "quasi88") return 3;
+    if (id == "np2kai") return 4;
     return 10;
 }
 

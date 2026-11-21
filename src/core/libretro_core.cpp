@@ -98,6 +98,8 @@ std::string derive_display_name(const std::string& id, const char* lib_name) {
     if (id == "applewin") return "Apple II (AppleWin)";
     if (id == "vice_x64sc") return "C64 (VICE x64sc)";
     if (id == "vice_x64") return "C64 (VICE x64)";
+    if (id == "quasi88") return "PC-8801 (QUASI88)";
+    if (id == "np2kai") return "PC-9801 (NP2kai)";
     if (lib_name && lib_name[0] != '\0') return lib_name;
     return id;
 }
@@ -107,7 +109,10 @@ bool is_floppy_disk_ext(const std::string& path) {
     return ext == ".dsk" || ext == ".do" || ext == ".po" || ext == ".nib" ||
            ext == ".woz" || ext == ".2mg" || ext == ".2img" || ext == ".hdv" ||
            ext == ".d64" || ext == ".g64" || ext == ".x64" || ext == ".d71" ||
-           ext == ".d81" || ext == ".d82";
+           ext == ".d81" || ext == ".d82" ||
+           ext == ".d88" || ext == ".88d" || ext == ".d98" || ext == ".98d" ||
+           ext == ".fdi" || ext == ".xdf" || ext == ".hdm" || ext == ".dup" ||
+           ext == ".2hd" || ext == ".tfd" || ext == ".nfd" || ext == ".fdd";
 }
 
 bool is_tape_ext(const std::string& path) {
@@ -129,6 +134,8 @@ public:
         if (host) host_ = *host;
         is_applewin_ = (loader_->id().find("applewin") != std::string::npos);
         is_vice_ = (loader_->id().find("vice") != std::string::npos);
+        is_quasi88_ = (loader_->id().find("quasi88") != std::string::npos);
+        is_np2kai_ = (loader_->id().find("np2kai") != std::string::npos);
         if (const char* dd = std::getenv("CZX_DATA_DIR"); dd && dd[0] != '\0') {
             set_data_dir(dd);
         } else if (const char* home = std::getenv("HOME"); home && home[0] != '\0') {
@@ -160,6 +167,12 @@ public:
             system_dir_ = (fs::path(data_dir_) / "roms").string();
             fs::create_directories(fs::path(system_dir_) / "vice" / "C64", ec);
             fs::create_directories(fs::path(system_dir_) / "vice" / "DRIVES", ec);
+        } else if (is_quasi88_) {
+            system_dir_ = (fs::path(data_dir_) / "roms").string();
+            fs::create_directories(fs::path(system_dir_) / "quasi88", ec);
+        } else if (is_np2kai_) {
+            system_dir_ = (fs::path(data_dir_) / "roms").string();
+            fs::create_directories(fs::path(system_dir_) / "np2kai", ec);
         } else {
             system_dir_ = (fs::path(data_dir_) / "roms").string();
             fs::create_directories(system_dir_, ec);
@@ -191,7 +204,7 @@ public:
             }
         }
 
-        if (is_vice_) {
+        if (is_vice_ || is_quasi88_ || is_np2kai_) {
             const std::string target = path;
             teardown_core();
             if (start_core(target.c_str())) {
@@ -376,6 +389,8 @@ private:
     std::string extensions_;
     bool is_applewin_ = false;
     bool is_vice_ = false;
+    bool is_quasi88_ = false;
+    bool is_np2kai_ = false;
 
     std::string data_dir_;
     std::string system_dir_;
@@ -459,6 +474,18 @@ private:
                     err_out += "\n  " + m;
                 }
                 return false;
+            }
+        } else if (is_quasi88_) {
+            const fs::path q88_dir = fs::path(system_dir_) / "quasi88";
+            if (!rom_file_exists(q88_dir, "N88.ROM", true)) {
+                log(1, ("quasi88: N88.ROM not found in " + q88_dir.string() +
+                        "; using built-in pseudo BIOS (optional real PC-88 ROMs: N88.ROM, N88_0..3.ROM, N88N.ROM, DISK.ROM, FONT.ROM, KANJI1.ROM)").c_str());
+            }
+        } else if (is_np2kai_) {
+            const fs::path np2_dir = fs::path(system_dir_) / "np2kai";
+            if (!rom_file_exists(np2_dir, "bios.rom", true)) {
+                log(1, ("np2kai: bios.rom not found in " + np2_dir.string() +
+                        "; using built-in HLE BIOS (optional real PC-98 ROMs: bios.rom, itf.rom, sound.rom, font.rom/font.bmp)").c_str());
             }
         }
         return true;
@@ -608,6 +635,23 @@ private:
             options_["vice_mapper_datasette_rewind"] = "---";
             options_["vice_mapper_datasette_forward"] = "---";
             options_["vice_mapper_datasette_reset"] = "---";
+        } else if (is_quasi88_) {
+            options_["q88_basic_mode"] = "N88 V2";
+            options_["q88_sub_cpu_mode"] = "2";
+            options_["q88_cpu_clock"] = "4";
+            options_["q88_sound_board"] = "OPNA";
+            options_["q88_use_fdc_wait"] = "enabled";
+            options_["q88_rumble"] = "disabled";
+            options_["q88_screen_size"] = "full";
+        } else if (is_np2kai_) {
+            options_["np2kai_model"] = "PC-9801VX";
+            options_["np2kai_clk_base"] = "2.4576 MHz";
+            options_["np2kai_clk_mult"] = "4";
+            options_["np2kai_SNDboard"] = "PC9801-86";
+            options_["np2kai_keyboard"] = "Us";
+            options_["np2kai_joymode"] = "Arrows";
+            options_["np2kai_keyrepeat"] = "OFF";
+            options_["np2kai_skipline"] = "Full 255 lines";
         }
     }
 
@@ -1005,27 +1049,30 @@ private:
                 return true;
             }
 
-            case RETRO_ENVIRONMENT_SET_CORE_OPTIONS: {
-                const auto* defs = static_cast<const retro_core_option_definition*>(data);
-                while (defs && defs->key) {
-                    if (options_.find(defs->key) == options_.end()) {
-                        const char* def = defs->default_value ? defs->default_value : defs->values[0].value;
-                        if (def) options_[defs->key] = def;
+            case RETRO_ENVIRONMENT_SET_CORE_OPTIONS:
+            case RETRO_ENVIRONMENT_SET_CORE_OPTIONS_INTL:
+            case RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2:
+            case RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2_INTL: {
+                auto register_defs = [&](const auto* defs) {
+                    while (defs && defs->key) {
+                        if (options_.find(defs->key) == options_.end()) {
+                            const char* def = defs->default_value ? defs->default_value : defs->values[0].value;
+                            if (def) options_[defs->key] = def;
+                        }
+                        ++defs;
                     }
-                    ++defs;
-                }
-                return true;
-            }
-
-            case RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2: {
-                const auto* v2 = static_cast<const retro_core_options_v2*>(data);
-                const auto* defs = v2 ? v2->definitions : nullptr;
-                while (defs && defs->key) {
-                    if (options_.find(defs->key) == options_.end()) {
-                        const char* def = defs->default_value ? defs->default_value : defs->values[0].value;
-                        if (def) options_[defs->key] = def;
-                    }
-                    ++defs;
+                };
+                if (cmd == RETRO_ENVIRONMENT_SET_CORE_OPTIONS) {
+                    register_defs(static_cast<const retro_core_option_definition*>(data));
+                } else if (cmd == RETRO_ENVIRONMENT_SET_CORE_OPTIONS_INTL) {
+                    const auto* intl = static_cast<const retro_core_options_intl*>(data);
+                    register_defs(intl ? intl->us : nullptr);
+                } else if (cmd == RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2) {
+                    const auto* v2 = static_cast<const retro_core_options_v2*>(data);
+                    register_defs(v2 ? v2->definitions : nullptr);
+                } else {
+                    const auto* intl = static_cast<const retro_core_options_v2_intl*>(data);
+                    register_defs((intl && intl->us) ? intl->us->definitions : nullptr);
                 }
                 return true;
             }
@@ -1083,6 +1130,7 @@ private:
             case RETRO_ENVIRONMENT_SET_MESSAGE_EXT:
             case RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS:
             case RETRO_ENVIRONMENT_SET_CONTROLLER_INFO:
+            case RETRO_ENVIRONMENT_SET_SUBSYSTEM_INFO:
             case RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY:
             case RETRO_ENVIRONMENT_SET_CORE_OPTIONS_UPDATE_DISPLAY_CALLBACK:
             case RETRO_ENVIRONMENT_SET_ROTATION:

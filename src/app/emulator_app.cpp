@@ -108,6 +108,7 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media) {
     destroy_active_core();
     core_api_ = next_api;
     core_index_ = wrapped;
+    pending_drive_ = 0;
     core_error_.clear();
     scaler_cfg_.pan_x = 0;
     scaler_cfg_.pan_y = 0;
@@ -297,6 +298,23 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
     } else {
         vm.preset_or_media_label = "Default";
     }
+    vm.drive_count = (core_api_ && core_inst_ && core_api_->get_drive_count)
+                         ? core_api_->get_drive_count(core_inst_)
+                         : 1u;
+    if (vm.drive_count >= 2u && vm.has_media_browser) {
+        if (core_api_->get_drive_name) {
+            if (const char* n0 = core_api_->get_drive_name(core_inst_, 0)) vm.drive1_name = n0;
+            if (const char* n1 = core_api_->get_drive_name(core_inst_, 1)) vm.drive2_name = n1;
+        }
+        const char* l0 = (core_api_->get_drive_media_label)
+                             ? core_api_->get_drive_media_label(core_inst_, 0)
+                             : nullptr;
+        const char* l1 = (core_api_->get_drive_media_label)
+                             ? core_api_->get_drive_media_label(core_inst_, 1)
+                             : nullptr;
+        vm.drive1_label = (l0 && l0[0] != '\0') ? l0 : "Empty";
+        vm.drive2_label = (l1 && l1[0] != '\0') ? l1 : "Empty";
+    }
     vm.src_width = last_src_w_;
     vm.src_height = last_src_h_;
     vm.display_mode = scaler_cfg_.mode;
@@ -305,6 +323,46 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
     vm.margin_fill = scaler_cfg_.margin_fill;
     vm.input_mode = static_cast<int>(router_.input_mode());
     return vm;
+}
+
+void EmulatorApp::open_browser_for_drive(uint32_t drive) {
+    pending_drive_ = drive;
+    const auto* desc = (core_api_ && core_api_->get_desc) ? core_api_->get_desc(core_api_) : nullptr;
+    const std::string core_id = (desc && desc->id) ? desc->id : "";
+    std::string start_dir = default_media_dir_for_core();
+    if (!core_id.empty()) {
+        const auto it = last_media_dirs_.find(core_id);
+        std::error_code ec;
+        if (it != last_media_dirs_.end() && fs::is_directory(it->second, ec)) {
+            start_dir = it->second;
+        }
+    }
+    const char* exts = (core_api_ && core_inst_ && core_api_->get_extensions)
+                           ? core_api_->get_extensions(core_inst_)
+                           : nullptr;
+    const uint32_t drive_count = (core_api_ && core_inst_ && core_api_->get_drive_count)
+                                     ? core_api_->get_drive_count(core_inst_)
+                                     : 1u;
+    std::string title = "MEDIA";
+    if (drive_count >= 2u && core_api_ && core_inst_ && core_api_->get_drive_name) {
+        if (const char* dname = core_api_->get_drive_name(core_inst_, drive)) {
+            title = dname;
+        }
+    }
+    const std::string d88_cache_dir = (fs::path(cfg_.data_dir) / "saves" / "d88_cache").string();
+    const bool allow_auto_dual = (drive_count >= 2u && drive == 0u);
+    browser_.open(start_dir, exts ? exts : "", title, d88_cache_dir, allow_auto_dual);
+}
+
+void EmulatorApp::eject_drive_slot(uint32_t drive) {
+    if (!core_api_ || !core_inst_) return;
+    if (core_api_->eject_drive && core_api_->eject_drive(core_inst_, drive)) {
+        const char* dname =
+            (core_api_->get_drive_name) ? core_api_->get_drive_name(core_inst_, drive) : nullptr;
+        show_toast((std::string(dname ? dname : "Drive") + ": EJECTED").c_str());
+    } else {
+        show_toast("EJECT FAILED");
+    }
 }
 
 void EmulatorApp::handle_host_command(czx::input::HostCommand cmd) {
@@ -346,15 +404,47 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
     if (browser_.is_open()) {
         const auto ba = browser_.handle_key(ev);
         if (ba == czx::video::FileBrowserAction::Selected) {
+            const auto* desc = (core_api_ && core_api_->get_desc) ? core_api_->get_desc(core_api_) : nullptr;
+            if (desc && desc->id && !browser_.current_dir().empty()) {
+                last_media_dirs_[desc->id] = browser_.current_dir();
+            }
             menu_.set_open(false);
             router_.set_menu_open(false);
             hud_.menu_open = false;
-            const std::string path = browser_.selected_path();
-            if (core_api_ && core_inst_ && core_api_->load_media &&
-                core_api_->load_media(core_inst_, path.c_str())) {
-                const std::string base = fs::path(path).filename().string();
-                show_toast(("LOADED: " + base).c_str());
-            } else {
+            const std::string& path = browser_.selected_path();
+            const std::string& label = browser_.selected_label();
+            const std::string& path2 = browser_.selected_drive2_path();
+            const std::string& label2 = browser_.selected_drive2_label();
+            const std::string d1_disp = label.empty() ? fs::path(path).filename().string() : label;
+            bool ok = false;
+            if (!path2.empty() && core_api_ && core_inst_ && core_api_->load_dual_media) {
+                const std::string d2_disp =
+                    label2.empty() ? fs::path(path2).filename().string() : label2;
+                ok = core_api_->load_dual_media(core_inst_, path.c_str(), d1_disp.c_str(),
+                                                path2.c_str(), d2_disp.c_str());
+                if (ok) {
+                    show_toast(("LOADED D1+D2: " + d1_disp).c_str());
+                }
+            } else if (core_api_ && core_inst_ && core_api_->load_media_in_drive) {
+                ok = core_api_->load_media_in_drive(core_inst_, pending_drive_, path.c_str(),
+                                                    d1_disp.c_str());
+                if (ok) {
+                    const uint32_t drive_count =
+                        core_api_->get_drive_count ? core_api_->get_drive_count(core_inst_) : 1u;
+                    if (drive_count >= 2u && core_api_->get_drive_name) {
+                        const char* dname = core_api_->get_drive_name(core_inst_, pending_drive_);
+                        show_toast((std::string(dname ? dname : "Drive") + ": " + d1_disp).c_str());
+                    } else {
+                        show_toast(("LOADED: " + d1_disp).c_str());
+                    }
+                }
+            } else if (core_api_ && core_inst_ && core_api_->load_media) {
+                ok = core_api_->load_media(core_inst_, path.c_str());
+                if (ok) {
+                    show_toast(("LOADED: " + d1_disp).c_str());
+                }
+            }
+            if (!ok) {
                 show_toast("LOAD FAILED");
             }
         }
@@ -375,13 +465,19 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
         case czx::video::MenuAction::CycleCoreNext:
             cycle_core(1);
             break;
-        case czx::video::MenuAction::OpenMediaBrowser: {
-            const char* exts = (core_api_ && core_inst_ && core_api_->get_extensions)
-                                   ? core_api_->get_extensions(core_inst_)
-                                   : nullptr;
-            browser_.open(default_media_dir_for_core(), exts ? exts : "");
+        case czx::video::MenuAction::OpenMediaBrowser:
+        case czx::video::MenuAction::OpenDrive1Browser:
+            open_browser_for_drive(0);
             break;
-        }
+        case czx::video::MenuAction::OpenDrive2Browser:
+            open_browser_for_drive(1);
+            break;
+        case czx::video::MenuAction::EjectDrive1:
+            eject_drive_slot(0);
+            break;
+        case czx::video::MenuAction::EjectDrive2:
+            eject_drive_slot(1);
+            break;
         case czx::video::MenuAction::CyclePresetPrev:
             cycle_preset(-1);
             break;

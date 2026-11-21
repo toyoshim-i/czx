@@ -58,6 +58,7 @@ add_library(czx_runtime STATIC
     src/input/tca8418_keymap.cpp
     src/input/input_router.cpp
     src/core/core_registry.cpp
+    src/core/d88_image.cpp
     src/core/libretro_keys.cpp
     src/core/libretro_core.cpp
     src/core/test_core.cpp
@@ -154,4 +155,7 @@ if(CZX_BUILD_TESTS)
     target_link_libraries(test_text_font PRIVATE czx_runtime)
     add_test(NAME test_text_font COMMAND test_text_font)
 
+    add_executable(test_d88 tests/test_d88.cpp)
+    target_link_libraries(test_d88 PRIVATE czx_runtime)
+    add_test(NAME test_d88 COMMAND test_d88)
 endif()

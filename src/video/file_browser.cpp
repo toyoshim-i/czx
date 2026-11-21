@@ -24,7 +24,19 @@ std::string to_lower(std::string s) {
 
 }  // namespace
 
-void FileBrowser::open(const std::string& start_dir, const std::string& pipe_extensions) {
+void FileBrowser::open(const std::string& start_dir,
+                       const std::string& pipe_extensions,
+                       const std::string& title,
+                       const std::string& d88_cache_dir,
+                       bool allow_auto_dual) {
+    title_ = title;
+    d88_cache_dir_ = d88_cache_dir;
+    allow_auto_dual_ = allow_auto_dual;
+    in_d88_picker_ = false;
+    d88_disks_.clear();
+    d88_source_path_.clear();
+    d88_source_name_.clear();
+
     allowed_exts_.clear();
     size_t pos = 0;
     while (pos < pipe_extensions.size()) {
@@ -49,6 +61,9 @@ void FileBrowser::open(const std::string& start_dir, const std::string& pipe_ext
     current_dir_ = fs::weakly_canonical(p, ec).string();
     if (current_dir_.empty()) current_dir_ = p.string();
     selected_path_.clear();
+    selected_label_.clear();
+    selected_drive2_path_.clear();
+    selected_drive2_label_.clear();
     open_ = true;
     refresh();
 }
@@ -56,7 +71,7 @@ void FileBrowser::open(const std::string& start_dir, const std::string& pipe_ext
 bool FileBrowser::matches_extension(const std::string& filename) const {
     if (allowed_exts_.empty()) return true;
     const std::string ext = to_lower(fs::path(filename).extension().string());
-    if (ext == ".zip" || ext == ".m3u") return true;
+    if (ext == ".zip" || ext == ".m3u" || ext == ".cmd") return true;
     return std::find(allowed_exts_.begin(), allowed_exts_.end(), ext) != allowed_exts_.end();
 }
 
@@ -93,8 +108,75 @@ void FileBrowser::refresh() {
     entries_.insert(entries_.end(), files.begin(), files.end());
 }
 
+FileBrowserAction FileBrowser::handle_d88_key(const czx_key_event_t& ev) {
+    if (ev.key == CZX_KEY_ESC) {
+        in_d88_picker_ = false;
+        open_ = false;
+        return FileBrowserAction::Cancelled;
+    }
+
+    if (ev.key == CZX_KEY_Z || ev.key == CZX_KEY_LEFT || ev.key == CZX_KEY_BACKSPACE) {
+        in_d88_picker_ = false;
+        cursor_ = saved_cursor_;
+        scroll_ = saved_scroll_;
+        return FileBrowserAction::None;
+    }
+
+    const int total = static_cast<int>(d88_disks_.size() + (allow_auto_dual_ ? 1u : 0u));
+    if (total <= 0) return FileBrowserAction::None;
+
+    if (ev.key == CZX_KEY_UP || ev.key == CZX_KEY_F) {
+        cursor_ = (cursor_ + total - 1) % total;
+    } else if (ev.key == CZX_KEY_DOWN || ev.key == CZX_KEY_X) {
+        cursor_ = (cursor_ + 1) % total;
+    } else if (ev.key == CZX_KEY_RIGHT || ev.key == CZX_KEY_C ||
+               ev.key == CZX_KEY_ENTER || ev.key == CZX_KEY_SPACE) {
+        selected_drive2_path_.clear();
+        selected_drive2_label_.clear();
+        if (allow_auto_dual_ && cursor_ == 0 && d88_disks_.size() >= 2u) {
+            const std::string p0 = czx::core::extract_d88_subdisk(
+                d88_source_path_, d88_disks_[0], d88_cache_dir_);
+            const std::string p1 = czx::core::extract_d88_subdisk(
+                d88_source_path_, d88_disks_[1], d88_cache_dir_);
+            if (!p0.empty() && !p1.empty()) {
+                selected_path_ = p0;
+                selected_label_ = d88_disks_[0].name_utf8;
+                selected_drive2_path_ = p1;
+                selected_drive2_label_ = d88_disks_[1].name_utf8;
+                in_d88_picker_ = false;
+                open_ = false;
+                return FileBrowserAction::Selected;
+            }
+        } else {
+            const size_t idx = allow_auto_dual_
+                                   ? static_cast<size_t>(cursor_ - 1)
+                                   : static_cast<size_t>(cursor_);
+            if (idx < d88_disks_.size()) {
+                const std::string p = czx::core::extract_d88_subdisk(
+                    d88_source_path_, d88_disks_[idx], d88_cache_dir_);
+                if (!p.empty()) {
+                    selected_path_ = p;
+                    selected_label_ = d88_disks_[idx].name_utf8;
+                    in_d88_picker_ = false;
+                    open_ = false;
+                    return FileBrowserAction::Selected;
+                }
+            }
+        }
+        return FileBrowserAction::None;
+    }
+
+    if (cursor_ < scroll_) scroll_ = cursor_;
+    if (cursor_ >= scroll_ + kVisibleRows) scroll_ = cursor_ - kVisibleRows + 1;
+    return FileBrowserAction::None;
+}
+
 FileBrowserAction FileBrowser::handle_key(const czx_key_event_t& ev) {
     if (!open_ || !ev.pressed) return FileBrowserAction::None;
+
+    if (in_d88_picker_) {
+        return handle_d88_key(ev);
+    }
 
     if (ev.key == CZX_KEY_ESC) {
         open_ = false;
@@ -123,7 +205,23 @@ FileBrowserAction FileBrowser::handle_key(const czx_key_event_t& ev) {
             current_dir_ = e.full_path;
             refresh();
         } else {
+            if (czx::core::is_d88_ext(e.full_path) && !d88_cache_dir_.empty()) {
+                d88_disks_.clear();
+                if (czx::core::inspect_d88(e.full_path, d88_disks_) && d88_disks_.size() >= 2u) {
+                    in_d88_picker_ = true;
+                    d88_source_path_ = e.full_path;
+                    d88_source_name_ = e.name;
+                    saved_cursor_ = cursor_;
+                    saved_scroll_ = scroll_;
+                    cursor_ = 0;
+                    scroll_ = 0;
+                    return FileBrowserAction::None;
+                }
+            }
             selected_path_ = e.full_path;
+            selected_label_ = e.name;
+            selected_drive2_path_.clear();
+            selected_drive2_label_.clear();
             open_ = false;
             return FileBrowserAction::Selected;
         }
@@ -148,17 +246,62 @@ void FileBrowser::render(uint16_t* fb_rgb565) const {
     canvas.fill_rect(kBoxX, kBoxY, kBoxW, kBoxH, pack_rgb565(18, 24, 34));
     canvas.draw_rect(kBoxX, kBoxY, kBoxW, kBoxH, pack_rgb565(88, 210, 255));
 
-    // Path header
+    // Header
     canvas.fill_rect(kBoxX + 1, kBoxY + 1, kBoxW - 2, 16, pack_rgb565(26, 44, 68));
-    std::string dir_label = current_dir_;
-    constexpr size_t kMaxChars = 46;
-    if (dir_label.size() > kMaxChars) {
-        dir_label = "..." + dir_label.substr(dir_label.size() - (kMaxChars - 3));
+    if (in_d88_picker_) {
+        const std::string hdr = truncate_head_px("D88: " + d88_source_name_, kBoxW - 16, 1);
+        canvas.draw_text(kBoxX + 8, kBoxY + 5, hdr.c_str(), pack_rgb565(255, 255, 255));
+    } else {
+        const std::string prefix = title_.empty() ? std::string() : (title_ + ": ");
+        const int prefix_w = Rgb565Canvas::text_width(prefix.c_str(), 1);
+        const std::string dir_tail = truncate_tail_px(current_dir_, kBoxW - 16 - prefix_w, 1);
+        const std::string hdr = prefix + dir_tail;
+        canvas.draw_text(kBoxX + 8, kBoxY + 5, hdr.c_str(), pack_rgb565(255, 255, 255));
     }
-    canvas.draw_text(kBoxX + 8, kBoxY + 5, dir_label.c_str(), pack_rgb565(255, 255, 255));
 
     constexpr int kListY = kBoxY + 21;
     constexpr int kRowH = 14;
+
+    if (in_d88_picker_) {
+        const int total = static_cast<int>(d88_disks_.size() + (allow_auto_dual_ ? 1u : 0u));
+        const int end = std::min(total, scroll_ + kVisibleRows);
+        for (int i = scroll_; i < end; ++i) {
+            const int row = i - scroll_;
+            const int ry = kListY + row * kRowH;
+            const bool selected = (i == cursor_);
+            if (selected) {
+                canvas.fill_rect(kBoxX + 6, ry, kBoxW - 12, kRowH - 1, pack_rgb565(30, 86, 124));
+            }
+            std::string raw_label;
+            bool is_auto = false;
+            if (allow_auto_dual_ && i == 0) {
+                raw_label = "[AUTO] D1:#1 + D2:#2";
+                is_auto = true;
+            } else {
+                const size_t idx = allow_auto_dual_ ? static_cast<size_t>(i - 1) : static_cast<size_t>(i);
+                const auto& d = d88_disks_[idx];
+                raw_label = "[";
+                raw_label += std::to_string(idx + 1u);
+                raw_label += "] ";
+                raw_label += d.name_utf8;
+                raw_label += " (";
+                raw_label += d.media_type_label();
+                raw_label += ')';
+            }
+            const std::string label = truncate_head_px(raw_label, kBoxW - 28, 1);
+            const uint16_t col = selected
+                                     ? pack_rgb565(255, 240, 140)
+                                     : (is_auto ? pack_rgb565(130, 220, 255) : pack_rgb565(215, 225, 235));
+            canvas.draw_char(kBoxX + 8, ry + 3, selected ? '>' : ' ', col);
+            canvas.draw_text(kBoxX + 18, ry + 3, label.c_str(), col);
+        }
+
+        canvas.draw_hline(kBoxX + 6, kBoxY + kBoxH - 15, kBoxW - 12, pack_rgb565(56, 74, 98));
+        canvas.draw_text(kBoxX + 10, kBoxY + kBoxH - 11,
+                         "F/X:Move  Z:List  C/OK:Boot  ESC:Back",
+                         pack_rgb565(150, 170, 195));
+        return;
+    }
 
     if (entries_.size() <= 1) {
         canvas.draw_text(kBoxX + 12, kListY + 20, "No media files in this folder.",
@@ -175,10 +318,8 @@ void FileBrowser::render(uint16_t* fb_rgb565) const {
         }
 
         const Entry& e = entries_[static_cast<size_t>(i)];
-        std::string label = e.is_dir ? ("[DIR] " + e.name) : e.name;
-        if (label.size() > 44) {
-            label = label.substr(0, 41) + "...";
-        }
+        const std::string raw_label = e.is_dir ? ("[DIR] " + e.name) : e.name;
+        const std::string label = truncate_head_px(raw_label, kBoxW - 28, 1);
 
         const uint16_t col = selected
                                  ? pack_rgb565(255, 240, 140)

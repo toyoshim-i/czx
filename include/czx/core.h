@@ -153,6 +153,15 @@ typedef struct czx_core_api {
     const char* (*get_media_label)(const czx_core_instance_t* inst);
     void (*set_data_dir)(czx_core_instance_t* inst, const char* data_dir);
     const char* (*get_last_error)(const struct czx_core_api* api);
+    /* Optional multi-drive media API (NULL => single-drive load_media/get_media_label). */
+    uint32_t (*get_drive_count)(const czx_core_instance_t* inst);
+    const char* (*get_drive_name)(const czx_core_instance_t* inst, uint32_t drive);
+    const char* (*get_drive_media_label)(const czx_core_instance_t* inst, uint32_t drive);
+    bool (*load_media_in_drive)(czx_core_instance_t* inst, uint32_t drive, const char* path, const char* display_label);
+    bool (*load_dual_media)(czx_core_instance_t* inst,
+                            const char* path0, const char* label0,
+                            const char* path1, const char* label1);
+    bool (*eject_drive)(czx_core_instance_t* inst, uint32_t drive);
 } czx_core_api_t;
 
 #ifdef __cplusplus

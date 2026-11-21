@@ -9,6 +9,7 @@
 #include "video/scaler.hpp"
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -58,7 +59,9 @@ private:
     uint32_t preset_index_ = 0;
     bool running_ = true;
     bool saw_nonblank_frame_ = false;
+    uint32_t pending_drive_ = 0;
     std::string core_error_;
+    std::map<std::string, std::string> last_media_dirs_;
 
     void ensure_data_dirs();
     std::string default_media_dir_for_core() const;
@@ -66,6 +69,8 @@ private:
     void destroy_active_core();
     void render_core_error_screen();
     czx::video::MenuViewModel build_menu_vm() const;
+    void open_browser_for_drive(uint32_t drive);
+    void eject_drive_slot(uint32_t drive);
 
     void show_toast(const char* text);
     void set_display_mode(czx::video::DisplayMode mode);

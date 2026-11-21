@@ -1,5 +1,6 @@
 #include "core/libretro_core.hpp"
 
+#include "core/d88_image.hpp"
 #include "core/libretro_keys.hpp"
 #include "czx/libretro.h"
 
@@ -122,6 +123,21 @@ bool is_tape_ext(const std::string& path) {
     return to_lower_copy(fs::path(path).extension().string()) == ".tap";
 }
 
+bool is_pc98_hdd_ext(const std::string& path) {
+    const std::string ext = to_lower_copy(fs::path(path).extension().string());
+    return ext == ".hdi" || ext == ".nhd" || ext == ".thd" || ext == ".vhd" ||
+           ext == ".hdd" || ext == ".hdn" || ext == ".slh";
+}
+
+bool write_text_file(const fs::path& path, const std::string& content) {
+    std::error_code ec;
+    fs::create_directories(path.parent_path(), ec);
+    std::ofstream ofs(path, std::ios::trunc);
+    if (!ofs.is_open()) return false;
+    ofs << content;
+    return ofs.good();
+}
+
 uint16_t rgb1555_to_rgb565(uint16_t p) noexcept {
     const uint16_t r5 = static_cast<uint16_t>((p >> 10) & 0x1Fu);
     const uint16_t g5 = static_cast<uint16_t>((p >> 5) & 0x1Fu);
@@ -156,7 +172,34 @@ public:
     }
 
     bool init() {
-        return start_core(host_.initial_media);
+        if (host_.initial_media && host_.initial_media[0] != '\0') {
+            const std::string init_path = host_.initial_media;
+            if (get_drive_count() >= 2u && (is_quasi88_ || is_np2kai_) && is_d88_ext(init_path)) {
+                std::vector<D88SubDisk> disks;
+                if (inspect_d88(init_path, disks) && disks.size() >= 2u) {
+                    const std::string cache_dir = (fs::path(save_dir_) / "d88_cache").string();
+                    const std::string p0 = extract_d88_subdisk(init_path, disks[0], cache_dir);
+                    const std::string p1 = extract_d88_subdisk(init_path, disks[1], cache_dir);
+                    if (!p0.empty() && !p1.empty()) {
+                        return load_dual_media(p0.c_str(), disks[0].name_utf8.c_str(),
+                                               p1.c_str(), disks[1].name_utf8.c_str());
+                    }
+                }
+            }
+            if (!start_core(init_path.c_str())) {
+                return false;
+            }
+            const std::string lbl = fs::path(init_path).filename().string();
+            if (is_np2kai_ && is_pc98_hdd_ext(init_path)) {
+                hdd_path_ = init_path;
+                drive_labels_[0] = lbl;
+            } else {
+                drive_paths_[0] = init_path;
+                drive_labels_[0] = lbl;
+            }
+            return true;
+        }
+        return start_core(nullptr);
     }
 
     void set_data_dir(const std::string& dir) {
@@ -203,20 +246,19 @@ public:
                 media_path_ = path;
                 media_label_ = fs::path(path).filename().string();
                 ejected_ = false;
+                drive_paths_[0] = path;
+                drive_labels_[0] = media_label_;
                 return true;
             }
         }
 
         if (is_vice_ || is_quasi88_ || is_np2kai_) {
-            const std::string target = path;
-            teardown_core();
-            if (start_core(target.c_str())) {
-                return true;
+            const bool ok = reload_core_with_media(path);
+            if (ok) {
+                drive_paths_[0] = path;
+                drive_labels_[0] = media_label_;
             }
-            const std::string err = loader_->last_error() ? loader_->last_error() : "Failed to load media";
-            (void)start_core(nullptr);
-            loader_->set_last_error(err);
-            return false;
+            return ok;
         }
 
         if (!loader_->is_library_open()) {
@@ -378,6 +420,179 @@ public:
         return media_label_.c_str();
     }
 
+    uint32_t get_drive_count() const noexcept {
+        return (is_quasi88_ || is_np2kai_ || is_applewin_) ? 2u : 1u;
+    }
+
+    const char* get_drive_name(uint32_t drive) const noexcept {
+        if (get_drive_count() < 2u) return "Media";
+        if (is_np2kai_) return (drive == 0u) ? "FDD 1" : "FDD 2";
+        return (drive == 0u) ? "Drive 1" : "Drive 2";
+    }
+
+    const char* get_drive_media_label(uint32_t drive) const noexcept {
+        if (get_drive_count() < 2u) return media_label_.c_str();
+        return (drive < drive_labels_.size()) ? drive_labels_[drive].c_str() : "Empty";
+    }
+
+    bool load_dual_media(const char* p0, const char* l0, const char* p1, const char* l1) {
+        g_active_instance = this;
+        if (!p0 || p0[0] == '\0') return false;
+        if (!p1 || p1[0] == '\0') {
+            return load_media_in_drive(0u, p0, l0);
+        }
+        if (get_drive_count() < 2u) {
+            return load_media_in_drive(0u, p0, l0);
+        }
+
+        const std::string path0 = p0;
+        const std::string path1 = p1;
+        const std::string lbl0 = (l0 && l0[0] != '\0') ? l0 : fs::path(path0).filename().string();
+        const std::string lbl1 = (l1 && l1[0] != '\0') ? l1 : fs::path(path1).filename().string();
+
+        drive_paths_[0] = path0;
+        drive_labels_[0] = lbl0;
+        drive_paths_[1] = path1;
+        drive_labels_[1] = lbl1;
+
+        const std::string target = build_dual_boot_file();
+        return !target.empty() && reload_core_with_media(target);
+    }
+
+    bool load_media_in_drive(uint32_t drive, const std::string& path, const char* display_label) {
+        g_active_instance = this;
+        if (path.empty()) return false;
+
+        const std::string lbl = (display_label && display_label[0] != '\0')
+                                    ? std::string(display_label)
+                                    : fs::path(path).filename().string();
+        if (get_drive_count() < 2u || drive >= 2u) {
+            const bool ok = load_media(path);
+            if (ok) {
+                media_label_ = lbl;
+                drive_paths_[0] = path;
+                drive_labels_[0] = lbl;
+            }
+            return ok;
+        }
+
+        const std::string ext = to_lower_copy(fs::path(path).extension().string());
+
+        if (is_quasi88_) {
+            const bool non_floppy = (ext == ".cmt" || ext == ".t88" || ext == ".m3u" || ext == ".zip");
+            if (non_floppy) {
+                drive_paths_[1].clear();
+                drive_labels_[1] = "Empty";
+                drive_paths_[0] = path;
+                drive_labels_[0] = lbl;
+                return reload_core_with_media(path);
+            }
+            drive_paths_[drive] = path;
+            drive_labels_[drive] = lbl;
+            if (!drive_paths_[0].empty() && !drive_paths_[1].empty()) {
+                const std::string target = build_dual_boot_file();
+                return !target.empty() && reload_core_with_media(target);
+            }
+            if (!drive_paths_[0].empty()) {
+                return reload_core_with_media(drive_paths_[0]);
+            }
+            return true;
+        }
+
+        if (is_np2kai_) {
+            if (ext == ".cmd") {
+                drive_paths_[1].clear();
+                drive_labels_[1] = "Empty";
+                hdd_path_.clear();
+                drive_paths_[0] = path;
+                drive_labels_[0] = lbl;
+                return reload_core_with_media(path);
+            }
+            if (is_pc98_hdd_ext(path)) {
+                hdd_path_ = path;
+                if (drive_paths_[0].empty()) {
+                    drive_labels_[0] = lbl;
+                }
+                const std::string target = build_np2kai_boot_file();
+                return !target.empty() && reload_core_with_media(target);
+            }
+            drive_paths_[drive] = path;
+            drive_labels_[drive] = lbl;
+            if (has_media_ && has_disk_control()) {
+                options_["np2kai_drive"] = (drive == 0u) ? "FDD1" : "FDD2";
+                option_dirty_ = true;
+                if (hot_swap_disk(path)) {
+                    if (drive == 0u) {
+                        media_path_ = path;
+                        media_label_ = lbl;
+                    }
+                    ejected_ = false;
+                    return true;
+                }
+            }
+            if (!drive_paths_[0].empty() || !hdd_path_.empty()) {
+                const std::string target = build_np2kai_boot_file();
+                return !target.empty() && reload_core_with_media(target);
+            }
+            return true;
+        }
+
+        if (is_applewin_) {
+            const bool non_floppy = (ext == ".m3u" || ext == ".yaml" || ext == ".zip" || ext == ".hdv");
+            if (non_floppy) {
+                drive_paths_[1].clear();
+                drive_labels_[1] = "Empty";
+                drive_paths_[0] = path;
+                drive_labels_[0] = lbl;
+                return reload_core_with_media(path);
+            }
+            drive_paths_[drive] = path;
+            drive_labels_[drive] = lbl;
+            if (!drive_paths_[0].empty() && !drive_paths_[1].empty()) {
+                const std::string target = build_dual_boot_file();
+                return !target.empty() && reload_core_with_media(target);
+            }
+            if (drive == 0u) {
+                const bool ok = load_media(path);
+                if (ok) {
+                    media_label_ = lbl;
+                    drive_labels_[0] = lbl;
+                }
+                return ok;
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    bool eject_drive(uint32_t drive) {
+        g_active_instance = this;
+        if (get_drive_count() < 2u) {
+            return eject_media();
+        }
+        if (drive >= 2u) return false;
+
+        if (drive == 0u && is_np2kai_ && drive_paths_[0].empty() && !hdd_path_.empty()) {
+            hdd_path_.clear();
+        }
+        drive_paths_[drive].clear();
+        drive_labels_[drive] = "Empty";
+
+        if (is_np2kai_) {
+            if (!drive_paths_[0].empty() || !hdd_path_.empty()) {
+                const std::string target = build_np2kai_boot_file();
+                return !target.empty() && reload_core_with_media(target);
+            }
+            return !has_media_ || reload_core_with_media("");
+        }
+
+        if (!drive_paths_[0].empty()) {
+            return reload_core_with_media(drive_paths_[0]);
+        }
+        return !has_media_ || reload_core_with_media("");
+    }
+
 private:
     struct HeldKey {
         bool down = false;
@@ -400,6 +615,46 @@ private:
     std::string save_dir_;
     std::string media_path_;
     std::string media_label_ = "None";
+    std::array<std::string, 2> drive_paths_;
+    std::array<std::string, 2> drive_labels_{{"Empty", "Empty"}};
+    std::string hdd_path_;
+
+    bool reload_core_with_media(const std::string& target) {
+        teardown_core();
+        if (start_core(target.empty() ? nullptr : target.c_str())) {
+            return true;
+        }
+        const std::string err = loader_->last_error() ? loader_->last_error() : "Failed to load media";
+        (void)start_core(nullptr);
+        loader_->set_last_error(err);
+        return false;
+    }
+
+    std::string build_np2kai_boot_file() const {
+        std::string cmd = "np2kai";
+        if (!drive_paths_[0].empty()) {
+            cmd += " \"" + drive_paths_[0] + "\"";
+            if (!drive_paths_[1].empty()) {
+                cmd += " \"" + drive_paths_[1] + "\"";
+            }
+        }
+        if (!hdd_path_.empty()) {
+            cmd += " \"" + hdd_path_ + "\"";
+        }
+        cmd += "\n";
+        const fs::path p = fs::path(save_dir_) / "czx_np2kai.cmd";
+        return write_text_file(p, cmd) ? p.string() : std::string{};
+    }
+
+    std::string build_dual_boot_file() const {
+        if (is_np2kai_) {
+            return build_np2kai_boot_file();
+        }
+        const std::string fname = is_applewin_ ? "czx_applewin (MD).m3u" : "czx_quasi88.m3u";
+        const fs::path p = fs::path(save_dir_) / fname;
+        const std::string body = drive_paths_[0] + "\n" + drive_paths_[1] + "\n";
+        return write_text_file(p, body) ? p.string() : std::string{};
+    }
 
     bool initialized_ = false;
     bool shutdown_requested_ = false;
@@ -625,7 +880,9 @@ private:
     }
 
     void seed_default_options() {
-        if (is_vice_) {
+        if (is_applewin_) {
+            options_["applewin_floppy_multidrive"] = "enabled";
+        } else if (is_vice_) {
             options_["vice_resid_sampling"] = "fast";
             options_["vice_drive_true_emulation"] = "enabled";
             options_["vice_zoom_mode"] = "none";
@@ -1250,6 +1507,35 @@ const char* lr_get_last_error(const czx_core_api_t* api) {
     return loader ? loader->last_error() : nullptr;
 }
 
+uint32_t lr_get_drive_count(const czx_core_instance_t* inst) {
+    return inst ? reinterpret_cast<const LibretroCoreInstance*>(inst)->get_drive_count() : 1u;
+}
+
+const char* lr_get_drive_name(const czx_core_instance_t* inst, uint32_t drive) {
+    return inst ? reinterpret_cast<const LibretroCoreInstance*>(inst)->get_drive_name(drive) : "Media";
+}
+
+const char* lr_get_drive_media_label(const czx_core_instance_t* inst, uint32_t drive) {
+    return inst ? reinterpret_cast<const LibretroCoreInstance*>(inst)->get_drive_media_label(drive) : "Empty";
+}
+
+bool lr_load_media_in_drive(czx_core_instance_t* inst, uint32_t drive,
+                            const char* path, const char* display_label) {
+    return inst && path &&
+           reinterpret_cast<LibretroCoreInstance*>(inst)->load_media_in_drive(drive, path, display_label);
+}
+
+bool lr_load_dual_media(czx_core_instance_t* inst,
+                        const char* path0, const char* label0,
+                        const char* path1, const char* label1) {
+    return inst &&
+           reinterpret_cast<LibretroCoreInstance*>(inst)->load_dual_media(path0, label0, path1, label1);
+}
+
+bool lr_eject_drive(czx_core_instance_t* inst, uint32_t drive) {
+    return inst && reinterpret_cast<LibretroCoreInstance*>(inst)->eject_drive(drive);
+}
+
 }  // namespace
 
 LibretroCoreLoader::LibretroCoreLoader() = default;
@@ -1365,6 +1651,12 @@ bool LibretroCoreLoader::load(const std::string& so_path) {
         lr_get_media_label,
         lr_set_data_dir,
         lr_get_last_error,
+        lr_get_drive_count,
+        lr_get_drive_name,
+        lr_get_drive_media_label,
+        lr_load_media_in_drive,
+        lr_load_dual_media,
+        lr_eject_drive,
     };
 
     loaded_ = true;

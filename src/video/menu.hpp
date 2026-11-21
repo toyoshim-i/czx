@@ -14,6 +14,10 @@ enum class MenuAction {
     CycleCorePrev,
     CycleCoreNext,
     OpenMediaBrowser,
+    OpenDrive1Browser,
+    OpenDrive2Browser,
+    EjectDrive1,
+    EjectDrive2,
     CyclePresetPrev,
     CyclePresetNext,
     EjectMedia,
@@ -33,6 +37,11 @@ struct MenuViewModel {
     bool has_media_browser = false;
     bool can_eject = false;
     bool is_tape_media = false;
+    uint32_t drive_count = 1;
+    std::string drive1_name = "Drive 1";
+    std::string drive2_name = "Drive 2";
+    std::string drive1_label = "Empty";
+    std::string drive2_label = "Empty";
     int src_width = 0;
     int src_height = 0;
     DisplayMode display_mode = DisplayMode::OverflowFit;

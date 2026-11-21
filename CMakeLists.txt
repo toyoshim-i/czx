@@ -51,6 +51,7 @@ target_compile_options(czx_warnings INTERFACE
 add_library(czx_runtime STATIC
     src/video/scaler.cpp
     src/video/font6x8.cpp
+    src/video/font_jp_data.cpp
     src/video/hud.cpp
     src/video/menu.cpp
     src/video/file_browser.cpp
@@ -148,4 +149,9 @@ if(CZX_BUILD_TESTS)
     add_executable(test_libretro_keys tests/test_libretro_keys.cpp)
     target_link_libraries(test_libretro_keys PRIVATE czx_runtime)
     add_test(NAME test_libretro_keys COMMAND test_libretro_keys)
+
+    add_executable(test_text_font tests/test_text_font.cpp)
+    target_link_libraries(test_text_font PRIVATE czx_runtime)
+    add_test(NAME test_text_font COMMAND test_text_font)
+
 endif()

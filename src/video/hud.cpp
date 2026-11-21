@@ -130,13 +130,14 @@ void render_hud(uint16_t* fb_rgb565, const HudState& hud, const ViewportLayout& 
     draw_scrollbars(canvas, hud, layout);
 
     if (hud.toast_frames > 0 && !hud.toast_text.empty() && !hud.menu_open) {
-        const int tw = Rgb565Canvas::text_width(hud.toast_text.c_str(), 1);
+        const std::string toast = truncate_head_px(hud.toast_text, kLcdWidth - 22, 1);
+        const int tw = Rgb565Canvas::text_width(toast.c_str(), 1);
         const int bw = tw + 14;
         const int bx = (kLcdWidth - bw) / 2;
         const int by = 5;
         canvas.fill_rect_alpha(bx, by, bw, 14, pack_rgb565(12, 18, 28), 220);
         canvas.draw_rect(bx, by, bw, 14, pack_rgb565(80, 210, 255));
-        canvas.draw_text(bx + 7, by + 3, hud.toast_text.c_str(), pack_rgb565(245, 250, 255));
+        canvas.draw_text(bx + 7, by + 3, toast.c_str(), pack_rgb565(245, 250, 255));
     }
 
     if (!hud.alt_held) return;

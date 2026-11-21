@@ -4,3 +4,9 @@
 [submodule "third_party/vice-libretro"]
 	path = third_party/vice-libretro
 	url = https://github.com/libretro/vice-libretro.git
+[submodule "third_party/quasi88-libretro"]
+	path = third_party/quasi88-libretro
+	url = https://github.com/libretro/quasi88-libretro.git
+[submodule "third_party/NP2kai"]
+	path = third_party/NP2kai
+	url = https://github.com/libretro/NP2kai.git

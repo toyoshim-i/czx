@@ -1,17 +1,216 @@
+#include <dirent.h>
 #include <libretro.h>
+#include <stdint.h>
+#include <string.h>
+#include <strings.h>
 
 #define handle_input czx_unused_upstream_handle_input
-#define retro_init czx_upstream_retro_init
-#define retro_run czx_upstream_retro_run
+#define retro_init czx_unused_upstream_retro_init
+#define retro_load_game czx_unused_upstream_retro_load_game
+#define retro_run czx_unused_upstream_retro_run
 #include "LIBRETRO/libretro.c"
 #undef retro_run
+#undef retro_load_game
 #undef retro_init
 #undef handle_input
 
+#include "file-op.h"
 #include "menu.h"
+
+#define CZX_FONT_SZ (8 * 256)
 
 static bool czx_pad_state[2][6];
 static bool czx_mouse_btn[3];
+
+static bool czx_find_file_in_dir(const char *dir, const char *target, char *out, size_t out_sz)
+{
+    DIR *dp;
+    struct dirent *de;
+
+    if (!dir || dir[0] == '\0' || !target || target[0] == '\0')
+        return false;
+
+    snprintf(out, out_sz, "%s%c%s", dir, SLASH, target);
+    if (osd_file_stat(out) == FILE_STAT_FILE)
+        return true;
+
+    dp = opendir(dir);
+    if (!dp)
+        return false;
+
+    while ((de = readdir(dp)) != NULL)
+    {
+        if (strcasecmp(de->d_name, target) == 0)
+        {
+            snprintf(out, out_sz, "%s%c%s", dir, SLASH, de->d_name);
+            if (osd_file_stat(out) == FILE_STAT_FILE)
+            {
+                closedir(dp);
+                return true;
+            }
+        }
+    }
+    closedir(dp);
+    return false;
+}
+
+static int64_t czx_load_rom_path(const char *path, byte *rom_data, uint32_t max_size)
+{
+    RFILE *file = filestream_open(path, RETRO_VFS_FILE_ACCESS_READ, RETRO_VFS_FILE_ACCESS_HINT_NONE);
+    int64_t got;
+
+    if (!file)
+        return -1;
+
+    got = filestream_read(file, rom_data, max_size);
+    filestream_close(file);
+    if (got < 0)
+    {
+        memset(rom_data, 0xff, max_size);
+        return -1;
+    }
+
+    if ((uint32_t)got < max_size)
+        memset(&rom_data[got], 0xff, max_size - (size_t)got);
+
+    if (log_cb)
+        log_cb(RETRO_LOG_INFO, "[QUASI88]: Loaded %s (0x%08X)\n", path, (unsigned)got);
+
+    return got;
+}
+
+static int czx_collect_rom_dirs(char q88_dir[OSD_MAX_FILENAME], const char *dirs[3])
+{
+    int count = 0;
+
+    if (!string_is_empty(system_dir))
+    {
+        size_t slen = strlen(system_dir);
+        if (slen + 9 < OSD_MAX_FILENAME)
+        {
+            snprintf(q88_dir, OSD_MAX_FILENAME, "%.*s%cquasi88",
+                     (int)slen, system_dir, SLASH);
+            dirs[count++] = q88_dir;
+        }
+        dirs[count++] = system_dir;
+    }
+    if (!string_is_empty(download_dir) &&
+        (string_is_empty(system_dir) || strcmp(download_dir, system_dir) != 0))
+    {
+        dirs[count++] = download_dir;
+    }
+    return count;
+}
+
+static int64_t czx_load_system_file(uint8_t bios_index, byte *rom_data, uint32_t max_size)
+{
+    char q88_dir[OSD_MAX_FILENAME];
+    const char *dirs[3];
+    int dir_count;
+    uint8_t i;
+    int d;
+
+    if (!rom_data || max_size == 0)
+        return -1;
+
+    dir_count = czx_collect_rom_dirs(q88_dir, dirs);
+
+    for (d = 0; d < dir_count; d++)
+    {
+        for (i = 0; i < 4; i++)
+        {
+            char candidate[OSD_MAX_FILENAME];
+            const char *fname = bios_filenames[bios_index][i];
+
+            if (string_is_empty(fname))
+                continue;
+            if (czx_find_file_in_dir(dirs[d], fname, candidate, sizeof(candidate)))
+            {
+                int64_t got = czx_load_rom_path(candidate, rom_data, max_size);
+                if (got >= 0)
+                    return got;
+            }
+        }
+    }
+
+    return -1;
+}
+
+static bool czx_read_compat_chunk(RFILE *fp, int64_t offset, byte *dst, uint32_t size)
+{
+    int64_t got;
+
+    if (filestream_seek(fp, offset, RETRO_VFS_SEEK_POSITION_START) < 0)
+    {
+        memset(dst, 0xff, size);
+        return false;
+    }
+    got = filestream_read(fp, dst, size);
+    if (got < 0)
+    {
+        memset(dst, 0xff, size);
+        return false;
+    }
+    if ((uint32_t)got < size)
+        memset(&dst[got], 0xff, size - (size_t)got);
+    return (uint32_t)got == size;
+}
+
+static bool czx_try_load_compat_rom(void)
+{
+    static const char *const names[2] = { "PC88.ROM", "pc88.rom" };
+    char q88_dir[OSD_MAX_FILENAME];
+    const char *dirs[3];
+    int dir_count = czx_collect_rom_dirs(q88_dir, dirs);
+    int d;
+    int n;
+
+    for (d = 0; d < dir_count; d++)
+    {
+        for (n = 0; n < 2; n++)
+        {
+            char path[OSD_MAX_FILENAME];
+            RFILE *fp;
+            int64_t fsz;
+            bool ok;
+
+            if (!czx_find_file_in_dir(dirs[d], names[n], path, sizeof(path)))
+                continue;
+
+            fp = filestream_open(path, RETRO_VFS_FILE_ACCESS_READ, RETRO_VFS_FILE_ACCESS_HINT_NONE);
+            if (!fp)
+                continue;
+
+            fsz = filestream_get_size(fp);
+            if (fsz < 0x16000)
+            {
+                filestream_close(fp);
+                continue;
+            }
+
+            ok = czx_read_compat_chunk(fp, 0x00000, main_rom, 0x8000) &&
+                 czx_read_compat_chunk(fp, 0x0C000, main_rom_ext[0], 0x2000) &&
+                 czx_read_compat_chunk(fp, 0x0E000, main_rom_ext[1], 0x2000) &&
+                 czx_read_compat_chunk(fp, 0x10000, main_rom_ext[2], 0x2000) &&
+                 czx_read_compat_chunk(fp, 0x12000, main_rom_ext[3], 0x2000) &&
+                 czx_read_compat_chunk(fp, 0x08000, &main_rom_n[0x6000], 0x2000) &&
+                 czx_read_compat_chunk(fp, 0x14000, sub_romram, 0x2000);
+            if (ok)
+                (void)czx_read_compat_chunk(fp, 0x16000, main_rom_n, 0x6000);
+
+            filestream_close(fp);
+            if (ok)
+            {
+                if (log_cb)
+                    log_cb(RETRO_LOG_INFO, "[QUASI88]: Loaded combined %s (0x%llX)\n",
+                           path, (unsigned long long)fsz);
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
 
 static void czx_handle_ctrl_key(void)
 {
@@ -35,12 +234,136 @@ static void czx_handle_ctrl_key(void)
 
 void retro_init(void)
 {
-    czx_upstream_retro_init();
+    char *dir = NULL;
+    struct retro_rumble_interface rumble;
+    int64_t n88_sz;
+    int64_t sub_sz;
+    int64_t font1_sz;
+    int64_t font2_sz;
+    int64_t font3_sz;
+    bool compat_loaded = false;
 
-    memset(czx_pad_state, 0, sizeof(czx_pad_state));
-    memset(czx_mouse_btn, 0, sizeof(czx_mouse_btn));
+    struct retro_input_descriptor desc[] = {
+        { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT,   "Left (Keypad 4)" },
+        { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP,     "Up (Keypad 8)" },
+        { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN,   "Down (Keypad 2)" },
+        { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT,  "Right (Keypad 6)" },
+        { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A,      "X Key" },
+        { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B,      "Z Key" },
+        { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X,      "Left Shift" },
+        { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y,      "Space Key" },
+        { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START,  "Return Key" },
+        { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_SELECT, "I Key" },
+        { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L,      "Change drive 1 disk" },
+        { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R,      "Change drive 2 disk" },
 
-    if (load_system_file(KNJ1_ROM, kanji_rom[0][0], 0x20000))
+        { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT,   "D Key" },
+        { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP,     "R Key" },
+        { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN,   "F Key" },
+        { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT,  "G Key" },
+        { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A,      "Tab Key" },
+        { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B,      "Q Key" },
+
+        { 0 },
+    };
+
+    if (environ_cb(RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE, &rumble))
+        rumble_cb = rumble.set_rumble_state;
+
+    if (!environ_cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &log_cb))
+        log_cb = NULL;
+
+    dir = NULL;
+    if (!environ_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &dir) || !dir)
+    {
+        if (log_cb)
+            log_cb(RETRO_LOG_ERROR, "[QUASI88]: Couldn't find system dir\n");
+    }
+    else
+    {
+        snprintf(system_dir, sizeof(system_dir), "%s", dir);
+    }
+
+    dir = NULL;
+    if (!environ_cb(RETRO_ENVIRONMENT_GET_CORE_ASSETS_DIRECTORY, &dir) || !dir)
+    {
+        if (log_cb)
+            log_cb(RETRO_LOG_ERROR, "[QUASI88]: Couldn't find download dir\n");
+    }
+    else
+    {
+        snprintf(download_dir, sizeof(download_dir), "%s", dir);
+    }
+
+    if (environ_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &save_path) && !string_is_empty(save_path))
+        save_to_disk_image = false;
+    else
+        save_to_disk_image = true;
+
+    (void)osd_file_config_init();
+    if (!string_is_empty(system_dir))
+    {
+        char q88_rom_dir[OSD_MAX_FILENAME];
+        size_t slen = strlen(system_dir);
+        if (slen + 9 < sizeof(q88_rom_dir))
+        {
+            snprintf(q88_rom_dir, sizeof(q88_rom_dir), "%.*s%cquasi88",
+                     (int)slen, system_dir, SLASH);
+            osd_set_dir_rom(osd_file_stat(q88_rom_dir) == FILE_STAT_DIR ? q88_rom_dir : system_dir);
+        }
+        else
+        {
+            osd_set_dir_rom(system_dir);
+        }
+        osd_set_dir_disk(system_dir);
+    }
+    if (save_path && !string_is_empty(save_path))
+    {
+        osd_set_dir_state(save_path);
+        osd_set_dir_snap(save_path);
+    }
+
+    file_coding = 2;
+    has_kanji_rom = FALSE;
+    font_loaded = 0;
+
+    memory_allocate();
+
+    n88_sz = czx_load_system_file(N88_ROM, main_rom, 0x08000);
+    if (n88_sz <= 0 && czx_try_load_compat_rom())
+        compat_loaded = true;
+
+    if (!compat_loaded)
+    {
+        if (n88_sz <= 0)
+            memcpy(main_rom, &pbios_n88, 0x08000);
+
+        sub_sz = czx_load_system_file(SUB_ROM, sub_romram, 0x02000);
+        if (sub_sz <= 0)
+        {
+            memcpy(sub_romram, &pbios_disk, 0x00800);
+            sub_sz = 0x00800;
+        }
+        if (sub_sz <= 0x00800)
+        {
+            memcpy(&sub_romram[0x0800], &sub_romram[0x0000], 0x0800);
+            memcpy(&sub_romram[0x1000], &sub_romram[0x0000], 0x1000);
+        }
+
+        czx_load_system_file(EXT0_ROM, main_rom_ext[0], 0x02000);
+        czx_load_system_file(EXT1_ROM, main_rom_ext[1], 0x02000);
+        czx_load_system_file(EXT2_ROM, main_rom_ext[2], 0x02000);
+        czx_load_system_file(EXT3_ROM, main_rom_ext[3], 0x02000);
+        czx_load_system_file(N_ROM, main_rom_n, 0x08000);
+    }
+
+    /* Sub-CPU ROM mirror (0x0000..0x1FFF -> 0x2000..0x3FFF) and Sub RAM (0x4000..0x7FFF) */
+    memcpy(&sub_romram[0x2000], &sub_romram[0x0000], 0x2000);
+    memset(&sub_romram[0x4000], 0xff, 0x4000);
+
+    rom_version = ROM_VERSION;
+
+    if (czx_load_system_file(KNJ1_ROM, kanji_rom[0][0], 0x20000) == 0x20000)
     {
         has_kanji_rom = TRUE;
         menu_lang = MENU_JAPAN;
@@ -50,9 +373,124 @@ void retro_init(void)
         has_kanji_rom = FALSE;
         menu_lang = MENU_ENGLISH;
     }
+    czx_load_system_file(KNJ2_ROM, kanji_rom[1][0], 0x20000);
 
+    if (jisho_rom != NULL)
+        czx_load_system_file(JISHO_ROM, jisho_rom[0], 0x80000);
+
+    /* Font 1 */
+    font1_sz = czx_load_system_file(FONT_ROM, font_mem, CZX_FONT_SZ);
+    if (font1_sz == CZX_FONT_SZ)
+    {
+        font_loaded |= 1;
+    }
+    else if (has_kanji_rom)
+    {
+        font_loaded |= 1;
+        memcpy(&font_mem[0], &kanji_rom[0][(1 << 11)][0], CZX_FONT_SZ);
+    }
+    else
+    {
+        memcpy(&font_mem[0], &built_in_font_ANK[0], CZX_FONT_SZ);
+    }
+    memcpy(&font_mem[CZX_FONT_SZ], &built_in_font_graph[0], CZX_FONT_SZ);
+
+    /* Font 2 */
+    font2_sz = czx_load_system_file(FONT2_ROM, font_mem2, CZX_FONT_SZ * 2);
+    if (font2_sz == CZX_FONT_SZ * 2)
+    {
+        font_loaded |= 2;
+    }
+    else
+    {
+        if (font2_sz == CZX_FONT_SZ)
+            font_loaded |= 2;
+        else
+            memcpy(&font_mem2[0], &built_in_font_ANH[0], CZX_FONT_SZ);
+        memcpy(&font_mem2[CZX_FONT_SZ], &built_in_font_graph[0], CZX_FONT_SZ);
+    }
+
+    /* Font 3 */
+    font3_sz = czx_load_system_file(FONT3_ROM, font_mem3, CZX_FONT_SZ * 2);
+    if (font3_sz == CZX_FONT_SZ * 2)
+    {
+        font_loaded |= 4;
+    }
+    else if (font3_sz == CZX_FONT_SZ)
+    {
+        font_loaded |= 4;
+        memcpy(&font_mem3[CZX_FONT_SZ], &built_in_font_graph[0], CZX_FONT_SZ);
+    }
+    else
+    {
+        memset(&font_mem3[0], 0, CZX_FONT_SZ * 2);
+    }
+
+    memset(&font_mem[0], 0, 8);
+    memset(&font_mem2[0], 0, 8);
+    memset(&font_mem3[0], 0, 8);
+    memory_reset_font();
+
+    environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, desc);
+    key_buffer = (bool *)calloc(KEY88_END, sizeof(bool));
+    pad_buffer = (bool *)calloc(KEY88_END, sizeof(bool));
+    init_variables();
+    retro_disks_init();
+
+    memset(czx_pad_state, 0, sizeof(czx_pad_state));
+    memset(czx_mouse_btn, 0, sizeof(czx_mouse_btn));
     mouse_mode = MOUSE_JOYSTICK;
     use_swcursor = TRUE;
+}
+
+bool retro_load_game(const struct retro_game_info *info)
+{
+    init_variables();
+    quasi88_start();
+    quasi88_disk_eject_all();
+
+    tape_path[0] = '\0';
+    autotype_count = 0;
+    brace_basic = -1;
+    brace_clock = 0;
+    if (info && !string_is_empty(info->path))
+    {
+        char dir[OSD_MAX_FILENAME];
+        char file[OSD_MAX_FILENAME];
+        const char *ext = path_get_extension(info->path);
+
+        if (osd_path_split(info->path, dir, file, sizeof(dir)) && dir[0] != '\0')
+            osd_set_dir_disk(dir);
+
+        if (ext && string_is_equal_noncase(ext, "m3u"))
+        {
+            if (!load_m3u(info->path) && log_cb)
+                log_cb(RETRO_LOG_ERROR, "[QUASI88]: Failed to load playlist: %s\n", info->path);
+        }
+        else if (is_tape(info->path))
+        {
+            uint64_t quirks = RETRO_SERIALIZATION_QUIRK_INCOMPLETE;
+
+            environ_cb(RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS, &quirks);
+            strlcpy(tape_path, info->path, sizeof(tape_path));
+            autotype_plan(info->path, true);
+            quasi88_load_tape_insert(tape_path);
+        }
+        else
+        {
+            autotype_plan(info->path, false);
+            retro_disks_append(info->path);
+            if (!quasi88_disk_insert(DRIVE_1, info->path, 0, 0) && log_cb)
+                log_cb(RETRO_LOG_ERROR, "[QUASI88]: Failed to insert disk: %s\n", info->path);
+        }
+    }
+    apply_braces();
+    if (autotype_count > 0)
+        autotype_start();
+    quasi88_reset(NULL);
+    quasi88_exec();
+
+    return true;
 }
 
 static void czx_handle_input(void)

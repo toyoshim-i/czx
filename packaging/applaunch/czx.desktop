@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=CZX Emulator
+Exec=bin/run-czx
+Icon=share/images/czx.png
+Terminal=false
+Type=Application

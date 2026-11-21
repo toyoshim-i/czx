@@ -1,0 +1,7 @@
+build/
+build-*/
+dist-arm64/
+local/
+.cache/
+*.o
+*.so

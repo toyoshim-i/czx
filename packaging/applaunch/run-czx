@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [ -z "${CZX_DATA_DIR:-}" ]; then
+    if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ -d "/home/${SUDO_USER}" ]; then
+        export CZX_DATA_DIR="/home/${SUDO_USER}/czx"
+    else
+        export CZX_DATA_DIR="${HOME:-/tmp}/czx"
+    fi
+fi
+
+if [ -z "${CZX_CORES_DIR:-}" ] && [ -d /usr/share/APPLaunch/share/czx/cores ]; then
+    export CZX_CORES_DIR="/usr/share/APPLaunch/share/czx/cores"
+fi
+
+exec "$SCRIPT_DIR/czx" "$@"

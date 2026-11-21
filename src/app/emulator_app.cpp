@@ -37,7 +37,9 @@ std::string resolve_data_dir(const std::string& explicit_dir) {
 
 EmulatorApp::EmulatorApp(AppConfig cfg)
     : cfg_(std::move(cfg)),
-      lcd_fb_(static_cast<size_t>(czx::video::kLcdWidth * czx::video::kLcdHeight), 0) {
+      lcd_fb_(static_cast<size_t>(czx::video::kLcdWidth * czx::video::kLcdHeight), 0),
+      work_fb_(static_cast<size_t>(czx::video::kLcdWidth * czx::video::kLcdHeight), 0),
+      ready_fb_(static_cast<size_t>(czx::video::kLcdWidth * czx::video::kLcdHeight), 0) {
     cfg_.data_dir = resolve_data_dir(cfg_.data_dir);
     setenv("CZX_DATA_DIR", cfg_.data_dir.c_str(), 1);
     ensure_data_dirs();
@@ -51,6 +53,7 @@ EmulatorApp::EmulatorApp(AppConfig cfg)
 }
 
 EmulatorApp::~EmulatorApp() {
+    stop_scale_worker();
     destroy_active_core();
 }
 
@@ -106,6 +109,7 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media) {
     if (!next_api) return false;
 
     destroy_active_core();
+    reset_scaled_frame();
     core_api_ = next_api;
     core_index_ = wrapped;
     pending_drive_ = 0;
@@ -545,23 +549,120 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
     }
 }
 
+void EmulatorApp::start_scale_worker() {
+    if (scale_thread_running_) return;
+    {
+        std::lock_guard<std::mutex> lock(scale_mtx_);
+        scale_stop_ = false;
+        has_pending_raw_ = false;
+        std::fill(ready_fb_.begin(), ready_fb_.end(), 0);
+        ready_seq_ = 0;
+        presented_seq_ = 0;
+        force_present_ = true;
+        prev_overlay_active_ = false;
+    }
+    scale_thread_ = std::thread(&EmulatorApp::scale_worker_loop, this);
+    scale_thread_running_ = true;
+}
+
+void EmulatorApp::stop_scale_worker() {
+    if (!scale_thread_running_) return;
+    {
+        std::lock_guard<std::mutex> lock(scale_mtx_);
+        scale_stop_ = true;
+    }
+    scale_cv_.notify_one();
+    if (scale_thread_.joinable()) {
+        scale_thread_.join();
+    }
+    scale_thread_running_ = false;
+}
+
+void EmulatorApp::reset_scaled_frame() {
+    {
+        std::lock_guard<std::mutex> lock(scale_mtx_);
+        has_pending_raw_ = false;
+        std::fill(ready_fb_.begin(), ready_fb_.end(), 0);
+        ++ready_seq_;
+    }
+    force_present_ = true;
+}
+
+void EmulatorApp::scale_worker_loop() {
+    while (true) {
+        czx_frame_t work_frame{};
+        czx::video::ScalerConfig work_cfg{};
+        {
+            std::unique_lock<std::mutex> lock(scale_mtx_);
+            scale_cv_.wait(lock, [this]() { return scale_stop_ || has_pending_raw_; });
+            if (scale_stop_) break;
+            work_raw_.swap(pending_raw_);
+            work_frame = pending_frame_;
+            work_cfg = pending_cfg_;
+            has_pending_raw_ = false;
+        }
+        work_frame.data = work_raw_.data();
+        scaler_.render(work_frame, work_cfg, work_fb_.data());
+        {
+            std::lock_guard<std::mutex> lock(scale_mtx_);
+            ready_fb_.swap(work_fb_);
+            ++ready_seq_;
+        }
+    }
+}
+
 void EmulatorApp::cb_video_frame(void* user_data, const czx_frame_t* frame) {
     auto* self = static_cast<EmulatorApp*>(user_data);
     if (!self || !frame) return;
     self->last_src_w_ = frame->width;
     self->last_src_h_ = frame->height;
-    self->last_layout_ = self->scaler_.render(*frame, self->scaler_cfg_, self->lcd_fb_.data());
+    self->last_layout_ = czx::video::Scaler::compute_layout(*frame, self->scaler_cfg_);
     self->scaler_cfg_.pan_x = self->last_layout_.pan_x;
     self->scaler_cfg_.pan_y = self->last_layout_.pan_y;
 
-    if (!self->saw_nonblank_frame_) {
-        for (uint16_t px : self->lcd_fb_) {
-            if (px != 0) {
-                self->saw_nonblank_frame_ = true;
-                break;
+    if (!self->scale_thread_running_) {
+        self->scaler_.render(*frame, self->scaler_cfg_, self->lcd_fb_.data());
+        if (!self->saw_nonblank_frame_) {
+            for (uint16_t px : self->lcd_fb_) {
+                if (px != 0) {
+                    self->saw_nonblank_frame_ = true;
+                    break;
+                }
             }
         }
+        return;
     }
+
+    if (!frame->data || frame->width == 0 || frame->height == 0) {
+        return;
+    }
+
+    const size_t bpp = (frame->format == CZX_PIXEL_RGB565) ? 2u : 4u;
+    const size_t row_bytes = static_cast<size_t>(frame->width) * bpp;
+    const size_t total_bytes = row_bytes * static_cast<size_t>(frame->height);
+    self->stage_raw_.resize(total_bytes);
+    if (frame->pitch_bytes == row_bytes) {
+        std::memcpy(self->stage_raw_.data(), frame->data, total_bytes);
+    } else {
+        const auto* src = static_cast<const uint8_t*>(frame->data);
+        for (uint16_t y = 0; y < frame->height; ++y) {
+            std::memcpy(self->stage_raw_.data() + static_cast<size_t>(y) * row_bytes,
+                        src + static_cast<size_t>(y) * frame->pitch_bytes,
+                        row_bytes);
+        }
+    }
+
+    czx_frame_t copy_meta = *frame;
+    copy_meta.data = nullptr;
+    copy_meta.pitch_bytes = static_cast<uint32_t>(row_bytes);
+    {
+        std::lock_guard<std::mutex> lock(self->scale_mtx_);
+        self->pending_raw_.swap(self->stage_raw_);
+        self->pending_frame_ = copy_meta;
+        self->pending_cfg_ = self->scaler_cfg_;
+        self->has_pending_raw_ = true;
+    }
+    self->scale_cv_.notify_one();
 }
 
 void EmulatorApp::cb_audio_samples(void* user_data, const int16_t* stereo_s16, size_t frame_count) {
@@ -631,6 +732,10 @@ int EmulatorApp::run() {
     cfg_.platform.headless = (cfg_.headless_frames > 0);
     platform_ = czx::platform::create_platform_bundle(cfg_.platform);
 
+    if (cfg_.headless_frames == 0) {
+        start_scale_worker();
+    }
+
     if (!activate_core(initial_idx, cfg_.media_path)) {
         if (cfg_.headless_frames > 0) {
             return 1;
@@ -692,20 +797,57 @@ int EmulatorApp::run() {
 
         if (core_inst_) {
             core_api_->run_frame(core_inst_);
+        }
+
+        if (scale_thread_running_) {
+            const bool overlay_active = (!core_inst_) || browser_.is_open() || menu_.is_open() ||
+                                        hud_.alt_held || hud_.pan_hint_frames > 0 || hud_.toast_frames > 0;
+            uint64_t latest_seq = 0;
+            {
+                std::lock_guard<std::mutex> lock(scale_mtx_);
+                latest_seq = ready_seq_;
+            }
+            const bool has_new_frame = (latest_seq != presented_seq_);
+            const bool need_present = has_new_frame || overlay_active || prev_overlay_active_ || force_present_;
+            if (need_present) {
+                if (core_inst_) {
+                    std::lock_guard<std::mutex> lock(scale_mtx_);
+                    std::copy(ready_fb_.begin(), ready_fb_.end(), lcd_fb_.begin());
+                    presented_seq_ = ready_seq_;
+                } else {
+                    render_core_error_screen();
+                }
+
+                if (browser_.is_open()) {
+                    browser_.render(lcd_fb_.data());
+                } else if (menu_.is_open()) {
+                    menu_.render(lcd_fb_.data(), build_menu_vm());
+                }
+
+                czx::video::render_hud(lcd_fb_.data(), hud_, last_layout_);
+
+                if (platform_.display) {
+                    platform_.display->present(lcd_fb_.data());
+                }
+                force_present_ = false;
+            }
+            prev_overlay_active_ = overlay_active;
         } else {
-            render_core_error_screen();
-        }
+            if (!core_inst_) {
+                render_core_error_screen();
+            }
 
-        if (browser_.is_open()) {
-            browser_.render(lcd_fb_.data());
-        } else if (menu_.is_open()) {
-            menu_.render(lcd_fb_.data(), build_menu_vm());
-        }
+            if (browser_.is_open()) {
+                browser_.render(lcd_fb_.data());
+            } else if (menu_.is_open()) {
+                menu_.render(lcd_fb_.data(), build_menu_vm());
+            }
 
-        czx::video::render_hud(lcd_fb_.data(), hud_, last_layout_);
+            czx::video::render_hud(lcd_fb_.data(), hud_, last_layout_);
 
-        if (platform_.display) {
-            platform_.display->present(lcd_fb_.data());
+            if (platform_.display) {
+                platform_.display->present(lcd_fb_.data());
+            }
         }
 
         ++frames_done;
@@ -724,6 +866,8 @@ int EmulatorApp::run() {
             next_frame += frame_period;
         }
     }
+
+    stop_scale_worker();
 
     if (cfg_.verify_nonblank && !saw_nonblank_frame_) {
         std::fprintf(stderr, "czx: verify-nonblank failed: output stayed blank\n");

@@ -1100,11 +1100,15 @@ private:
                 cached_fmt_ = CZX_PIXEL_XRGB8888;
                 cached_pitch_ = static_cast<uint32_t>(width) * 4u;
                 cached_32_.resize(static_cast<size_t>(width) * height);
-                const auto* src = static_cast<const uint8_t*>(data);
-                for (unsigned y = 0; y < height; ++y) {
-                    std::memcpy(cached_32_.data() + static_cast<size_t>(y) * width,
-                                src + static_cast<size_t>(y) * pitch,
-                                static_cast<size_t>(width) * 4u);
+                if (pitch == static_cast<size_t>(cached_pitch_)) {
+                    std::memcpy(cached_32_.data(), data, static_cast<size_t>(cached_pitch_) * height);
+                } else {
+                    const auto* src = static_cast<const uint8_t*>(data);
+                    for (unsigned y = 0; y < height; ++y) {
+                        std::memcpy(cached_32_.data() + static_cast<size_t>(y) * width,
+                                    src + static_cast<size_t>(y) * pitch,
+                                    cached_pitch_);
+                    }
                 }
             } else {
                 cached_fmt_ = CZX_PIXEL_RGB565;
@@ -1112,10 +1116,14 @@ private:
                 cached_16_.resize(static_cast<size_t>(width) * height);
                 const auto* src = static_cast<const uint8_t*>(data);
                 if (pixel_format_ == RETRO_PIXEL_FORMAT_RGB565) {
-                    for (unsigned y = 0; y < height; ++y) {
-                        std::memcpy(cached_16_.data() + static_cast<size_t>(y) * width,
-                                    src + static_cast<size_t>(y) * pitch,
-                                    static_cast<size_t>(width) * 2u);
+                    if (pitch == static_cast<size_t>(cached_pitch_)) {
+                        std::memcpy(cached_16_.data(), data, static_cast<size_t>(cached_pitch_) * height);
+                    } else {
+                        for (unsigned y = 0; y < height; ++y) {
+                            std::memcpy(cached_16_.data() + static_cast<size_t>(y) * width,
+                                        src + static_cast<size_t>(y) * pitch,
+                                        cached_pitch_);
+                        }
                     }
                 } else {
                     for (unsigned y = 0; y < height; ++y) {

@@ -8,9 +8,12 @@
 #include "video/menu.hpp"
 #include "video/scaler.hpp"
 
+#include <condition_variable>
 #include <cstdint>
 #include <map>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace czx::app {
@@ -62,6 +65,29 @@ private:
     uint32_t pending_drive_ = 0;
     std::string core_error_;
     std::map<std::string, std::string> last_media_dirs_;
+
+    std::mutex scale_mtx_;
+    std::condition_variable scale_cv_;
+    std::thread scale_thread_;
+    bool scale_thread_running_ = false;
+    bool scale_stop_ = false;
+    std::vector<uint8_t> stage_raw_;
+    std::vector<uint8_t> pending_raw_;
+    czx_frame_t pending_frame_{};
+    czx::video::ScalerConfig pending_cfg_{};
+    bool has_pending_raw_ = false;
+    std::vector<uint8_t> work_raw_;
+    std::vector<uint16_t> work_fb_;
+    std::vector<uint16_t> ready_fb_;
+    uint64_t ready_seq_ = 0;
+    uint64_t presented_seq_ = 0;
+    bool force_present_ = true;
+    bool prev_overlay_active_ = false;
+
+    void start_scale_worker();
+    void stop_scale_worker();
+    void scale_worker_loop();
+    void reset_scaled_frame();
 
     void ensure_data_dirs();
     std::string default_media_dir_for_core() const;

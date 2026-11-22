@@ -672,4 +672,58 @@ ViewportLayout Scaler::render(const czx_frame_t& frame, const ScalerConfig& cfg,
     return layout;
 }
 
+WindowSize compute_desktop_window_size(int src_w, int src_h,
+                                       int par_num, int par_den,
+                                       AspectPolicy aspect_policy,
+                                       int scale,
+                                       int max_w, int max_h) noexcept {
+    if (src_w <= 0 || src_h <= 0) {
+        return WindowSize{0, 0};
+    }
+    const int s = std::clamp(scale, 1, 3);
+
+    int target_w = src_w * s;
+    int target_h = src_h * s;
+
+    if (aspect_policy == AspectPolicy::Crt4x3) {
+        if (static_cast<int64_t>(src_w) * 3 >= static_cast<int64_t>(src_h) * 4) {
+            target_w = src_w * s;
+            target_h = static_cast<int>(std::lround(static_cast<double>(target_w) * 3.0 / 4.0));
+        } else {
+            target_h = src_h * s;
+            target_w = static_cast<int>(std::lround(static_cast<double>(target_h) * 4.0 / 3.0));
+        }
+    } else {
+        const int pn = std::max(1, par_num);
+        const int pd = std::max(1, par_den);
+        if (pn == pd) {
+            target_w = src_w * s;
+            target_h = src_h * s;
+        } else if (pn > pd) {
+            target_h = src_h * s;
+            target_w = static_cast<int>(std::lround(
+                static_cast<double>(src_w) * static_cast<double>(pn) / static_cast<double>(pd) *
+                static_cast<double>(s)));
+        } else {
+            target_w = src_w * s;
+            target_h = static_cast<int>(std::lround(
+                static_cast<double>(src_h) * static_cast<double>(pd) / static_cast<double>(pn) *
+                static_cast<double>(s)));
+        }
+    }
+
+    target_w = std::max(1, target_w);
+    target_h = std::max(1, target_h);
+
+    if (max_w > 0 && max_h > 0 && (target_w > max_w || target_h > max_h)) {
+        const double fit = std::min(
+            static_cast<double>(max_w) / static_cast<double>(target_w),
+            static_cast<double>(max_h) / static_cast<double>(target_h));
+        target_w = std::clamp(static_cast<int>(std::lround(static_cast<double>(target_w) * fit)), 1, max_w);
+        target_h = std::clamp(static_cast<int>(std::lround(static_cast<double>(target_h) * fit)), 1, max_h);
+    }
+
+    return WindowSize{std::max(1, target_w), std::max(1, target_h)};
+}
+
 }  // namespace czx::video

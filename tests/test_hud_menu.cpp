@@ -93,6 +93,13 @@ void test_render_hud_activity_overlay() {
     hud.alt_held = true;
     czx::video::render_hud(fb.data(), hud, layout);
     CHECK(count_nonzero_in_rect(fb, 240, 120, czx::video::kLcdWidth, 144) > 40);
+
+    // Desktop native mode renders 1X/2X/3X pills in the bottom Alt bar.
+    std::fill(fb.begin(), fb.end(), 0);
+    hud.desktop_native = true;
+    hud.desktop_scale = 2;
+    czx::video::render_hud(fb.data(), hud, layout);
+    CHECK(count_nonzero_in_rect(fb, 0, 144, czx::video::kLcdWidth, czx::video::kLcdHeight) > 400);
 }
 
 void test_overlay_menu() {
@@ -130,6 +137,12 @@ void test_overlay_menu() {
     CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), vm) == czx::video::MenuAction::CycleCoreNext);
 
     std::vector<uint16_t> fb(static_cast<size_t>(czx::video::kLcdWidth * czx::video::kLcdHeight), 0);
+    menu.render(fb.data(), vm);
+    CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
+
+    std::fill(fb.begin(), fb.end(), 0);
+    vm.desktop_native_active = true;
+    vm.desktop_scale = 3;
     menu.render(fb.data(), vm);
     CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
 }

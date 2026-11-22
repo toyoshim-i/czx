@@ -17,6 +17,8 @@ struct HudState {
     uint32_t pan_hint_frames = 0;
     uint32_t toast_frames = 0;
     std::string toast_text;
+    bool desktop_native = false;
+    int desktop_scale = 2;
     DisplayMode display_mode = DisplayMode::OverflowFit;
     int input_mode = 0;  // 0=KBD, 1=JP1, 2=JP2
     bool menu_open = false;

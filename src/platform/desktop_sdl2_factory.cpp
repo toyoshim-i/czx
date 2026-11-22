@@ -17,7 +17,7 @@ PlatformBundle create_platform_bundle(const PlatformOptions& opts) {
     }
 
     auto ctx = std::make_shared<DesktopSdl2Context>();
-    if (!ctx->init()) {
+    if (!ctx->init(opts)) {
         bundle.display = std::make_unique<NullDisplay>();
         bundle.input = std::make_unique<NullInput>();
     } else {

@@ -428,6 +428,63 @@ void test_float_oracle_all_formats() {
     }
 }
 
+void test_desktop_window_size() {
+    auto s1 = compute_desktop_window_size(320, 200, 1, 1, AspectPolicy::ParAware, 1);
+    CHECK(s1.width == 320 && s1.height == 200);
+    auto s2 = compute_desktop_window_size(320, 200, 1, 1, AspectPolicy::ParAware, 2);
+    CHECK(s2.width == 640 && s2.height == 400);
+    auto s3 = compute_desktop_window_size(320, 200, 1, 1, AspectPolicy::ParAware, 3);
+    CHECK(s3.width == 960 && s3.height == 600);
+
+    auto x1 = compute_desktop_window_size(768, 512, 1, 1, AspectPolicy::ParAware, 1);
+    CHECK(x1.width == 768 && x1.height == 512);
+    auto x2 = compute_desktop_window_size(768, 512, 1, 1, AspectPolicy::ParAware, 2);
+    CHECK(x2.width == 1536 && x2.height == 1024);
+
+    // Tall-pixel PAR 1:2 (e.g., Apple II 560x192, MSX2 512x212)
+    auto a1 = compute_desktop_window_size(560, 192, 1, 2, AspectPolicy::ParAware, 1);
+    CHECK(a1.width == 560 && a1.height == 384);
+    auto a2 = compute_desktop_window_size(560, 192, 1, 2, AspectPolicy::ParAware, 2);
+    CHECK(a2.width == 1120 && a2.height == 768);
+    auto a3 = compute_desktop_window_size(560, 192, 1, 2, AspectPolicy::ParAware, 3);
+    CHECK(a3.width == 1680 && a3.height == 1152);
+
+    auto m1 = compute_desktop_window_size(512, 212, 1, 2, AspectPolicy::ParAware, 1);
+    CHECK(m1.width == 512 && m1.height == 424);
+    auto m2 = compute_desktop_window_size(512, 212, 1, 2, AspectPolicy::ParAware, 2);
+    CHECK(m2.width == 1024 && m2.height == 848);
+
+    // Wide-pixel PAR (e.g., X68000 512x512 with 4:3 DAR -> 1333/1000)
+    auto w1 = compute_desktop_window_size(512, 512, 1333, 1000, AspectPolicy::ParAware, 1);
+    CHECK(w1.width == 682 && w1.height == 512);
+    auto w2 = compute_desktop_window_size(512, 512, 1333, 1000, AspectPolicy::ParAware, 2);
+    CHECK(w2.width == 1365 && w2.height == 1024);
+    auto w3 = compute_desktop_window_size(512, 512, 1333, 1000, AspectPolicy::ParAware, 3);
+    CHECK(w3.width == 2047 && w3.height == 1536);
+
+    // CRT 4:3 aspect policy
+    auto c1 = compute_desktop_window_size(320, 200, 1, 1, AspectPolicy::Crt4x3, 1);
+    CHECK(c1.width == 320 && c1.height == 240);
+    auto c2 = compute_desktop_window_size(320, 200, 1, 1, AspectPolicy::Crt4x3, 2);
+    CHECK(c2.width == 640 && c2.height == 480);
+    auto c_x68 = compute_desktop_window_size(768, 512, 1, 1, AspectPolicy::Crt4x3, 1);
+    CHECK(c_x68.width == 768 && c_x68.height == 576);
+    auto c_512 = compute_desktop_window_size(512, 512, 1, 1, AspectPolicy::Crt4x3, 1);
+    CHECK(c_512.width == 683 && c_512.height == 512);
+
+    // Clamping to display bounds preserves aspect ratio
+    auto clamped = compute_desktop_window_size(768, 512, 1, 1, AspectPolicy::ParAware, 3, 1920, 1080);
+    CHECK(clamped.width == 1620 && clamped.height == 1080);
+
+    // Edge inputs
+    auto empty = compute_desktop_window_size(0, 200, 1, 1, AspectPolicy::ParAware, 2);
+    CHECK(empty.width == 0 && empty.height == 0);
+    auto lo = compute_desktop_window_size(320, 200, 1, 1, AspectPolicy::ParAware, 0);
+    CHECK(lo.width == 320 && lo.height == 200);
+    auto hi = compute_desktop_window_size(320, 200, 1, 1, AspectPolicy::ParAware, 9);
+    CHECK(hi.width == 960 && hi.height == 600);
+}
+
 }  // namespace
 
 int main() {
@@ -435,6 +492,7 @@ int main() {
     test_pixel_accuracy_and_resampling();
     test_hud_render();
     test_float_oracle_all_formats();
+    test_desktop_window_size();
     std::printf("test_scaler: all assertions passed\n");
     return 0;
 }

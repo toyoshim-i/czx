@@ -277,9 +277,12 @@ void render_hud(uint16_t* fb_rgb565, const HudState& hud, const ViewportLayout& 
     const bool joy_active = (hud.input_mode != 0);
 
     const std::array<Slot, 5> slots = {{
-        {'4', "1:1", kIconNativePan, hud.display_mode == DisplayMode::NativePan},
-        {'5', "FIT", kIconOverflowFit, hud.display_mode == DisplayMode::OverflowFit},
-        {'6', "ASP", kIconAspectFit, hud.display_mode == DisplayMode::AspectFit},
+        {'4', hud.desktop_native ? "1X" : "1:1", kIconNativePan,
+         hud.desktop_native ? (hud.desktop_scale == 1) : (hud.display_mode == DisplayMode::NativePan)},
+        {'5', hud.desktop_native ? "2X" : "FIT", kIconOverflowFit,
+         hud.desktop_native ? (hud.desktop_scale == 2) : (hud.display_mode == DisplayMode::OverflowFit)},
+        {'6', hud.desktop_native ? "3X" : "ASP", kIconAspectFit,
+         hud.desktop_native ? (hud.desktop_scale == 3) : (hud.display_mode == DisplayMode::AspectFit)},
         {'7', joy_label, joy_active ? kIconJoystick : kIconKeyboard, joy_active},
         {'8', "MENU", kIconMenu, hud.menu_open},
     }};

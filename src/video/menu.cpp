@@ -116,6 +116,9 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
         const char* value;
     };
 
+    const char* desktop_label = (vm.desktop_scale <= 1) ? "Desktop 1x"
+                                                        : ((vm.desktop_scale == 2) ? "Desktop 2x"
+                                                                                   : "Desktop 3x");
     const bool dual = (vm.drive_count >= 2u && vm.has_media_browser);
     const std::array<Row, kItemCount> rows = {{
         {"Core", core_val.c_str()},
@@ -123,7 +126,7 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
          dual ? d1_val.c_str() : media_val.c_str()},
         {dual ? vm.drive2_name.c_str() : (vm.is_tape_media ? "Tape Play" : "Eject/Swap"),
          dual ? d2_val.c_str() : (vm.can_eject ? "[Enter]" : "(N/A)")},
-        {"Display", display_mode_name(vm.display_mode)},
+        {"Display", vm.desktop_native_active ? desktop_label : display_mode_name(vm.display_mode)},
         {"Aspect", aspect_policy_name(vm.aspect_policy)},
         {"Borders", vm.show_borders ? "Show Full" : "Crop Active"},
         {"Margin", margin_fill_name(vm.margin_fill)},

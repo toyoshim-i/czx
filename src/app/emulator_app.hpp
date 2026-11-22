@@ -25,6 +25,10 @@ struct AppConfig {
     std::string data_dir;
     uint32_t preset_index = 0;
     czx::video::DisplayMode display_mode = czx::video::DisplayMode::OverflowFit;
+    bool display_mode_explicit = false;
+    bool force_desktop = false;
+    bool force_lcd_sim = false;
+    int desktop_scale = 2;
     czx::video::AspectPolicy aspect_policy = czx::video::AspectPolicy::ParAware;
     bool show_borders = false;
     czx::video::MarginFill margin_fill = czx::video::MarginFill::Auto;
@@ -87,6 +91,22 @@ private:
     uint64_t presented_seq_ = 0;
     bool force_present_ = true;
     bool prev_overlay_active_ = false;
+    bool desktop_native_mode_ = false;
+    int desktop_scale_ = 2;
+    int last_win_req_w_ = 0;
+    int last_win_req_h_ = 0;
+    std::vector<uint32_t> native_xrgb_;
+    int native_w_ = 0;
+    int native_h_ = 0;
+    int native_par_num_ = 1;
+    int native_par_den_ = 1;
+    uint32_t native_margin_xrgb_ = 0;
+    uint64_t native_seq_ = 0;
+    uint64_t presented_native_seq_ = 0;
+    std::vector<uint16_t> ov_black_;
+    std::vector<uint16_t> ov_white_;
+    std::vector<uint32_t> overlay_argb_;
+    std::string last_window_title_;
     bool show_activity_indicator_ = true;
     bool tape_warp_enabled_ = true;
     bool live_warp_requested_ = false;
@@ -99,6 +119,8 @@ private:
     void stop_scale_worker();
     void scale_worker_loop();
     void reset_scaled_frame();
+    void build_overlay_argb();
+    void update_window_title();
 
     void ensure_data_dirs();
     void load_app_config();
@@ -116,6 +138,8 @@ private:
 
     void show_toast(const char* text);
     void set_display_mode(czx::video::DisplayMode mode);
+    void set_desktop_scale(int scale);
+    void sync_desktop_window_size(bool force = false);
     void apply_pan_delta(int dx, int dy);
     void cycle_core(int delta);
     void cycle_preset(int delta);

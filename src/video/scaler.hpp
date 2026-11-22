@@ -92,6 +92,17 @@ private:
     alignas(16) uint16_t acc_b_[kLcdWidth]{};
 };
 
+struct WindowSize {
+    int width = 0;
+    int height = 0;
+};
+
+WindowSize compute_desktop_window_size(int src_w, int src_h,
+                                       int par_num, int par_den,
+                                       AspectPolicy aspect_policy,
+                                       int scale,
+                                       int max_w = 0, int max_h = 0) noexcept;
+
 const char* display_mode_name(DisplayMode mode) noexcept;
 const char* display_mode_short(DisplayMode mode) noexcept;
 const char* aspect_policy_name(AspectPolicy policy) noexcept;

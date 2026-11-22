@@ -64,6 +64,8 @@ EmulatorApp::EmulatorApp(AppConfig cfg)
     show_activity_indicator_ = cfg_.show_activity_indicator;
     tape_warp_enabled_ = cfg_.tape_warp_enabled;
     load_app_config();
+    desktop_scale_ = std::clamp(cfg_.desktop_scale, 1, 3);
+    hud_.desktop_scale = desktop_scale_;
     hud_.show_activity_indicator = show_activity_indicator_;
     preset_index_ = cfg_.preset_index;
 }
@@ -298,6 +300,15 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media) {
     last_src_w_ = 0;
     last_src_h_ = 0;
     last_layout_ = {};
+    native_w_ = 0;
+    native_h_ = 0;
+    native_par_num_ = 1;
+    native_par_den_ = 1;
+    native_margin_xrgb_ = 0;
+    last_win_req_w_ = 0;
+    last_win_req_h_ = 0;
+    ++native_seq_;
+    force_present_ = true;
 
     czx_host_t host{};
     host.user_data = this;
@@ -403,6 +414,10 @@ void EmulatorApp::show_toast(const char* text) {
 }
 
 void EmulatorApp::set_display_mode(czx::video::DisplayMode mode) {
+    desktop_native_mode_ = false;
+    hud_.desktop_native = false;
+    sync_desktop_window_size(false);
+    force_present_ = true;
     scaler_cfg_.mode = mode;
     hud_.display_mode = mode;
     router_.set_native_pan_enabled(mode == czx::video::DisplayMode::NativePan);
@@ -417,6 +432,56 @@ void EmulatorApp::set_display_mode(czx::video::DisplayMode mode) {
         case czx::video::DisplayMode::AspectFit:
             show_toast("MODE: ASPECT FIT");
             break;
+    }
+}
+
+void EmulatorApp::set_desktop_scale(int scale) {
+    desktop_native_mode_ = true;
+    desktop_scale_ = std::clamp(scale, 1, 3);
+    hud_.desktop_native = true;
+    hud_.desktop_scale = desktop_scale_;
+    router_.set_native_pan_enabled(false);
+    sync_desktop_window_size(true);
+    force_present_ = true;
+    char msg[32];
+    std::snprintf(msg, sizeof(msg), "DESKTOP %dX", desktop_scale_);
+    show_toast(msg);
+}
+
+void EmulatorApp::sync_desktop_window_size(bool force) {
+    if (!platform_.display || !platform_.display->supports_native_present() || cfg_.headless_frames > 0) {
+        return;
+    }
+    int want_w = 0;
+    int want_h = 0;
+    if (!desktop_native_mode_) {
+        want_w = czx::video::kLcdWidth * 3;
+        want_h = czx::video::kLcdHeight * 3;
+    } else if (!core_inst_) {
+        const int s = std::max(2, desktop_scale_);
+        want_w = czx::video::kLcdWidth * s;
+        want_h = czx::video::kLcdHeight * s;
+    } else if (native_w_ > 0 && native_h_ > 0) {
+        int max_w = 0;
+        int max_h = 0;
+        platform_.display->get_desktop_bounds(max_w, max_h);
+        const auto ws = czx::video::compute_desktop_window_size(
+            native_w_, native_h_, native_par_num_, native_par_den_,
+            scaler_cfg_.aspect_policy, desktop_scale_, max_w, max_h);
+        want_w = ws.width;
+        want_h = ws.height;
+    } else {
+        return;
+    }
+
+    if (want_w <= 0 || want_h <= 0) {
+        return;
+    }
+    if (force || want_w != last_win_req_w_ || want_h != last_win_req_h_) {
+        last_win_req_w_ = want_w;
+        last_win_req_h_ = want_h;
+        platform_.display->resize_window(want_w, want_h);
+        force_present_ = true;
     }
 }
 
@@ -450,6 +515,17 @@ void EmulatorApp::cycle_preset(int delta) {
 }
 
 void EmulatorApp::cycle_display_mode(int delta) {
+    const bool allow_desktop = platform_.display && platform_.display->supports_native_present();
+    if (allow_desktop) {
+        const int cur = desktop_native_mode_ ? (2 + desktop_scale_) : static_cast<int>(scaler_cfg_.mode);
+        const int next = (cur + delta + 6) % 6;
+        if (next >= 3) {
+            set_desktop_scale(next - 2);
+            return;
+        }
+        set_display_mode(static_cast<czx::video::DisplayMode>(next));
+        return;
+    }
     const int cur = static_cast<int>(scaler_cfg_.mode);
     const int next = (cur + delta + 3) % 3;
     set_display_mode(static_cast<czx::video::DisplayMode>(next));
@@ -494,6 +570,8 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
     }
     vm.src_width = last_src_w_;
     vm.src_height = last_src_h_;
+    vm.desktop_native_active = desktop_native_mode_;
+    vm.desktop_scale = desktop_scale_;
     vm.display_mode = scaler_cfg_.mode;
     vm.aspect_policy = scaler_cfg_.aspect_policy;
     vm.show_borders = scaler_cfg_.show_borders;
@@ -547,13 +625,25 @@ void EmulatorApp::eject_drive_slot(uint32_t drive) {
 void EmulatorApp::handle_host_command(czx::input::HostCommand cmd) {
     switch (cmd) {
         case czx::input::HostCommand::SetModeNativePan:
-            set_display_mode(czx::video::DisplayMode::NativePan);
+            if (desktop_native_mode_) {
+                set_desktop_scale(1);
+            } else {
+                set_display_mode(czx::video::DisplayMode::NativePan);
+            }
             break;
         case czx::input::HostCommand::SetModeOverflowFit:
-            set_display_mode(czx::video::DisplayMode::OverflowFit);
+            if (desktop_native_mode_) {
+                set_desktop_scale(2);
+            } else {
+                set_display_mode(czx::video::DisplayMode::OverflowFit);
+            }
             break;
         case czx::input::HostCommand::SetModeAspectFit:
-            set_display_mode(czx::video::DisplayMode::AspectFit);
+            if (desktop_native_mode_) {
+                set_desktop_scale(3);
+            } else {
+                set_display_mode(czx::video::DisplayMode::AspectFit);
+            }
             break;
         case czx::input::HostCommand::ToggleInputMode: {
             const int next_i = (static_cast<int>(router_.input_mode()) + 1) % 4;
@@ -692,17 +782,23 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
                 (scaler_cfg_.aspect_policy == czx::video::AspectPolicy::ParAware)
                     ? czx::video::AspectPolicy::Crt4x3
                     : czx::video::AspectPolicy::ParAware;
+            if (desktop_native_mode_) {
+                sync_desktop_window_size(false);
+            }
+            force_present_ = true;
             break;
         case czx::video::MenuAction::ToggleBorders:
             scaler_cfg_.show_borders = !scaler_cfg_.show_borders;
             scaler_cfg_.pan_x = 0;
             scaler_cfg_.pan_y = 0;
+            force_present_ = true;
             break;
         case czx::video::MenuAction::ToggleMarginFill:
             scaler_cfg_.margin_fill =
                 (scaler_cfg_.margin_fill == czx::video::MarginFill::Auto)
                     ? czx::video::MarginFill::Black
                     : czx::video::MarginFill::Auto;
+            force_present_ = true;
             show_toast(scaler_cfg_.margin_fill == czx::video::MarginFill::Auto ? "MARGIN: AUTO"
                                                                                : "MARGIN: BLACK");
             break;
@@ -804,6 +900,88 @@ void EmulatorApp::scale_worker_loop() {
     }
 }
 
+void EmulatorApp::build_overlay_argb() {
+    constexpr size_t kPix =
+        static_cast<size_t>(czx::video::kLcdWidth) * static_cast<size_t>(czx::video::kLcdHeight);
+    if (ov_black_.size() != kPix) {
+        ov_black_.resize(kPix);
+        ov_white_.resize(kPix);
+        overlay_argb_.resize(kPix);
+    }
+    std::fill(ov_black_.begin(), ov_black_.end(), uint16_t{0x0000u});
+    std::fill(ov_white_.begin(), ov_white_.end(), uint16_t{0xFFFFu});
+
+    czx::video::HudState hud_copy = hud_;
+    hud_copy.desktop_native = true;
+    hud_copy.desktop_scale = desktop_scale_;
+    hud_copy.display_mode = czx::video::DisplayMode::OverflowFit;
+    hud_copy.pan_hint_frames = 0;
+    const czx::video::ViewportLayout dummy_layout{};
+
+    if (browser_.is_open()) {
+        browser_.render(ov_black_.data());
+        browser_.render(ov_white_.data());
+    } else if (menu_.is_open()) {
+        const auto vm = build_menu_vm();
+        menu_.render(ov_black_.data(), vm);
+        menu_.render(ov_white_.data(), vm);
+    }
+    czx::video::render_hud(ov_black_.data(), hud_copy, dummy_layout);
+    czx::video::render_hud(ov_white_.data(), hud_copy, dummy_layout);
+
+    for (size_t i = 0; i < kPix; ++i) {
+        const uint16_t b = ov_black_[i];
+        const uint16_t w = ov_white_[i];
+        if (b == 0x0000u && w == 0xFFFFu) {
+            overlay_argb_[i] = 0u;
+            continue;
+        }
+        uint8_t r0 = 0, g0 = 0, b0 = 0;
+        uint8_t r1 = 0, g1 = 0, b1 = 0;
+        czx::video::unpack_rgb565(b, r0, g0, b0);
+        czx::video::unpack_rgb565(w, r1, g1, b1);
+        if (b == w) {
+            overlay_argb_[i] = 0xFF000000u | (static_cast<uint32_t>(r0) << 16) |
+                               (static_cast<uint32_t>(g0) << 8) | static_cast<uint32_t>(b0);
+            continue;
+        }
+        const int inv_a = std::clamp(static_cast<int>(g1) - static_cast<int>(g0), 0, 255);
+        const int a = 255 - inv_a;
+        if (a <= 0) {
+            overlay_argb_[i] = 0u;
+            continue;
+        }
+        const uint32_t sr = static_cast<uint32_t>(std::clamp((static_cast<int>(r0) * 255 + a / 2) / a, 0, 255));
+        const uint32_t sg = static_cast<uint32_t>(std::clamp((static_cast<int>(g0) * 255 + a / 2) / a, 0, 255));
+        const uint32_t sb = static_cast<uint32_t>(std::clamp((static_cast<int>(b0) * 255 + a / 2) / a, 0, 255));
+        overlay_argb_[i] = (static_cast<uint32_t>(a) << 24) | (sr << 16) | (sg << 8) | sb;
+    }
+}
+
+void EmulatorApp::update_window_title() {
+    if (!platform_.display) return;
+    const czx_core_desc_t* desc = (core_api_ && core_api_->get_desc) ? core_api_->get_desc(core_api_) : nullptr;
+    const char* name = (desc && desc->name) ? desc->name : "czx";
+    char buf[160];
+    if (!core_inst_) {
+        std::snprintf(buf, sizeof(buf), "czx - %s [ROM Required]", name);
+    } else if (desktop_native_mode_) {
+        const int w = (native_w_ > 0) ? native_w_ : last_src_w_;
+        const int h = (native_h_ > 0) ? native_h_ : last_src_h_;
+        if (w > 0 && h > 0) {
+            std::snprintf(buf, sizeof(buf), "czx - %s [%dx%d %dx]", name, w, h, desktop_scale_);
+        } else {
+            std::snprintf(buf, sizeof(buf), "czx - %s [Desktop %dx]", name, desktop_scale_);
+        }
+    } else {
+        std::snprintf(buf, sizeof(buf), "czx - %s [LCD 320x170]", name);
+    }
+    if (last_window_title_ != buf) {
+        last_window_title_ = buf;
+        platform_.display->set_window_title(buf);
+    }
+}
+
 void EmulatorApp::cb_video_frame(void* user_data, const czx_frame_t* frame) {
     auto* self = static_cast<EmulatorApp*>(user_data);
     if (!self || !frame) return;
@@ -812,6 +990,97 @@ void EmulatorApp::cb_video_frame(void* user_data, const czx_frame_t* frame) {
     self->last_layout_ = czx::video::Scaler::compute_layout(*frame, self->scaler_cfg_);
     self->scaler_cfg_.pan_x = self->last_layout_.pan_x;
     self->scaler_cfg_.pan_y = self->last_layout_.pan_y;
+
+    if (self->desktop_native_mode_ && self->cfg_.headless_frames == 0) {
+        if (!frame->data || frame->width == 0 || frame->height == 0) {
+            return;
+        }
+        int ax = 0;
+        int ay = 0;
+        int aw = frame->width;
+        int ah = frame->height;
+        if (!self->scaler_cfg_.show_borders && frame->crop_w > 0 && frame->crop_h > 0 &&
+            static_cast<int>(frame->crop_x) + static_cast<int>(frame->crop_w) <= static_cast<int>(frame->width) &&
+            static_cast<int>(frame->crop_y) + static_cast<int>(frame->crop_h) <= static_cast<int>(frame->height)) {
+            ax = frame->crop_x;
+            ay = frame->crop_y;
+            aw = frame->crop_w;
+            ah = frame->crop_h;
+        }
+
+        uint32_t margin_xrgb = 0;
+        const auto* base = static_cast<const uint8_t*>(frame->data);
+        if (self->scaler_cfg_.margin_fill == czx::video::MarginFill::Auto && aw > 0 && ah > 0) {
+            const bool sample_outer =
+                (frame->flags & CZX_FRAME_HAS_BORDER) != 0 &&
+                frame->crop_w > 0 && frame->crop_h > 0 &&
+                (frame->crop_w < frame->width || frame->crop_h < frame->height);
+            const uint32_t x0 = sample_outer ? 0u : static_cast<uint32_t>(ax);
+            const uint32_t x1 = sample_outer ? (frame->width - 1u) : static_cast<uint32_t>(ax + aw - 1);
+            const uint32_t y0 = sample_outer ? 0u : static_cast<uint32_t>(ay);
+            const uint32_t y1 = sample_outer ? (frame->height - 1u) : static_cast<uint32_t>(ay + ah - 1);
+            const uint8_t* r0 = base + static_cast<size_t>(y0) * frame->pitch_bytes;
+            const uint8_t* r1 = base + static_cast<size_t>(y1) * frame->pitch_bytes;
+            const uint8_t* rows[4] = {r0, r0, r1, r1};
+            const uint32_t cols[4] = {x0, x1, x0, x1};
+            uint32_t sr = 0, sg = 0, sb = 0;
+            for (int i = 0; i < 4; ++i) {
+                uint8_t r = 0, g = 0, b = 0;
+                czx::video::read_pixel_rgb888(rows[i], cols[i], frame->format, r, g, b);
+                sr += r;
+                sg += g;
+                sb += b;
+            }
+            margin_xrgb = (((sr + 2u) / 4u) << 16) | (((sg + 2u) / 4u) << 8) | ((sb + 2u) / 4u);
+        }
+
+        self->native_xrgb_.resize(static_cast<size_t>(aw) * static_cast<size_t>(ah));
+        switch (frame->format) {
+            case CZX_PIXEL_RGB565:
+                for (int y = 0; y < ah; ++y) {
+                    const auto* src16 = reinterpret_cast<const uint16_t*>(
+                        base + static_cast<size_t>(ay + y) * frame->pitch_bytes) + ax;
+                    uint32_t* dst = self->native_xrgb_.data() + static_cast<size_t>(y) * static_cast<size_t>(aw);
+                    for (int x = 0; x < aw; ++x) {
+                        uint8_t r = 0, g = 0, b = 0;
+                        czx::video::unpack_rgb565(src16[x], r, g, b);
+                        dst[x] = (static_cast<uint32_t>(r) << 16) |
+                                 (static_cast<uint32_t>(g) << 8) |
+                                 static_cast<uint32_t>(b);
+                    }
+                }
+                break;
+            case CZX_PIXEL_XRGB8888:
+                for (int y = 0; y < ah; ++y) {
+                    const auto* src32 = reinterpret_cast<const uint32_t*>(
+                        base + static_cast<size_t>(ay + y) * frame->pitch_bytes) + ax;
+                    uint32_t* dst = self->native_xrgb_.data() + static_cast<size_t>(y) * static_cast<size_t>(aw);
+                    std::copy_n(src32, aw, dst);
+                }
+                break;
+            case CZX_PIXEL_ABGR8888:
+                for (int y = 0; y < ah; ++y) {
+                    const auto* src32 = reinterpret_cast<const uint32_t*>(
+                        base + static_cast<size_t>(ay + y) * frame->pitch_bytes) + ax;
+                    uint32_t* dst = self->native_xrgb_.data() + static_cast<size_t>(y) * static_cast<size_t>(aw);
+                    for (int x = 0; x < aw; ++x) {
+                        const uint32_t p = src32[x];
+                        dst[x] = ((p & 0x000000FFu) << 16) |
+                                 (p & 0x0000FF00u) |
+                                 ((p >> 16) & 0x000000FFu);
+                    }
+                }
+                break;
+        }
+
+        self->native_w_ = aw;
+        self->native_h_ = ah;
+        self->native_par_num_ = frame->par_num ? frame->par_num : 1;
+        self->native_par_den_ = frame->par_den ? frame->par_den : 1;
+        self->native_margin_xrgb_ = margin_xrgb;
+        ++self->native_seq_;
+        return;
+    }
 
     if (!self->scale_thread_running_) {
         self->scaler_.render(*frame, self->scaler_cfg_, self->lcd_fb_.data());
@@ -923,7 +1192,15 @@ int EmulatorApp::run() {
     }
 
     cfg_.platform.headless = (cfg_.headless_frames > 0);
+    cfg_.platform.desktop_native =
+        !cfg_.platform.headless && !cfg_.force_lcd_sim &&
+        (cfg_.force_desktop || !cfg_.display_mode_explicit);
     platform_ = czx::platform::create_platform_bundle(cfg_.platform);
+    desktop_native_mode_ = !cfg_.platform.headless && platform_.display &&
+                           platform_.display->supports_native_present() &&
+                           cfg_.platform.desktop_native;
+    hud_.desktop_native = desktop_native_mode_;
+    hud_.desktop_scale = desktop_scale_;
 
     if (cfg_.headless_frames == 0) {
         start_scale_worker();
@@ -935,6 +1212,8 @@ int EmulatorApp::run() {
         }
         show_toast("ROM REQUIRED");
     }
+    sync_desktop_window_size(false);
+    update_window_title();
 
     czx::input::RouterCallbacks rcb{};
     rcb.user_data = this;
@@ -961,6 +1240,7 @@ int EmulatorApp::run() {
     auto last_tick = std::chrono::steady_clock::now();
     auto next_frame = last_tick + get_frame_period();
     std::vector<czx::input::RawKeyEvent> raw_events;
+    std::vector<czx::platform::RawMouseEvent> raw_mouse;
     int frames_done = 0;
 
     while (running_ && !g_signal_quit) {
@@ -973,11 +1253,18 @@ int EmulatorApp::run() {
         last_tick = now;
 
         raw_events.clear();
+        raw_mouse.clear();
         if (platform_.input) {
             platform_.input->poll(raw_events);
+            platform_.input->poll_mouse(raw_mouse);
         }
         for (const auto& ev : raw_events) {
             router_.handle_raw_key(ev);
+        }
+        if (!browser_.is_open() && !menu_.is_open()) {
+            for (const auto& m : raw_mouse) {
+                cb_guest_mouse(this, m.dx, m.dy, m.buttons);
+            }
         }
         router_.tick(dt_sec);
 
@@ -1030,7 +1317,54 @@ int EmulatorApp::run() {
             }
         }
 
-        if (scale_thread_running_) {
+        if (desktop_native_mode_) {
+            sync_desktop_window_size(false);
+            const bool activity_overlay = hud_.show_activity_indicator && hud_.activity_flags != 0u &&
+                                          !browser_.is_open() && !menu_.is_open();
+            const bool overlay_active = (!core_inst_) || browser_.is_open() || menu_.is_open() ||
+                                        hud_.alt_held || hud_.pan_hint_frames > 0 || hud_.toast_frames > 0 ||
+                                        activity_overlay;
+            const bool redraw_req = platform_.display && platform_.display->consume_redraw_request();
+            const bool has_new_frame = (native_seq_ != presented_native_seq_);
+            const bool need_present =
+                has_new_frame || overlay_active || prev_overlay_active_ || force_present_ || redraw_req;
+            if (need_present) {
+                if (!core_inst_) {
+                    render_core_error_screen();
+                    if (browser_.is_open()) {
+                        browser_.render(lcd_fb_.data());
+                    } else if (menu_.is_open()) {
+                        menu_.render(lcd_fb_.data(), build_menu_vm());
+                    }
+                    czx::video::render_hud(lcd_fb_.data(), hud_, last_layout_);
+                    if (platform_.display) {
+                        platform_.display->present(lcd_fb_.data());
+                    }
+                } else {
+                    presented_native_seq_ = native_seq_;
+                    czx::platform::NativeFrameView view{};
+                    view.xrgb = native_xrgb_.empty() ? nullptr : native_xrgb_.data();
+                    view.width = native_w_;
+                    view.height = native_h_;
+                    view.par_num = native_par_num_;
+                    view.par_den = native_par_den_;
+                    view.crt_4x3 = (scaler_cfg_.aspect_policy == czx::video::AspectPolicy::Crt4x3);
+                    view.margin_xrgb =
+                        (scaler_cfg_.margin_fill == czx::video::MarginFill::Auto) ? native_margin_xrgb_ : 0u;
+                    if (overlay_active) {
+                        build_overlay_argb();
+                        view.overlay_argb = overlay_argb_.data();
+                        view.dim_outside_overlay = browser_.is_open() || menu_.is_open();
+                    }
+                    if (platform_.display) {
+                        platform_.display->present_native(view);
+                    }
+                }
+                update_window_title();
+                force_present_ = false;
+            }
+            prev_overlay_active_ = overlay_active;
+        } else if (scale_thread_running_) {
             const bool activity_overlay = hud_.show_activity_indicator && hud_.activity_flags != 0u &&
                                           !browser_.is_open() && !menu_.is_open();
             const bool overlay_active = (!core_inst_) || browser_.is_open() || menu_.is_open() ||
@@ -1041,8 +1375,10 @@ int EmulatorApp::run() {
                 std::lock_guard<std::mutex> lock(scale_mtx_);
                 latest_seq = ready_seq_;
             }
+            const bool redraw_req = platform_.display && platform_.display->consume_redraw_request();
             const bool has_new_frame = (latest_seq != presented_seq_);
-            const bool need_present = has_new_frame || overlay_active || prev_overlay_active_ || force_present_;
+            const bool need_present =
+                has_new_frame || overlay_active || prev_overlay_active_ || force_present_ || redraw_req;
             if (need_present) {
                 if (core_inst_) {
                     std::lock_guard<std::mutex> lock(scale_mtx_);
@@ -1063,6 +1399,7 @@ int EmulatorApp::run() {
                 if (platform_.display) {
                     platform_.display->present(lcd_fb_.data());
                 }
+                update_window_title();
                 force_present_ = false;
             }
             prev_overlay_active_ = overlay_active;

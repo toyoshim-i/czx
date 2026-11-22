@@ -6,6 +6,14 @@
 
 namespace {
 
+int parse_desktop_scale(const char* s) noexcept {
+    if (!s) return 0;
+    if (std::strcmp(s, "1") == 0 || std::strcmp(s, "1x") == 0 || std::strcmp(s, "1X") == 0) return 1;
+    if (std::strcmp(s, "2") == 0 || std::strcmp(s, "2x") == 0 || std::strcmp(s, "2X") == 0) return 2;
+    if (std::strcmp(s, "3") == 0 || std::strcmp(s, "3x") == 0 || std::strcmp(s, "3X") == 0) return 3;
+    return 0;
+}
+
 void print_usage(const char* prog) {
     std::printf(
         "Usage: %s [options] [media_file]\n"
@@ -13,10 +21,13 @@ void print_usage(const char* prog) {
         "  --media <path>                Disk, tape, PRG, or cart image to load\n"
         "  --core-dir <dir>              Additional directory to scan for *_libretro.so cores\n"
         "  --data-dir <dir>              Override CZX data directory (default: $CZX_DATA_DIR or ~/czx)\n"
-        "  --mode <pan|overflow|aspect>  Initial display scaling mode (default: overflow)\n"
+        "  --desktop                     Use integer-scaled desktop window mode (default on PC, 2x)\n"
+        "  --scale <1|2|3>               Desktop window scale factor (implies --desktop, default: 2)\n"
+        "  --lcd, --sim                  Use 320x170 Cardputer Zero LCD simulator display mode\n"
+        "  --mode <pan|overflow|aspect>  Initial LCD scaling mode (implies --lcd, default: overflow)\n"
         "  --preset <0..4>               Initial test pattern preset (default: 0)\n"
         "  --borders                     Show overscan/PAL borders when present\n"
-        "  --crt43                       Use 4:3 CRT aspect policy in aspect mode\n"
+        "  --crt43                       Use 4:3 CRT aspect policy\n"
         "  --margin <auto|black>         Fill letterbox/pillarbox margins (default: auto)\n"
         "  --activity <on|off>           Show bottom-right tape/disk access indicator (default: on)\n"
         "  --tape-warp <on|off>          Uncapped fast-forward during MZ/C64 tape loads (default: on)\n"
@@ -48,8 +59,25 @@ int main(int argc, char** argv) {
             cfg.core_dir = argv[++i];
         } else if (std::strcmp(arg, "--data-dir") == 0 && i + 1 < argc) {
             cfg.data_dir = argv[++i];
+        } else if (std::strcmp(arg, "--desktop") == 0) {
+            cfg.force_desktop = true;
+            cfg.force_lcd_sim = false;
+        } else if (std::strcmp(arg, "--scale") == 0 && i + 1 < argc) {
+            const char* sc = argv[++i];
+            const int parsed = parse_desktop_scale(sc);
+            if (parsed == 0) {
+                std::fprintf(stderr, "Unknown scale: %s (expected 1, 2, or 3)\n", sc);
+                return 2;
+            }
+            cfg.desktop_scale = parsed;
+            cfg.force_desktop = true;
+            cfg.force_lcd_sim = false;
+        } else if (std::strcmp(arg, "--lcd") == 0 || std::strcmp(arg, "--sim") == 0) {
+            cfg.force_lcd_sim = true;
+            cfg.force_desktop = false;
         } else if (std::strcmp(arg, "--mode") == 0 && i + 1 < argc) {
             const char* m = argv[++i];
+            cfg.display_mode_explicit = true;
             if (std::strcmp(m, "pan") == 0) {
                 cfg.display_mode = czx::video::DisplayMode::NativePan;
             } else if (std::strcmp(m, "overflow") == 0) {

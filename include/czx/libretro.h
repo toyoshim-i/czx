@@ -421,6 +421,12 @@ struct retro_log_callback {
     retro_log_printf_t log;
 };
 
+typedef void (RETRO_CALLCONV* retro_set_led_state_t)(int led, int state);
+
+struct retro_led_interface {
+    retro_set_led_state_t set_led_state;
+};
+
 struct retro_message {
     const char* msg;
     unsigned frames;

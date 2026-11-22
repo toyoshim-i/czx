@@ -707,6 +707,7 @@ public:
             (is_emuz700_ && has_media_ && is_mz700_tape_ext(media_path_))) {
             pulsed_retrok_ = RETROK_KP_PLUS;
             pulsed_frames_ = 2;
+            pulsed_emitted_ = false;
             return true;
         }
         if (!has_disk_control()) {
@@ -729,17 +730,19 @@ public:
         g_active_instance = this;
         if (!game_loaded_ || !loader_->is_library_open()) return;
         audio_out_frame_.clear();
-        if (pulsed_frames_ > 0 && pulsed_retrok_ < retro_key_down_.size()) {
-            retro_key_down_[pulsed_retrok_] = true;
+        if (pulsed_frames_ > 0 && pulsed_retrok_ < retro_key_down_.size() && !pulsed_emitted_) {
+            emit_retro_key(true, pulsed_retrok_, 0, RETROKMOD_NONE);
+            pulsed_emitted_ = true;
         }
         loader_->symbols().retro_run();
         if (pulsed_frames_ > 0) {
             --pulsed_frames_;
             if (pulsed_frames_ == 0) {
                 if (pulsed_retrok_ < retro_key_down_.size()) {
-                    retro_key_down_[pulsed_retrok_] = false;
+                    emit_retro_key(false, pulsed_retrok_, 0, RETROKMOD_NONE);
                 }
                 pulsed_retrok_ = RETROK_UNKNOWN;
+                pulsed_emitted_ = false;
             }
         }
         if (!audio_out_frame_.empty() && host_.audio_samples) {
@@ -1090,6 +1093,7 @@ private:
     int synthetic_shift_count_ = 0;
     uint32_t pulsed_retrok_ = RETROK_UNKNOWN;
     int pulsed_frames_ = 0;
+    bool pulsed_emitted_ = false;
 
     std::vector<uint16_t> cached_16_;
     std::vector<uint32_t> cached_32_;
@@ -1488,6 +1492,7 @@ private:
         } else if (is_emuz700_) {
             options_["emuz700_joystick"] = "JOY-700";
             options_["emuz700_tape_sound"] = "disabled";
+            options_["emuz700_tape_turbo"] = "enabled";
         }
     }
 
@@ -1628,6 +1633,7 @@ private:
         phys_shift_held_ = false;
         pulsed_retrok_ = RETROK_UNKNOWN;
         pulsed_frames_ = 0;
+        pulsed_emitted_ = false;
         retro_key_down_.fill(false);
         joy_state_ = {0, 0};
         mouse_pending_dx_ = 0;

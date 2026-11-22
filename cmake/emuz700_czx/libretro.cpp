@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -31,9 +32,17 @@ retro_audio_sample_t g_audio_sample_cb = nullptr;
 retro_audio_sample_batch_t g_audio_batch_cb = nullptr;
 retro_input_poll_t g_input_poll_cb = nullptr;
 retro_input_state_t g_input_state_cb = nullptr;
+retro_log_printf_t g_log_cb = nullptr;
+retro_set_led_state_t g_led_cb = nullptr;
 
 EMU* g_emu = nullptr;
 VM* g_vm = nullptr;
+
+bool g_tape_turbo = true;
+std::string g_media_path;
+int g_last_led_fdd = -1;
+int g_last_led_tape = -1;
+int g_last_led_qd = -1;
 
 uint8_t g_key_buf[256]{};
 uint8_t g_vk_count[256]{};
@@ -49,13 +58,64 @@ std::string to_lower(std::string s) {
     return s;
 }
 
+__attribute__((format(printf, 2, 3)))
+void log_msg(enum retro_log_level level, const char* fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (g_log_cb) {
+        g_log_cb(level, "emuz700: %s\n", buf);
+    } else if (level >= RETRO_LOG_WARN) {
+        std::fprintf(stderr, "[emuz700] %s\n", buf);
+    }
+}
+
+void clear_leds() {
+    if (g_led_cb) {
+        g_led_cb(1, 0);
+        g_led_cb(2, 0);
+        g_led_cb(3, 0);
+    }
+    g_last_led_fdd = 0;
+    g_last_led_tape = 0;
+    g_last_led_qd = 0;
+}
+
+void update_leds() {
+    if (!g_led_cb || !g_vm) return;
+
+    const int fdd = static_cast<int>(g_vm->is_floppy_disk_accessed() & 0x0Fu);
+    const int qd = static_cast<int>(g_vm->is_quick_disk_accessed() & 0x0Fu);
+    int tape = 0;
+    if (g_vm->is_tape_playing(0)) {
+        tape = 100 + std::clamp(g_vm->get_tape_position(0), 0, 100);
+    } else if (g_vm->is_tape_recording(0)) {
+        tape = 300 + std::clamp(g_vm->get_tape_position(0), 0, 100);
+    }
+
+    if (fdd != g_last_led_fdd) {
+        g_led_cb(1, fdd);
+        g_last_led_fdd = fdd;
+    }
+    if (tape != g_last_led_tape) {
+        g_led_cb(2, tape);
+        g_last_led_tape = tape;
+    }
+    if (qd != g_last_led_qd) {
+        g_led_cb(3, qd);
+        g_last_led_qd = qd;
+    }
+}
+
 void init_default_config() {
     std::memset(&config, 0, sizeof(config));
     config.dipswitch = 0;
     config.joystick_type = DEVICE_JOYSTICK_JOY700;
     config.scan_line = false;
     config.sound_frequency = 6;  // 48000 Hz
-    config.sound_strict_rendering = true;
+    config.sound_strict_rendering = false;
     config.sound_noise_fdd = false;
     config.sound_noise_qd = false;
     config.sound_noise_cmt = false;
@@ -67,6 +127,7 @@ void init_default_config() {
         config.sound_volume_l[i] = 0;
         config.sound_volume_r[i] = 0;
     }
+    g_tape_turbo = true;
 }
 
 void apply_core_options() {
@@ -91,9 +152,41 @@ void apply_core_options() {
         config.sound_tape_signal = (std::strcmp(var.value, "enabled") == 0);
     }
 
+    var.key = "emuz700_tape_turbo";
+    var.value = nullptr;
+    if (g_env_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+        g_tape_turbo = (std::strcmp(var.value, "disabled") != 0);
+    }
+
     if (g_vm) {
         g_vm->update_config();
     }
+}
+
+bool mount_media(const char* path) {
+    if (!g_vm || !path || path[0] == '\0') return false;
+    const std::string ext = to_lower(std::filesystem::path(path).extension().string());
+    if (ext == ".q20") {
+        g_vm->open_quick_disk(0, path);
+        const bool ok = g_vm->is_quick_disk_inserted(0);
+        log_msg(ok ? RETRO_LOG_INFO : RETRO_LOG_ERROR, "mount QD (%s): %s", ok ? "ok" : "failed", path);
+        return ok;
+    }
+    if (ext == ".d88" || ext == ".2d") {
+        g_vm->open_floppy_disk(0, path, 0);
+        const bool ok = g_vm->is_floppy_disk_inserted(0);
+        log_msg(ok ? RETRO_LOG_INFO : RETRO_LOG_ERROR, "mount FDD (%s): %s", ok ? "ok" : "failed", path);
+        return ok;
+    }
+    if (ext == ".mzt" || ext == ".mzf" || ext == ".m12" ||
+        ext == ".wav" || ext == ".cas" || ext == ".tap" || ext == ".t77") {
+        g_vm->play_tape(0, path);
+        const bool ok = g_vm->is_tape_inserted(0);
+        log_msg(ok ? RETRO_LOG_INFO : RETRO_LOG_ERROR, "mount CMT (%s): %s", ok ? "ok" : "failed", path);
+        return ok;
+    }
+    log_msg(RETRO_LOG_ERROR, "unsupported media extension '%s': %s", ext.c_str(), path);
+    return false;
 }
 
 int retrok_to_vk(unsigned keycode) {
@@ -159,11 +252,18 @@ void RETRO_CALLCONV on_retro_keyboard(bool down, unsigned keycode, uint32_t, uin
     }
     g_retrok_down[keycode] = down;
 
-    if (down && keycode == RETROK_KP_PLUS && g_vm && g_vm->is_tape_inserted(0)) {
+    if (down && keycode == RETROK_KP_PLUS && g_vm) {
         if (g_vm->is_tape_playing(0)) {
             g_vm->push_stop(0);
+            log_msg(RETRO_LOG_INFO, "tape: manual stop");
         } else {
-            g_vm->push_play(0);
+            if ((!g_vm->is_tape_inserted(0) || g_vm->get_tape_position(0) >= 100) && !g_media_path.empty()) {
+                (void)mount_media(g_media_path.c_str());
+            }
+            if (g_vm->is_tape_inserted(0)) {
+                g_vm->push_play(0);
+                log_msg(RETRO_LOG_INFO, "tape: manual play");
+            }
         }
     }
     const int vk = retrok_to_vk(keycode);
@@ -182,6 +282,11 @@ void RETRO_CALLCONV on_retro_keyboard(bool down, unsigned keycode, uint32_t, uin
 }
 
 void destroy_vm() {
+    clear_leds();
+    g_media_path.clear();
+    g_last_led_fdd = -1;
+    g_last_led_tape = -1;
+    g_last_led_qd = -1;
     if (g_vm) {
         delete g_vm;
         g_vm = nullptr;
@@ -299,12 +404,22 @@ RETRO_EXPORT void retro_set_environment(retro_environment_t cb) {
     g_env_cb = cb;
     if (!cb) return;
 
+    retro_log_callback log_cb{};
+    if (cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &log_cb)) {
+        g_log_cb = log_cb.log;
+    }
+    retro_led_interface led_cb{};
+    if (cb(RETRO_ENVIRONMENT_GET_LED_INTERFACE, &led_cb)) {
+        g_led_cb = led_cb.set_led_state;
+    }
+
     bool no_game = true;
     cb(RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME, &no_game);
 
     static const retro_variable vars[] = {
         {"emuz700_joystick", "Joystick Adapter; JOY-700|AM7J|MZ-1X03"},
         {"emuz700_tape_sound", "Tape Sound; disabled|enabled"},
+        {"emuz700_tape_turbo", "Tape Fast Load; enabled|disabled"},
         {nullptr, nullptr},
     };
     cb(RETRO_ENVIRONMENT_SET_VARIABLES, const_cast<retro_variable*>(vars));
@@ -346,7 +461,12 @@ RETRO_EXPORT void retro_reset(void) {
     std::memset(g_retrok_down, 0, sizeof(g_retrok_down));
     if (g_vm) {
         g_vm->reset();
+        g_vm->close_tape(0);
+        if (!g_media_path.empty()) {
+            (void)mount_media(g_media_path.c_str());
+        }
     }
+    clear_leds();
 }
 
 RETRO_EXPORT bool retro_load_game(const struct retro_game_info* game) {
@@ -356,6 +476,15 @@ RETRO_EXPORT bool retro_load_game(const struct retro_game_info* game) {
     const char* sys_dir = nullptr;
     const char* save_dir = nullptr;
     if (g_env_cb) {
+        retro_log_callback log_cb{};
+        if (g_env_cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &log_cb)) {
+            g_log_cb = log_cb.log;
+        }
+        retro_led_interface led_cb{};
+        if (g_env_cb(RETRO_ENVIRONMENT_GET_LED_INTERFACE, &led_cb)) {
+            g_led_cb = led_cb.set_led_state;
+        }
+
         g_env_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &sys_dir);
         g_env_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &save_dir);
 
@@ -378,21 +507,20 @@ RETRO_EXPORT bool retro_load_game(const struct retro_game_info* game) {
         g_vm->set_sound_device_volume(ch, config.sound_volume_l[ch], config.sound_volume_r[ch]);
     }
     g_vm->reset();
+    g_vm->close_tape(0);
 
     if (game && game->path && game->path[0] != '\0') {
-        const std::string ext = to_lower(std::filesystem::path(game->path).extension().string());
-        if (ext == ".q20") {
-            g_vm->open_quick_disk(0, game->path);
-        } else if (ext == ".d88" || ext == ".2d") {
-            g_vm->open_floppy_disk(0, game->path, 0);
-        } else if (ext == ".mzt" || ext == ".mzf" || ext == ".m12" ||
-                   ext == ".wav" || ext == ".cas" || ext == ".tap" || ext == ".t77") {
-            g_vm->play_tape(0, game->path);
-        } else {
+        if (!mount_media(game->path)) {
             destroy_vm();
             return false;
         }
+        g_media_path = game->path;
     }
+
+    g_last_led_fdd = -1;
+    g_last_led_tape = -1;
+    g_last_led_qd = -1;
+    update_leds();
 
     return true;
 }
@@ -425,6 +553,20 @@ RETRO_EXPORT void retro_run(void) {
     if (extra_frames == 0) {
         g_vm->run();
     }
+    const bool skippable = g_vm->is_frame_skippable();
+    if (skippable && g_tape_turbo && !config.sound_tape_signal) {
+        constexpr int kMaxTurboExtraFrames = 32;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(12);
+        for (int i = 0; i < kMaxTurboExtraFrames; ++i) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                break;
+            }
+            g_vm->run();
+            if (!g_vm->is_frame_skippable()) {
+                break;
+            }
+        }
+    }
     if (pcm && g_audio_batch_cb) {
         g_audio_batch_cb(reinterpret_cast<const int16_t*>(pcm), static_cast<size_t>(kSoundSamples));
     }
@@ -440,6 +582,7 @@ RETRO_EXPORT void retro_run(void) {
     if (g_video_cb) {
         g_video_cb(g_fb_320x200, 320u, 200u, 320u * sizeof(uint16_t));
     }
+    update_leds();
 }
 
 RETRO_EXPORT unsigned retro_get_region(void) {

@@ -33,6 +33,17 @@ std::string resolve_data_dir(const std::string& explicit_dir) {
     return "/tmp/czx";
 }
 
+bool is_tape_media_label(const std::string& label) {
+    std::string ext = fs::path(label).extension().string();
+    for (char& ch : ext) {
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = static_cast<char>(ch - 'A' + 'a');
+        }
+    }
+    return ext == ".tap" || ext == ".mzt" || ext == ".mzf" || ext == ".m12" ||
+           ext == ".cas" || ext == ".wav" || ext == ".t77" || ext == ".cmt" || ext == ".t88";
+}
+
 }  // namespace
 
 EmulatorApp::EmulatorApp(AppConfig cfg)
@@ -304,15 +315,7 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
                               ? core_api_->get_media_label(core_inst_)
                               : nullptr;
         vm.preset_or_media_label = lbl ? lbl : "None";
-        const auto& l = vm.preset_or_media_label;
-        if (l.size() >= 4) {
-            auto eq = [](char a, char b) {
-                return ((a >= 'A' && a <= 'Z') ? static_cast<char>(a - 'A' + 'a') : a) == b;
-            };
-            const size_t n = l.size();
-            vm.is_tape_media = eq(l[n - 4], '.') && eq(l[n - 3], 't') &&
-                               eq(l[n - 2], 'a') && eq(l[n - 1], 'p');
-        }
+        vm.is_tape_media = is_tape_media_label(vm.preset_or_media_label);
     } else if (core_api_ && core_inst_ && core_api_->get_preset_name) {
         vm.preset_or_media_label = core_api_->get_preset_name(core_inst_, preset_index_);
     } else {

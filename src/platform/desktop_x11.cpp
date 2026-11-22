@@ -5,6 +5,7 @@
 
 #include <X11/XKBlib.h>
 #include <X11/keysym.h>
+#include <X11/XF86keysym.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -192,6 +193,11 @@ czx_key_t keysym_to_czx(KeySym ks) noexcept {
         case XK_Super_R: return CZX_KEY_RMETA;
         case XK_Print: return CZX_KEY_PRINT;
         case XK_Help: return CZX_KEY_HELP;
+#ifdef XF86XK_AudioMute
+        case XF86XK_AudioMute: return CZX_KEY_MUTE;
+        case XF86XK_AudioLowerVolume: return CZX_KEY_VOLUMEDOWN;
+        case XF86XK_AudioRaiseVolume: return CZX_KEY_VOLUMEUP;
+#endif
         default: return CZX_KEY_NONE;
     }
 }

@@ -1,6 +1,7 @@
 #include "platform/linux_audio.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -19,6 +20,10 @@ constexpr int kPaStreamReady = 2;
 constexpr int kPaStreamFailed = 3;
 constexpr int kPaStreamTerminated = 4;
 constexpr int kPaSeekRelative = 0;
+constexpr int kPaOperationRunning = 0;
+constexpr int kPaOperationDone = 1;
+constexpr uint32_t kPaVolumeNorm = 0x10000u;
+constexpr size_t kPaChannelsMax = 32u;
 
 template <typename Fn>
 bool resolve_sym(void* dl, const char* name, Fn& out) {
@@ -32,6 +37,39 @@ struct LinuxPulseAudio::PaSampleSpec {
     int format;
     uint32_t rate;
     uint8_t channels;
+};
+
+struct LinuxPulseAudio::PaChannelMap {
+    uint8_t channels;
+    int map[kPaChannelsMax];
+};
+
+struct LinuxPulseAudio::PaCVolume {
+    uint8_t channels;
+    uint32_t values[kPaChannelsMax];
+};
+
+struct LinuxPulseAudio::PaServerInfo {
+    const char* user_name;
+    const char* host_name;
+    const char* server_version;
+    const char* server_name;
+    PaSampleSpec sample_spec;
+    const char* default_sink_name;
+    const char* default_source_name;
+    uint32_t cookie;
+    PaChannelMap channel_map;
+};
+
+struct LinuxPulseAudio::PaSinkInfo {
+    const char* name;
+    uint32_t index;
+    const char* description;
+    PaSampleSpec sample_spec;
+    PaChannelMap channel_map;
+    uint32_t owner_module;
+    PaCVolume volume;
+    int mute;
 };
 
 struct LinuxPulseAudio::PaBufferAttr {
@@ -93,6 +131,7 @@ void LinuxPulseAudio::cleanup() {
     }
     active_ = false;
     sample_rate_ = 0;
+    target_sink_.clear();
 
     fn_ml_new_ = nullptr;
     fn_ml_start_ = nullptr;
@@ -119,6 +158,14 @@ void LinuxPulseAudio::cleanup() {
     fn_stream_writable_size_ = nullptr;
     fn_stream_write_ = nullptr;
     fn_strerror_ = nullptr;
+    fn_ctx_get_server_info_ = nullptr;
+    fn_ctx_get_sink_info_by_name_ = nullptr;
+    fn_ctx_set_sink_volume_by_name_ = nullptr;
+    fn_ctx_set_sink_mute_by_name_ = nullptr;
+    fn_op_get_state_ = nullptr;
+    fn_op_unref_ = nullptr;
+    fn_cvolume_set_ = nullptr;
+    fn_cvolume_avg_ = nullptr;
 }
 
 bool LinuxPulseAudio::init(uint32_t sample_rate) {
@@ -130,6 +177,9 @@ bool LinuxPulseAudio::init_with_sink(uint32_t sample_rate, const char* sink_dev)
         return true;
     }
     cleanup();
+    if (sink_dev && sink_dev[0] != '\0') {
+        target_sink_ = sink_dev;
+    }
 
     dl_ = dlopen("libpulse.so.0", RTLD_LAZY);
     if (!dl_) {
@@ -162,6 +212,14 @@ bool LinuxPulseAudio::init_with_sink(uint32_t sample_rate, const char* sink_dev)
         resolve_sym(dl_, "pa_stream_writable_size", fn_stream_writable_size_) &&
         resolve_sym(dl_, "pa_stream_write", fn_stream_write_);
     resolve_sym(dl_, "pa_strerror", fn_strerror_);
+    resolve_sym(dl_, "pa_context_get_server_info", fn_ctx_get_server_info_);
+    resolve_sym(dl_, "pa_context_get_sink_info_by_name", fn_ctx_get_sink_info_by_name_);
+    resolve_sym(dl_, "pa_context_set_sink_volume_by_name", fn_ctx_set_sink_volume_by_name_);
+    resolve_sym(dl_, "pa_context_set_sink_mute_by_name", fn_ctx_set_sink_mute_by_name_);
+    resolve_sym(dl_, "pa_operation_get_state", fn_op_get_state_);
+    resolve_sym(dl_, "pa_operation_unref", fn_op_unref_);
+    resolve_sym(dl_, "pa_cvolume_set", fn_cvolume_set_);
+    resolve_sym(dl_, "pa_cvolume_avg", fn_cvolume_avg_);
 
     if (!syms_ok) {
         std::fprintf(stderr, "czx: PulseAudio symbol resolution failed in libpulse.so.0\n");
@@ -271,6 +329,201 @@ void LinuxPulseAudio::write_samples(const int16_t* stereo_s16, size_t frame_coun
     fn_ml_unlock_(ml_);
 }
 
+bool LinuxPulseAudio::wait_operation_locked(PaOperation* op) {
+    if (!op || !fn_op_get_state_ || !fn_op_unref_) return false;
+    while (fn_op_get_state_(op) == kPaOperationRunning) {
+        if (!fn_ctx_get_state_ || fn_ctx_get_state_(ctx_) != kPaContextReady) {
+            fn_op_unref_(op);
+            return false;
+        }
+        fn_ml_wait_(ml_);
+    }
+    const int st = fn_op_get_state_(op);
+    fn_op_unref_(op);
+    return st == kPaOperationDone;
+}
+
+bool LinuxPulseAudio::query_sink_locked(std::string& sink_name, PaCVolume& vol, bool& muted) {
+    if (!active_ || !ml_ || !ctx_ || fn_ctx_get_state_(ctx_) != kPaContextReady) return false;
+    if (!fn_ctx_get_sink_info_by_name_ || !fn_op_get_state_ || !fn_op_unref_ || !fn_cvolume_avg_) {
+        return false;
+    }
+
+    sink_name = target_sink_;
+    if (sink_name.empty() && fn_ctx_get_server_info_) {
+        struct ServerQuery {
+            PaThreadedMainloop* ml = nullptr;
+            FnMlSignal signal = nullptr;
+            std::string default_sink;
+        } sq{ml_, fn_ml_signal_, {}};
+
+        auto on_server = [](PaContext*, const PaServerInfo* info, void* userdata) {
+            auto* q = static_cast<ServerQuery*>(userdata);
+            if (info && info->default_sink_name && info->default_sink_name[0] != '\0') {
+                q->default_sink = info->default_sink_name;
+            }
+            if (q->ml && q->signal) q->signal(q->ml, 0);
+        };
+        PaOperation* op = fn_ctx_get_server_info_(ctx_, on_server, &sq);
+        (void)wait_operation_locked(op);
+        sink_name = std::move(sq.default_sink);
+    }
+    if (sink_name.empty()) {
+        sink_name = "@DEFAULT_SINK@";
+    }
+
+    struct SinkQuery {
+        PaThreadedMainloop* ml = nullptr;
+        FnMlSignal signal = nullptr;
+        std::string resolved_name;
+        PaCVolume vol{};
+        bool muted = false;
+        bool ok = false;
+    } sink_q{ml_, fn_ml_signal_, {}, {}, false, false};
+
+    auto on_sink = [](PaContext*, const PaSinkInfo* info, int eol, void* userdata) {
+        auto* q = static_cast<SinkQuery*>(userdata);
+        if (!eol && info) {
+            if (info->name && info->name[0] != '\0') {
+                q->resolved_name = info->name;
+            }
+            q->vol = info->volume;
+            q->muted = (info->mute != 0);
+            q->ok = true;
+        }
+        if (q->ml && q->signal) q->signal(q->ml, 0);
+    };
+
+    PaOperation* op = fn_ctx_get_sink_info_by_name_(ctx_, sink_name.c_str(), on_sink, &sink_q);
+    if (!wait_operation_locked(op) || !sink_q.ok) {
+        return false;
+    }
+    if (!sink_q.resolved_name.empty()) {
+        sink_name = std::move(sink_q.resolved_name);
+    }
+    vol = sink_q.vol;
+    muted = sink_q.muted;
+    return true;
+}
+
+bool LinuxPulseAudio::get_system_volume(SystemVolumeState& out) {
+    if (!active_ || !ml_ || !ctx_) return false;
+    fn_ml_lock_(ml_);
+    std::string sink_name;
+    PaCVolume vol{};
+    bool muted = false;
+    const bool ok = query_sink_locked(sink_name, vol, muted);
+    if (ok) {
+        const uint32_t avg = fn_cvolume_avg_(&vol);
+        out.percent = std::clamp(
+            static_cast<int>(std::lround(static_cast<double>(avg) * 100.0 /
+                                         static_cast<double>(kPaVolumeNorm))),
+            0, 100);
+        out.muted = muted;
+    }
+    fn_ml_unlock_(ml_);
+    return ok;
+}
+
+bool LinuxPulseAudio::adjust_system_volume(int delta_percent, SystemVolumeState& out) {
+    if (!active_ || !ml_ || !ctx_ || !fn_ctx_set_sink_volume_by_name_ || !fn_cvolume_set_) {
+        return false;
+    }
+    fn_ml_lock_(ml_);
+    std::string sink_name;
+    PaCVolume vol{};
+    bool muted = false;
+    if (!query_sink_locked(sink_name, vol, muted)) {
+        fn_ml_unlock_(ml_);
+        return false;
+    }
+
+    const uint32_t cur_avg = fn_cvolume_avg_(&vol);
+    const int cur_pct = std::clamp(
+        static_cast<int>(std::lround(static_cast<double>(cur_avg) * 100.0 /
+                                     static_cast<double>(kPaVolumeNorm))),
+        0, 100);
+    const int next_pct = std::clamp(cur_pct + delta_percent, 0, 100);
+    const uint32_t raw_vol = static_cast<uint32_t>(std::clamp(
+        static_cast<long>(std::lround(static_cast<double>(next_pct) *
+                                      static_cast<double>(kPaVolumeNorm) / 100.0)),
+        0L, static_cast<long>(kPaVolumeNorm)));
+
+    PaCVolume next_cvol = vol;
+    const unsigned ch =
+        (vol.channels > 0 && vol.channels <= kPaChannelsMax) ? vol.channels : 2u;
+    fn_cvolume_set_(&next_cvol, ch, raw_vol);
+
+    struct SuccessQuery {
+        PaThreadedMainloop* ml = nullptr;
+        FnMlSignal signal = nullptr;
+        bool ok = false;
+    };
+    auto on_success = [](PaContext*, int success, void* userdata) {
+        auto* q = static_cast<SuccessQuery*>(userdata);
+        q->ok = (success != 0);
+        if (q->ml && q->signal) q->signal(q->ml, 0);
+    };
+
+    if (delta_percent > 0 && muted && fn_ctx_set_sink_mute_by_name_) {
+        SuccessQuery mq{ml_, fn_ml_signal_, false};
+        PaOperation* mop = fn_ctx_set_sink_mute_by_name_(ctx_, sink_name.c_str(), 0, on_success, &mq);
+        if (wait_operation_locked(mop) && mq.ok) {
+            muted = false;
+        }
+    }
+
+    SuccessQuery vq{ml_, fn_ml_signal_, false};
+    PaOperation* vop = fn_ctx_set_sink_volume_by_name_(ctx_, sink_name.c_str(), &next_cvol, on_success, &vq);
+    const bool ok = wait_operation_locked(vop) && vq.ok;
+    if (ok) {
+        out.percent = next_pct;
+        out.muted = muted;
+    }
+    fn_ml_unlock_(ml_);
+    return ok;
+}
+
+bool LinuxPulseAudio::toggle_system_mute(SystemVolumeState& out) {
+    if (!active_ || !ml_ || !ctx_ || !fn_ctx_set_sink_mute_by_name_) {
+        return false;
+    }
+    fn_ml_lock_(ml_);
+    std::string sink_name;
+    PaCVolume vol{};
+    bool muted = false;
+    if (!query_sink_locked(sink_name, vol, muted)) {
+        fn_ml_unlock_(ml_);
+        return false;
+    }
+
+    const bool next_muted = !muted;
+    struct SuccessQuery {
+        PaThreadedMainloop* ml = nullptr;
+        FnMlSignal signal = nullptr;
+        bool ok = false;
+    } mq{ml_, fn_ml_signal_, false};
+    auto on_success = [](PaContext*, int success, void* userdata) {
+        auto* q = static_cast<SuccessQuery*>(userdata);
+        q->ok = (success != 0);
+        if (q->ml && q->signal) q->signal(q->ml, 0);
+    };
+
+    PaOperation* op = fn_ctx_set_sink_mute_by_name_(
+        ctx_, sink_name.c_str(), next_muted ? 1 : 0, on_success, &mq);
+    const bool ok = wait_operation_locked(op) && mq.ok;
+    if (ok) {
+        const uint32_t avg = fn_cvolume_avg_(&vol);
+        out.percent = std::clamp(
+            static_cast<int>(std::lround(static_cast<double>(avg) * 100.0 /
+                                         static_cast<double>(kPaVolumeNorm))),
+            0, 100);
+        out.muted = next_muted;
+    }
+    fn_ml_unlock_(ml_);
+    return ok;
+}
+
 bool LinuxAudio::init(uint32_t sample_rate) {
     const char* env_dev = std::getenv("CZX_AUDIO_DEVICE");
     if (env_dev && env_dev[0] != '\0') {
@@ -327,6 +580,27 @@ const char* LinuxAudio::backend_name() const {
             break;
     }
     return "null-audio";
+}
+
+bool LinuxAudio::get_system_volume(SystemVolumeState& out) {
+    if (active_ == ActiveBackend::Pulse && pulse_.get_system_volume(out)) {
+        return true;
+    }
+    return alsa_.get_system_volume(out);
+}
+
+bool LinuxAudio::adjust_system_volume(int delta_percent, SystemVolumeState& out) {
+    if (active_ == ActiveBackend::Pulse && pulse_.adjust_system_volume(delta_percent, out)) {
+        return true;
+    }
+    return alsa_.adjust_system_volume(delta_percent, out);
+}
+
+bool LinuxAudio::toggle_system_mute(SystemVolumeState& out) {
+    if (active_ == ActiveBackend::Pulse && pulse_.toggle_system_mute(out)) {
+        return true;
+    }
+    return alsa_.toggle_system_mute(out);
 }
 
 }  // namespace czx::platform

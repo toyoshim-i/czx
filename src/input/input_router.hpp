@@ -23,6 +23,9 @@ enum class HostCommand {
     SetModeAspectFit,
     ToggleInputMode,
     ToggleMenu,
+    VolumeDown,
+    VolumeUp,
+    VolumeMute,
 };
 
 struct PanDelta {
@@ -103,6 +106,7 @@ private:
     void clear_mouse_state();
     void update_modifier(czx_key_t key, bool pressed);
     bool handle_alt_shortcut(const RawKeyEvent& raw);
+    bool handle_volume_shortcut(const RawKeyEvent& raw);
     RawKeyEvent apply_fn_chord(const RawKeyEvent& raw);
     bool handle_pan_key(czx_key_t key, bool pressed, bool repeat);
     bool handle_joystick_key(czx_key_t key, bool pressed);

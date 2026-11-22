@@ -3,6 +3,7 @@
 #include "input/tca8418_keymap.hpp"
 #include "platform/platform.hpp"
 
+#include <sys/types.h>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,7 @@ private:
         int fd = -1;
         std::string path;
         bool is_tca8418 = false;
+        dev_t rdev = 0;
     };
 
     std::string preferred_device_;
@@ -29,6 +31,7 @@ private:
     std::vector<Device> devices_;
 
     bool try_open(const std::string& path, bool require_keypad_caps);
+    bool try_open_volume_device(const std::string& path);
     void cleanup();
 };
 

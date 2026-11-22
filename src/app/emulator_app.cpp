@@ -843,6 +843,29 @@ void EmulatorApp::handle_host_command(czx::input::HostCommand cmd) {
             }
             break;
         }
+        case czx::input::HostCommand::VolumeDown:
+        case czx::input::HostCommand::VolumeUp:
+        case czx::input::HostCommand::VolumeMute: {
+            czx::platform::SystemVolumeState st{};
+            bool ok = false;
+            if (platform_.audio) {
+                if (cmd == czx::input::HostCommand::VolumeMute) {
+                    ok = platform_.audio->toggle_system_mute(st);
+                } else {
+                    const int delta = (cmd == czx::input::HostCommand::VolumeDown) ? -5 : 5;
+                    ok = platform_.audio->adjust_system_volume(delta, st);
+                }
+            }
+            if (ok && st.percent >= 0) {
+                hud_.volume_percent = st.percent;
+                hud_.volume_muted = st.muted;
+                hud_.volume_osd_frames = 75;
+            } else {
+                show_toast("VOL: N/A");
+            }
+            force_present_ = true;
+            break;
+        }
         case czx::input::HostCommand::None:
             break;
     }
@@ -1660,6 +1683,7 @@ int EmulatorApp::run() {
 
         if (hud_.pan_hint_frames > 0) --hud_.pan_hint_frames;
         if (hud_.toast_frames > 0) --hud_.toast_frames;
+        if (hud_.volume_osd_frames > 0) --hud_.volume_osd_frames;
         hud_.alt_held = router_.alt_held();
         hud_.panning_active = router_.panning_held();
         hud_.input_mode = static_cast<int>(router_.input_mode());
@@ -1721,7 +1745,7 @@ int EmulatorApp::run() {
                                           !browser_.is_open() && !menu_.is_open();
             const bool overlay_active = (!core_inst_) || browser_.is_open() || menu_.is_open() ||
                                         hud_.alt_held || hud_.pan_hint_frames > 0 || hud_.toast_frames > 0 ||
-                                        activity_overlay;
+                                        hud_.volume_osd_frames > 0 || activity_overlay;
             const bool redraw_req = platform_.display && platform_.display->consume_redraw_request();
             const bool has_new_frame = (native_seq_ != presented_native_seq_);
             const bool need_present =
@@ -1767,7 +1791,7 @@ int EmulatorApp::run() {
                                           !browser_.is_open() && !menu_.is_open();
             const bool overlay_active = (!core_inst_) || browser_.is_open() || menu_.is_open() ||
                                         hud_.alt_held || hud_.pan_hint_frames > 0 || hud_.toast_frames > 0 ||
-                                        activity_overlay;
+                                        hud_.volume_osd_frames > 0 || activity_overlay;
             uint64_t latest_seq = 0;
             {
                 std::lock_guard<std::mutex> lock(scale_mtx_);

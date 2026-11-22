@@ -27,6 +27,9 @@ struct HudState {
     uint32_t activity_flags = 0;
     int8_t activity_tape_percent = -1;
     uint8_t activity_drive_mask = 0;
+    uint32_t volume_osd_frames = 0;
+    int volume_percent = -1;
+    bool volume_muted = false;
 };
 
 std::string format_activity_label(uint32_t flags, int8_t tape_percent, uint8_t drive_mask);

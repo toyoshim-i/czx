@@ -62,6 +62,16 @@ void test_tca8418_keymap() {
     // Standard keyboard (non-TCA8418) preserves Linux KEY_APOSTROPHE (40) with no forced SYM codepoint
     const auto apos = km.map_evdev(40, 1, false);
     CHECK(apos.key == CZX_KEY_APOSTROPHE && apos.codepoint == 0);
+
+    // Hardware volume keys map identically on TCA8418 and standard evdev devices
+    for (bool tca : {true, false}) {
+        const auto mute = km.map_evdev(113, 1, tca);
+        const auto vdn = km.map_evdev(114, 1, tca);
+        const auto vup = km.map_evdev(115, 1, tca);
+        CHECK(mute.key == CZX_KEY_MUTE && mute.pressed);
+        CHECK(vdn.key == CZX_KEY_VOLUMEDOWN && vdn.pressed);
+        CHECK(vup.key == CZX_KEY_VOLUMEUP && vup.pressed);
+    }
 }
 
 void test_alt_shortcuts_and_panning() {
@@ -208,6 +218,84 @@ void test_mouse_mode() {
     CHECK(spy.mouse_events.back().buttons == 0);
 }
 
+void test_volume_shortcuts() {
+    Spy spy;
+    InputRouter router;
+    router.set_callbacks(RouterCallbacks{on_cmd, on_pan, on_menu, on_guest, on_joy, on_mouse, &spy});
+
+    auto has_asd = [](const std::vector<czx_key_event_t>& list) {
+        for (const auto& ev : list) {
+            if (ev.key == CZX_KEY_A || ev.key == CZX_KEY_S || ev.key == CZX_KEY_D ||
+                ev.key == CZX_KEY_MUTE || ev.key == CZX_KEY_VOLUMEDOWN || ev.key == CZX_KEY_VOLUMEUP) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // Dedicated volume keys during gameplay (repeat allowed for Up/Down, ignored for Mute)
+    router.handle_raw_key({CZX_KEY_VOLUMEUP, true, false, 0});
+    router.handle_raw_key({CZX_KEY_VOLUMEUP, true, true, 0});
+    router.handle_raw_key({CZX_KEY_VOLUMEUP, false, false, 0});
+    router.handle_raw_key({CZX_KEY_VOLUMEDOWN, true, false, 0});
+    router.handle_raw_key({CZX_KEY_VOLUMEDOWN, true, true, 0});
+    router.handle_raw_key({CZX_KEY_VOLUMEDOWN, false, false, 0});
+    router.handle_raw_key({CZX_KEY_MUTE, true, false, 0});
+    router.handle_raw_key({CZX_KEY_MUTE, true, true, 0});
+    router.handle_raw_key({CZX_KEY_MUTE, false, false, 0});
+    CHECK(spy.cmds.size() == 5);
+    CHECK(spy.cmds[0] == HostCommand::VolumeUp);
+    CHECK(spy.cmds[1] == HostCommand::VolumeUp);
+    CHECK(spy.cmds[2] == HostCommand::VolumeDown);
+    CHECK(spy.cmds[3] == HostCommand::VolumeDown);
+    CHECK(spy.cmds[4] == HostCommand::VolumeMute);
+    CHECK(!has_asd(spy.guest_keys));
+
+    // Cardputer Zero Fn + A/S/D shortcuts during gameplay, including releasing Fn before key
+    spy.cmds.clear();
+    spy.guest_keys.clear();
+    router.handle_raw_key({CZX_KEY_FN, true, false, 0});
+    router.handle_raw_key({CZX_KEY_D, true, false, 'd'});
+    router.handle_raw_key({CZX_KEY_D, true, true, 'd'});
+    router.handle_raw_key({CZX_KEY_FN, false, false, 0});
+    router.handle_raw_key({CZX_KEY_D, false, false, 0});
+    router.handle_raw_key({CZX_KEY_FN, true, false, 0});
+    router.handle_raw_key({CZX_KEY_S, true, false, 's'});
+    router.handle_raw_key({CZX_KEY_S, false, false, 0});
+    router.handle_raw_key({CZX_KEY_A, true, false, 'a'});
+    router.handle_raw_key({CZX_KEY_A, true, true, 'a'});
+    router.handle_raw_key({CZX_KEY_A, false, false, 0});
+    router.handle_raw_key({CZX_KEY_FN, false, false, 0});
+    CHECK(spy.cmds.size() == 4);
+    CHECK(spy.cmds[0] == HostCommand::VolumeUp);
+    CHECK(spy.cmds[1] == HostCommand::VolumeUp);
+    CHECK(spy.cmds[2] == HostCommand::VolumeDown);
+    CHECK(spy.cmds[3] == HostCommand::VolumeMute);
+    CHECK(!has_asd(spy.guest_keys));
+
+    // Same volume keys and Fn + A/S/D work inside open menu without leaking to menu handlers
+    spy.cmds.clear();
+    spy.menu_keys.clear();
+    spy.guest_keys.clear();
+    router.set_menu_open(true);
+    router.handle_raw_key({CZX_KEY_VOLUMEUP, true, false, 0});
+    router.handle_raw_key({CZX_KEY_VOLUMEUP, false, false, 0});
+    router.handle_raw_key({CZX_KEY_FN, true, false, 0});
+    router.handle_raw_key({CZX_KEY_S, true, false, 's'});
+    router.handle_raw_key({CZX_KEY_FN, false, false, 0});
+    router.handle_raw_key({CZX_KEY_S, false, false, 0});
+    router.handle_raw_key({CZX_KEY_FN, true, false, 0});
+    router.handle_raw_key({CZX_KEY_A, true, false, 'a'});
+    router.handle_raw_key({CZX_KEY_A, false, false, 0});
+    router.handle_raw_key({CZX_KEY_FN, false, false, 0});
+    CHECK(spy.cmds.size() == 3);
+    CHECK(spy.cmds[0] == HostCommand::VolumeUp);
+    CHECK(spy.cmds[1] == HostCommand::VolumeDown);
+    CHECK(spy.cmds[2] == HostCommand::VolumeMute);
+    CHECK(!has_asd(spy.menu_keys));
+    CHECK(!has_asd(spy.guest_keys));
+}
+
 }  // namespace
 
 int main() {
@@ -216,6 +304,7 @@ int main() {
     test_joystick_and_menu_routing();
     test_fn_chords();
     test_mouse_mode();
+    test_volume_shortcuts();
     std::printf("test_input_router: all assertions passed\n");
     return 0;
 }

@@ -112,6 +112,29 @@ void test_render_hud_activity_overlay() {
     hud.alt_held = false;
     czx::video::render_hud(fb.data(), hud, layout);
     CHECK(count_nonzero_in_rect(fb, 4, 4, 70, 18) == 0);
+
+    // Volume OSD draws centered pill when running, top-right inside header when menu open, nothing when timer=0.
+    std::fill(fb.begin(), fb.end(), 0);
+    hud.show_activity_indicator = false;
+    hud.fps_x10 = 0;
+    hud.volume_osd_frames = 30;
+    hud.volume_percent = 65;
+    hud.volume_muted = false;
+    czx::video::render_hud(fb.data(), hud, layout);
+    CHECK(count_nonzero_in_rect(fb, 99, 5, 221, 18) > 100);
+
+    std::fill(fb.begin(), fb.end(), 0);
+    hud.menu_open = true;
+    hud.volume_percent = 30;
+    hud.volume_muted = true;
+    czx::video::render_hud(fb.data(), hud, layout);
+    CHECK(count_nonzero_in_rect(fb, 183, 4, 305, 17) > 100);
+
+    std::fill(fb.begin(), fb.end(), 0);
+    hud.menu_open = false;
+    hud.volume_osd_frames = 0;
+    czx::video::render_hud(fb.data(), hud, layout);
+    CHECK(count_nonzero_in_rect(fb, 0, 0, czx::video::kLcdWidth, czx::video::kLcdHeight) == 0);
 }
 
 void test_overlay_menu() {

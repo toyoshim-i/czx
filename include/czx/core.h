@@ -88,6 +88,9 @@ typedef enum czx_key {
     CZX_KEY_FN,
     CZX_KEY_PRINT,
     CZX_KEY_HELP,
+    CZX_KEY_MUTE,
+    CZX_KEY_VOLUMEDOWN,
+    CZX_KEY_VOLUMEUP,
 } czx_key_t;
 
 enum {

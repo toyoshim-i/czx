@@ -228,6 +228,9 @@ czx_key_t Tca8418Keymap::evdev_to_czx_key(uint16_t code) noexcept {
         case KEY_RIGHTMETA: return CZX_KEY_RMETA;
         case KEY_SYSRQ: return CZX_KEY_PRINT;
         case KEY_HELP: return CZX_KEY_HELP;
+        case KEY_MUTE: return CZX_KEY_MUTE;
+        case KEY_VOLUMEDOWN: return CZX_KEY_VOLUMEDOWN;
+        case KEY_VOLUMEUP: return CZX_KEY_VOLUMEUP;
         case kEvdevSymKeyCd:
         case KEY_COMPOSE: return CZX_KEY_SYM;
         case kEvdevFnKeyDvd:

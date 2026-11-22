@@ -203,6 +203,47 @@ void draw_fps_indicator(Rgb565Canvas& canvas, const HudState& hud) {
     canvas.draw_text(kBoxX + 13, kBoxY + 3, label, pack_rgb565(245, 250, 255), 1);
 }
 
+void draw_volume_osd(Rgb565Canvas& canvas, const HudState& hud) {
+    if (hud.volume_osd_frames == 0 || hud.volume_percent < 0) return;
+
+    constexpr int kBoxW = 122;
+    constexpr int kBoxH = 13;
+    constexpr int kBarW = 48;
+    constexpr int kBarH = 5;
+
+    const int bx = hud.menu_open ? (305 - kBoxW) : ((kLcdWidth - kBoxW) / 2);
+    const int by = hud.menu_open ? 4
+                                 : ((hud.toast_frames > 0 && !hud.toast_text.empty()) ? 22 : 5);
+
+    const uint16_t border_col = hud.volume_muted ? pack_rgb565(245, 166, 35) : pack_rgb565(80, 210, 255);
+    const uint16_t label_col = hud.volume_muted ? pack_rgb565(255, 200, 95) : pack_rgb565(180, 230, 255);
+
+    canvas.fill_rect_alpha(bx, by, kBoxW, kBoxH, pack_rgb565(10, 14, 22), 220);
+    canvas.draw_rect(bx, by, kBoxW, kBoxH, border_col);
+    canvas.draw_text(bx + 5, by + 3, "VOL", label_col, 1);
+
+    const int bar_x = bx + 27;
+    const int bar_y = by + 4;
+    canvas.fill_rect(bar_x, bar_y, kBarW, kBarH, pack_rgb565(30, 42, 60));
+
+    const int clamped = std::clamp(hud.volume_percent, 0, 100);
+    const int fill_w = (kBarW * clamped + 50) / 100;
+    if (fill_w > 0) {
+        const uint16_t fill_col = hud.volume_muted ? pack_rgb565(110, 100, 80) : pack_rgb565(88, 224, 255);
+        canvas.fill_rect(bar_x, bar_y, fill_w, kBarH, fill_col);
+    }
+
+    char val[16];
+    if (hud.volume_muted) {
+        std::snprintf(val, sizeof(val), "MUTE");
+    } else {
+        std::snprintf(val, sizeof(val), "%d%%", clamped);
+    }
+    const int vw = Rgb565Canvas::text_width(val, 1);
+    const uint16_t val_col = hud.volume_muted ? pack_rgb565(255, 205, 95) : pack_rgb565(245, 250, 255);
+    canvas.draw_text(bx + kBoxW - 5 - vw, by + 3, val, val_col, 1);
+}
+
 }  // namespace
 
 std::string format_activity_label(uint32_t flags, int8_t tape_percent, uint8_t drive_mask) {
@@ -272,6 +313,7 @@ void render_hud(uint16_t* fb_rgb565, const HudState& hud, const ViewportLayout& 
     draw_scrollbars(canvas, hud, layout);
     draw_activity_indicator(canvas, hud, layout);
     draw_fps_indicator(canvas, hud);
+    draw_volume_osd(canvas, hud);
 
     if (hud.toast_frames > 0 && !hud.toast_text.empty() && !hud.menu_open) {
         const std::string toast = truncate_head_px(hud.toast_text, kLcdWidth - 22, 1);

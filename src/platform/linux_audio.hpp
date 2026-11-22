@@ -4,6 +4,7 @@
 #include "platform/platform.hpp"
 
 #include <cstdint>
+#include <string>
 
 namespace czx::platform {
 
@@ -16,6 +17,9 @@ public:
     bool init_with_sink(uint32_t sample_rate, const char* sink_dev);
     void write_samples(const int16_t* stereo_s16, size_t frame_count) override;
     const char* backend_name() const override { return active_ ? "linux-pulse" : "null-audio"; }
+    bool get_system_volume(SystemVolumeState& out) override;
+    bool adjust_system_volume(int delta_percent, SystemVolumeState& out) override;
+    bool toggle_system_mute(SystemVolumeState& out) override;
     void cleanup();
 
 private:
@@ -23,11 +27,19 @@ private:
     struct PaMainloopApi;
     struct PaContext;
     struct PaStream;
+    struct PaOperation;
     struct PaSampleSpec;
+    struct PaChannelMap;
+    struct PaCVolume;
+    struct PaServerInfo;
+    struct PaSinkInfo;
     struct PaBufferAttr;
 
     using PaContextNotifyCb = void (*)(PaContext*, void*);
     using PaStreamNotifyCb = void (*)(PaStream*, void*);
+    using PaContextSuccessCb = void (*)(PaContext*, int, void*);
+    using PaServerInfoCb = void (*)(PaContext*, const PaServerInfo*, void*);
+    using PaSinkInfoCb = void (*)(PaContext*, const PaSinkInfo*, int, void*);
 
     using FnMlNew = PaThreadedMainloop* (*)();
     using FnMlStart = int (*)(PaThreadedMainloop*);
@@ -58,8 +70,22 @@ private:
     using FnStreamWrite = int (*)(PaStream*, const void*, size_t, void (*)(void*), int64_t, int);
     using FnStrerror = const char* (*)(int);
 
+    using FnCtxGetServerInfo = PaOperation* (*)(PaContext*, PaServerInfoCb, void*);
+    using FnCtxGetSinkInfoByName = PaOperation* (*)(PaContext*, const char*, PaSinkInfoCb, void*);
+    using FnCtxSetSinkVolumeByName =
+        PaOperation* (*)(PaContext*, const char*, const PaCVolume*, PaContextSuccessCb, void*);
+    using FnCtxSetSinkMuteByName =
+        PaOperation* (*)(PaContext*, const char*, int, PaContextSuccessCb, void*);
+    using FnOpGetState = int (*)(const PaOperation*);
+    using FnOpUnref = void (*)(PaOperation*);
+    using FnCVolumeSet = PaCVolume* (*)(PaCVolume*, unsigned, uint32_t);
+    using FnCVolumeAvg = uint32_t (*)(const PaCVolume*);
+
     static void on_context_state(PaContext* ctx, void* userdata);
     static void on_stream_state(PaStream* stream, void* userdata);
+
+    bool wait_operation_locked(PaOperation* op);
+    bool query_sink_locked(std::string& sink_name, PaCVolume& vol, bool& muted);
 
     void* dl_ = nullptr;
     PaThreadedMainloop* ml_ = nullptr;
@@ -68,6 +94,7 @@ private:
     bool started_ = false;
     bool active_ = false;
     uint32_t sample_rate_ = 0;
+    std::string target_sink_;
 
     FnMlNew fn_ml_new_ = nullptr;
     FnMlStart fn_ml_start_ = nullptr;
@@ -96,6 +123,15 @@ private:
     FnStreamWritableSize fn_stream_writable_size_ = nullptr;
     FnStreamWrite fn_stream_write_ = nullptr;
     FnStrerror fn_strerror_ = nullptr;
+
+    FnCtxGetServerInfo fn_ctx_get_server_info_ = nullptr;
+    FnCtxGetSinkInfoByName fn_ctx_get_sink_info_by_name_ = nullptr;
+    FnCtxSetSinkVolumeByName fn_ctx_set_sink_volume_by_name_ = nullptr;
+    FnCtxSetSinkMuteByName fn_ctx_set_sink_mute_by_name_ = nullptr;
+    FnOpGetState fn_op_get_state_ = nullptr;
+    FnOpUnref fn_op_unref_ = nullptr;
+    FnCVolumeSet fn_cvolume_set_ = nullptr;
+    FnCVolumeAvg fn_cvolume_avg_ = nullptr;
 };
 
 class LinuxAudio : public PlatformAudio {
@@ -106,6 +142,9 @@ public:
     bool init(uint32_t sample_rate) override;
     void write_samples(const int16_t* stereo_s16, size_t frame_count) override;
     const char* backend_name() const override;
+    bool get_system_volume(SystemVolumeState& out) override;
+    bool adjust_system_volume(int delta_percent, SystemVolumeState& out) override;
+    bool toggle_system_mute(SystemVolumeState& out) override;
 
 private:
     enum class ActiveBackend { Inactive, Pulse, Alsa };

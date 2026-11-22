@@ -161,6 +161,49 @@ bool InputRouter::handle_alt_shortcut(const RawKeyEvent& raw) {
     return true;
 }
 
+bool InputRouter::handle_volume_shortcut(const RawKeyEvent& raw) {
+    if (raw.key == CZX_KEY_MUTE || raw.key == CZX_KEY_VOLUMEDOWN || raw.key == CZX_KEY_VOLUMEUP) {
+        if (raw.pressed) {
+            if (raw.key == CZX_KEY_MUTE) {
+                if (!raw.repeat && cb_.on_host_command) {
+                    cb_.on_host_command(cb_.user_data, HostCommand::VolumeMute);
+                }
+            } else if (cb_.on_host_command) {
+                cb_.on_host_command(cb_.user_data,
+                                    (raw.key == CZX_KEY_VOLUMEDOWN) ? HostCommand::VolumeDown
+                                                                    : HostCommand::VolumeUp);
+            }
+        }
+        return true;
+    }
+
+    if (fn_held_ && !alt_held() && raw.pressed) {
+        HostCommand cmd = HostCommand::None;
+        switch (raw.key) {
+            case CZX_KEY_A:
+                track_host_press(CZX_KEY_A);
+                if (!raw.repeat) cmd = HostCommand::VolumeMute;
+                break;
+            case CZX_KEY_S:
+                track_host_press(CZX_KEY_S);
+                cmd = HostCommand::VolumeDown;
+                break;
+            case CZX_KEY_D:
+                track_host_press(CZX_KEY_D);
+                cmd = HostCommand::VolumeUp;
+                break;
+            default:
+                return false;
+        }
+        if (cmd != HostCommand::None && cb_.on_host_command) {
+            cb_.on_host_command(cb_.user_data, cmd);
+        }
+        return true;
+    }
+
+    return false;
+}
+
 bool InputRouter::handle_pan_key(czx_key_t key, bool pressed, bool repeat) {
     if (!native_pan_enabled_) return false;
     if (pressed && !alt_held()) return false;
@@ -365,6 +408,10 @@ void InputRouter::handle_raw_key(const RawKeyEvent& raw) {
     }
 
     if (handle_alt_shortcut(raw)) {
+        return;
+    }
+
+    if (handle_volume_shortcut(raw)) {
         return;
     }
 

@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <linux/input.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace czx::platform {
@@ -89,9 +90,53 @@ bool LinuxEvdevInput::try_open(const std::string& path, bool require_keypad_caps
         contains_icase(name_buf, "m5stack") ||
         test_bit(key_bits, 383 /* KEY_CD / SYM */);
 
-    devices_.push_back(Device{fd, path, is_tca8418});
+    struct stat st{};
+    dev_t rdev = 0;
+    if (fstat(fd, &st) == 0) {
+        rdev = st.st_rdev;
+    }
+
+    devices_.push_back(Device{fd, path, is_tca8418, rdev});
     std::fprintf(stderr, "czx: evdev input active on %s (%s, tca8418=%d)\n",
                  path.c_str(), name_buf, is_tca8418 ? 1 : 0);
+    return true;
+}
+
+bool LinuxEvdevInput::try_open_volume_device(const std::string& path) {
+    struct stat st{};
+    if (stat(path.c_str(), &st) != 0) {
+        return false;
+    }
+    for (const auto& d : devices_) {
+        if (d.fd >= 0 && d.rdev != 0 && d.rdev == st.st_rdev) {
+            return false;
+        }
+    }
+
+    const int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) {
+        return false;
+    }
+
+    unsigned long ev_bits[(EV_MAX / (sizeof(unsigned long) * 8)) + 1] = {};
+    unsigned long key_bits[(KEY_MAX / (sizeof(unsigned long) * 8)) + 1] = {};
+    if (ioctl(fd, EVIOCGBIT(0, sizeof(ev_bits)), ev_bits) < 0 ||
+        !test_bit(ev_bits, EV_KEY) ||
+        ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(key_bits)), key_bits) < 0 ||
+        !(test_bit(key_bits, KEY_VOLUMEUP) ||
+          test_bit(key_bits, KEY_VOLUMEDOWN) ||
+          test_bit(key_bits, KEY_MUTE))) {
+        close(fd);
+        return false;
+    }
+
+    char name_buf[128] = {};
+    if (ioctl(fd, EVIOCGNAME(sizeof(name_buf)), name_buf) < 0) {
+        std::snprintf(name_buf, sizeof(name_buf), "unknown");
+    }
+
+    devices_.push_back(Device{fd, path, false, st.st_rdev});
+    std::fprintf(stderr, "czx: evdev volume keys active on %s (%s)\n", path.c_str(), name_buf);
     return true;
 }
 
@@ -105,18 +150,24 @@ bool LinuxEvdevInput::init() {
         return try_open(env, false);
     }
 
-    if (try_open("/dev/input/cardputer-zero-internal", false) ||
-        try_open("/dev/input/by-path/platform-3f804000.i2c-event", false)) {
-        return true;
-    }
-
-    for (int i = 0; i < 16; ++i) {
-        const std::string path = "/dev/input/event" + std::to_string(i);
-        if (try_open(path, true)) {
-            return true;
+    bool opened_primary =
+        try_open("/dev/input/cardputer-zero-internal", false) ||
+        try_open("/dev/input/by-path/platform-3f804000.i2c-event", false);
+    if (!opened_primary) {
+        for (int i = 0; i < 16; ++i) {
+            const std::string path = "/dev/input/event" + std::to_string(i);
+            if (try_open(path, true)) {
+                opened_primary = true;
+                break;
+            }
         }
     }
-    return false;
+    if (opened_primary) {
+        for (int i = 0; i < 16; ++i) {
+            (void)try_open_volume_device("/dev/input/event" + std::to_string(i));
+        }
+    }
+    return opened_primary;
 }
 
 void LinuxEvdevInput::poll(std::vector<czx::input::RawKeyEvent>& out_events) {

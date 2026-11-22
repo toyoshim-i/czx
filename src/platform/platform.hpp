@@ -64,12 +64,20 @@ public:
     virtual const char* backend_name() const = 0;
 };
 
+struct SystemVolumeState {
+    int percent = -1;
+    bool muted = false;
+};
+
 class PlatformAudio {
 public:
     virtual ~PlatformAudio() = default;
     virtual bool init(uint32_t sample_rate) = 0;
     virtual void write_samples(const int16_t* stereo_s16, size_t frame_count) = 0;
     virtual const char* backend_name() const = 0;
+    virtual bool get_system_volume(SystemVolumeState& /*out*/) { return false; }
+    virtual bool adjust_system_volume(int /*delta_percent*/, SystemVolumeState& /*out*/) { return false; }
+    virtual bool toggle_system_mute(SystemVolumeState& /*out*/) { return false; }
 };
 
 struct PlatformBundle {

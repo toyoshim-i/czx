@@ -55,6 +55,9 @@ czx_key_t sdl_keycode_to_czx(SDL_Keycode sym) noexcept {
         case SDLK_RALT: return CZX_KEY_RALT;
         case SDLK_LGUI: return CZX_KEY_LMETA;
         case SDLK_RGUI: return CZX_KEY_RMETA;
+        case SDLK_MUTE: return CZX_KEY_MUTE;
+        case SDLK_VOLUMEDOWN: return CZX_KEY_VOLUMEDOWN;
+        case SDLK_VOLUMEUP: return CZX_KEY_VOLUMEUP;
         default: return CZX_KEY_NONE;
     }
 }

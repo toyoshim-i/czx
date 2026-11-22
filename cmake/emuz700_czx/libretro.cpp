@@ -39,6 +39,8 @@ EMU* g_emu = nullptr;
 VM* g_vm = nullptr;
 
 bool g_tape_turbo = true;
+bool g_host_supports_ff = false;
+bool g_ff_active = false;
 std::string g_media_path;
 int g_last_led_fdd = -1;
 int g_last_led_tape = -1;
@@ -106,6 +108,24 @@ void update_leds() {
     if (qd != g_last_led_qd) {
         g_led_cb(3, qd);
         g_last_led_qd = qd;
+    }
+}
+
+void clear_fastforward() {
+    if (g_host_supports_ff && g_env_cb && g_ff_active) {
+        retro_fastforwarding_override ov{0.0f, false, false, false};
+        g_env_cb(RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE, &ov);
+    }
+    g_ff_active = false;
+}
+
+void update_fastforward() {
+    const bool want_ff = g_vm && g_tape_turbo && !config.sound_tape_signal &&
+                         (g_vm->is_tape_playing(0) || g_vm->is_tape_recording(0));
+    if (g_host_supports_ff && g_env_cb && want_ff != g_ff_active) {
+        retro_fastforwarding_override ov{0.0f, want_ff, false, false};
+        g_env_cb(RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE, &ov);
+        g_ff_active = want_ff;
     }
 }
 
@@ -282,6 +302,7 @@ void RETRO_CALLCONV on_retro_keyboard(bool down, unsigned keycode, uint32_t, uin
 }
 
 void destroy_vm() {
+    clear_fastforward();
     clear_leds();
     g_media_path.clear();
     g_last_led_fdd = -1;
@@ -412,6 +433,7 @@ RETRO_EXPORT void retro_set_environment(retro_environment_t cb) {
     if (cb(RETRO_ENVIRONMENT_GET_LED_INTERFACE, &led_cb)) {
         g_led_cb = led_cb.set_led_state;
     }
+    g_host_supports_ff = cb(RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE, nullptr);
 
     bool no_game = true;
     cb(RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME, &no_game);
@@ -467,6 +489,7 @@ RETRO_EXPORT void retro_reset(void) {
         }
     }
     clear_leds();
+    clear_fastforward();
 }
 
 RETRO_EXPORT bool retro_load_game(const struct retro_game_info* game) {
@@ -484,6 +507,7 @@ RETRO_EXPORT bool retro_load_game(const struct retro_game_info* game) {
         if (g_env_cb(RETRO_ENVIRONMENT_GET_LED_INTERFACE, &led_cb)) {
             g_led_cb = led_cb.set_led_state;
         }
+        g_host_supports_ff = g_env_cb(RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE, nullptr);
 
         g_env_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &sys_dir);
         g_env_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &save_dir);
@@ -521,6 +545,7 @@ RETRO_EXPORT bool retro_load_game(const struct retro_game_info* game) {
     g_last_led_tape = -1;
     g_last_led_qd = -1;
     update_leds();
+    update_fastforward();
 
     return true;
 }
@@ -548,41 +573,56 @@ RETRO_EXPORT void retro_run(void) {
         }
     }
 
-    int extra_frames = 0;
-    uint16_t* pcm = g_vm->create_sound(&extra_frames);
-    if (extra_frames == 0) {
-        g_vm->run();
+    int av_enable = 3;
+    if (g_env_cb) {
+        g_env_cb(RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE, &av_enable);
     }
-    const bool skippable = g_vm->is_frame_skippable();
-    if (skippable && g_tape_turbo && !config.sound_tape_signal) {
-        constexpr int kMaxTurboExtraFrames = 32;
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(12);
-        for (int i = 0; i < kMaxTurboExtraFrames; ++i) {
-            if (std::chrono::steady_clock::now() >= deadline) {
-                break;
-            }
+    const bool want_video = (av_enable & 1) != 0;
+    const bool want_audio = (av_enable & 2) != 0;
+
+    if (!want_audio) {
+        g_vm->run();
+        (void)g_vm->is_frame_skippable();
+    } else {
+        int extra_frames = 0;
+        uint16_t* pcm = g_vm->create_sound(&extra_frames);
+        if (extra_frames == 0) {
             g_vm->run();
-            if (!g_vm->is_frame_skippable()) {
-                break;
+        }
+        const bool skippable = g_vm->is_frame_skippable();
+        if (!g_host_supports_ff && skippable && g_tape_turbo && !config.sound_tape_signal) {
+            constexpr int kMaxTurboExtraFrames = 32;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(12);
+            for (int i = 0; i < kMaxTurboExtraFrames; ++i) {
+                if (std::chrono::steady_clock::now() >= deadline) {
+                    break;
+                }
+                g_vm->run();
+                if (!g_vm->is_frame_skippable()) {
+                    break;
+                }
             }
         }
-    }
-    if (pcm && g_audio_batch_cb) {
-        g_audio_batch_cb(reinterpret_cast<const int16_t*>(pcm), static_cast<size_t>(kSoundSamples));
+        if (pcm && g_audio_batch_cb) {
+            g_audio_batch_cb(reinterpret_cast<const int16_t*>(pcm), static_cast<size_t>(kSoundSamples));
+        }
     }
 
-    g_vm->draw_screen();
-    for (int y = 0; y < 200; ++y) {
-        const uint16_t* src = &g_screen_640x400[static_cast<size_t>(y * 2) * 640u];
-        uint16_t* dst = &g_fb_320x200[static_cast<size_t>(y) * 320u];
-        for (int x = 0; x < 320; ++x) {
-            dst[x] = src[x * 2];
+    if (want_video) {
+        g_vm->draw_screen();
+        for (int y = 0; y < 200; ++y) {
+            const uint16_t* src = &g_screen_640x400[static_cast<size_t>(y * 2) * 640u];
+            uint16_t* dst = &g_fb_320x200[static_cast<size_t>(y) * 320u];
+            for (int x = 0; x < 320; ++x) {
+                dst[x] = src[x * 2];
+            }
+        }
+        if (g_video_cb) {
+            g_video_cb(g_fb_320x200, 320u, 200u, 320u * sizeof(uint16_t));
         }
     }
-    if (g_video_cb) {
-        g_video_cb(g_fb_320x200, 320u, 200u, 320u * sizeof(uint16_t));
-    }
     update_leds();
+    update_fastforward();
 }
 
 RETRO_EXPORT unsigned retro_get_region(void) {

@@ -27,6 +27,7 @@ enum class MenuAction {
     ToggleBorders,
     ToggleMarginFill,
     ToggleActivityIndicator,
+    ToggleTapeWarp,
     ToggleInputMode,
     ResetCore,
     Quit,
@@ -50,6 +51,7 @@ struct MenuViewModel {
     bool show_borders = false;
     MarginFill margin_fill = MarginFill::Auto;
     bool show_activity_indicator = true;
+    bool tape_warp_enabled = true;
     int input_mode = 0;  // 0=Keyboard, 1=Joy P1, 2=Joy P2, 3=Mouse
 };
 
@@ -63,7 +65,7 @@ public:
     void render(uint16_t* fb_rgb565, const MenuViewModel& vm) const;
 
 private:
-    static constexpr int kItemCount = 11;
+    static constexpr int kItemCount = 12;
     bool open_ = false;
     int cursor_ = 0;
 };

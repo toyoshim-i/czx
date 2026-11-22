@@ -427,6 +427,13 @@ struct retro_led_interface {
     retro_set_led_state_t set_led_state;
 };
 
+struct retro_fastforwarding_override {
+    float ratio;
+    bool fastforward;
+    bool notification;
+    bool inhibit_toggle;
+};
+
 struct retro_message {
     const char* msg;
     unsigned frames;

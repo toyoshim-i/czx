@@ -677,6 +677,7 @@ const czx_core_api_t kG800Api = {
     nullptr,
     nullptr,
     g800_get_activity,
+    nullptr,
 };
 
 extern "C" void czx_g800_host_on_frame(const czx_g800_lcd_snapshot_t* lcd,

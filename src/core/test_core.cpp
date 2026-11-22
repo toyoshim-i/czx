@@ -345,6 +345,7 @@ const czx_core_api_t kTestCoreApi = {
     nullptr,
     nullptr,
     nullptr,
+    nullptr,
 };
 
 }  // namespace

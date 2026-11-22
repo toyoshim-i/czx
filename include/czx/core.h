@@ -114,11 +114,12 @@ enum {
 };
 
 enum {
-    CZX_ACTIVITY_TAPE_READ  = 1u << 0,
-    CZX_ACTIVITY_TAPE_WRITE = 1u << 1,
-    CZX_ACTIVITY_DISK       = 1u << 2,
-    CZX_ACTIVITY_QD         = 1u << 3,
-    CZX_ACTIVITY_SIO        = 1u << 4,
+    CZX_ACTIVITY_TAPE_READ   = 1u << 0,
+    CZX_ACTIVITY_TAPE_WRITE  = 1u << 1,
+    CZX_ACTIVITY_DISK        = 1u << 2,
+    CZX_ACTIVITY_QD          = 1u << 3,
+    CZX_ACTIVITY_SIO         = 1u << 4,
+    CZX_ACTIVITY_FASTFORWARD = 1u << 5,
 };
 
 typedef struct czx_activity {
@@ -141,6 +142,7 @@ typedef struct czx_host {
     void (*audio_samples)(void* user_data, const int16_t* stereo_s16, size_t frame_count);
     void (*log)(void* user_data, int level, const char* msg);
     const char* initial_media;
+    bool disable_tape_warp;
 } czx_host_t;
 
 typedef struct czx_core_desc {
@@ -184,6 +186,7 @@ typedef struct czx_core_api {
     bool (*eject_drive)(czx_core_instance_t* inst, uint32_t drive);
     void (*on_mouse)(czx_core_instance_t* inst, int32_t dx, int32_t dy, uint32_t buttons);
     bool (*get_activity)(const czx_core_instance_t* inst, czx_activity_t* out);
+    void (*set_fast_forward)(czx_core_instance_t* inst, bool active, bool skip_video);
 } czx_core_api_t;
 
 #ifdef __cplusplus

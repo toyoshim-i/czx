@@ -746,7 +746,7 @@ public:
                 pulsed_emitted_ = false;
             }
         }
-        if (!audio_out_frame_.empty() && host_.audio_samples) {
+        if (!host_fastforward_ && !audio_out_frame_.empty() && host_.audio_samples) {
             host_.audio_samples(host_.user_data, audio_out_frame_.data(), audio_out_frame_.size() / 2u);
         }
     }
@@ -815,6 +815,7 @@ public:
 
     bool set_option(const char* key, const char* value) {
         if (!key || !value) return false;
+        host_options_[key] = value;
         options_[key] = value;
         option_dirty_ = true;
         return true;
@@ -1028,7 +1029,15 @@ public:
                 out->drive_mask = static_cast<uint8_t>(led_fdd_ & 0x0F);
             }
         }
+        if (core_fastforward_) {
+            out->flags |= CZX_ACTIVITY_FASTFORWARD;
+        }
         return out->flags != 0u;
+    }
+
+    void set_fast_forward(bool active, bool skip_video) noexcept {
+        host_fastforward_ = active;
+        host_skip_video_ = active && skip_video;
     }
 
 private:
@@ -1112,6 +1121,7 @@ private:
     bool has_disk_ctrl_ext_ = false;
 
     std::map<std::string, std::string> options_;
+    std::map<std::string, std::string> host_options_;
     std::array<uint32_t, 2> joy_state_{0, 0};
     int32_t mouse_pending_dx_ = 0;
     int32_t mouse_pending_dy_ = 0;
@@ -1128,11 +1138,17 @@ private:
     int led_fdd_ = 0;
     int led_tape_ = 0;
     int led_qd_ = 0;
+    bool core_fastforward_ = false;
+    bool host_fastforward_ = false;
+    bool host_skip_video_ = false;
 
     void clear_leds() noexcept {
         led_fdd_ = 0;
         led_tape_ = 0;
         led_qd_ = 0;
+        core_fastforward_ = false;
+        host_fastforward_ = false;
+        host_skip_video_ = false;
     }
 
     void handle_led_state(int led, int state) noexcept {
@@ -1383,6 +1399,9 @@ private:
         options_.clear();
         seed_default_options();
         load_user_config();
+        for (const auto& [k, v] : host_options_) {
+            options_[k] = v;
+        }
 
         if (is_bluemsx_) {
             const auto it = options_.find("bluemsx_msxtype");
@@ -1510,7 +1529,8 @@ private:
             options_["vice_zoom_mode"] = "none";
             options_["vice_c64_model"] = "C64 PAL auto";
             options_["vice_joyport"] = "2";
-            options_["vice_autoloadwarp"] = "enabled";
+            options_["vice_autoloadwarp"] = host_.disable_tape_warp ? "disabled" : "enabled";
+            options_["vice_warp_boost"] = "enabled";
             options_["vice_datasette_hotkeys"] = "enabled";
             options_["vice_mapper_datasette_start"] = "RETROK_KP_PLUS";
             options_["vice_mapper_datasette_stop"] = "RETROK_KP_MINUS";
@@ -1544,7 +1564,7 @@ private:
         } else if (is_emuz700_) {
             options_["emuz700_joystick"] = "JOY-700";
             options_["emuz700_tape_sound"] = "disabled";
-            options_["emuz700_tape_turbo"] = "enabled";
+            options_["emuz700_tape_turbo"] = host_.disable_tape_warp ? "disabled" : "enabled";
         }
     }
 
@@ -1696,7 +1716,7 @@ private:
     }
 
     void handle_video(const void* data, unsigned width, unsigned height, size_t pitch) {
-        if (!host_.video_frame) return;
+        if (!host_.video_frame || host_skip_video_) return;
 
         if (data != nullptr && width > 0 && height > 0) {
             cached_w_ = static_cast<uint16_t>(width);
@@ -1822,7 +1842,7 @@ private:
     }
 
     void handle_audio(const int16_t* data, size_t frames) {
-        if (!data || frames == 0) return;
+        if (host_fastforward_ || !data || frames == 0) return;
         const double src_rate = (av_info_.timing.sample_rate > 1000.0)
                                     ? av_info_.timing.sample_rate
                                     : kTargetAudioSampleRateF;
@@ -2113,6 +2133,27 @@ private:
                 }
                 return true;
 
+            case RETRO_ENVIRONMENT_GET_FASTFORWARDING:
+                if (data) {
+                    *static_cast<bool*>(data) = host_fastforward_;
+                }
+                return true;
+
+            case RETRO_ENVIRONMENT_SET_FASTFORWARDING_OVERRIDE:
+                if (data) {
+                    core_fastforward_ = static_cast<const retro_fastforwarding_override*>(data)->fastforward;
+                }
+                return true;
+
+            case RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE:
+                if (data) {
+                    int flags = 0;
+                    if (!host_skip_video_) flags |= 1;
+                    if (!host_fastforward_) flags |= 2;
+                    *static_cast<int*>(data) = flags;
+                }
+                return true;
+
             case RETRO_ENVIRONMENT_SET_MESSAGE:
             case RETRO_ENVIRONMENT_SET_MESSAGE_EXT:
             case RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS:
@@ -2124,11 +2165,7 @@ private:
             case RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL:
             case RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS:
             case RETRO_ENVIRONMENT_SET_MEMORY_MAPS:
-            case RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE:
             case RETRO_ENVIRONMENT_SET_MINIMUM_AUDIO_LATENCY:
-                if (cmd == RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE && data) {
-                    *static_cast<int*>(data) = 3;
-                }
                 return true;
 
             default:
@@ -2275,6 +2312,10 @@ bool lr_get_activity(const czx_core_instance_t* inst, czx_activity_t* out) {
     return inst && reinterpret_cast<const LibretroCoreInstance*>(inst)->get_activity(out);
 }
 
+void lr_set_fast_forward(czx_core_instance_t* inst, bool active, bool skip_video) {
+    if (inst) reinterpret_cast<LibretroCoreInstance*>(inst)->set_fast_forward(active, skip_video);
+}
+
 }  // namespace
 
 LibretroCoreLoader::LibretroCoreLoader() = default;
@@ -2398,6 +2439,7 @@ bool LibretroCoreLoader::load(const std::string& so_path) {
         lr_eject_drive,
         lr_on_mouse,
         lr_get_activity,
+        lr_set_fast_forward,
     };
 
     loaded_ = true;

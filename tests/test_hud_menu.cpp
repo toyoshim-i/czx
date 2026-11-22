@@ -50,6 +50,13 @@ void test_format_activity_label() {
     CHECK(format_activity_label(CZX_ACTIVITY_QD, -1, 0u) == "QD");
     CHECK(format_activity_label(CZX_ACTIVITY_SIO, -1, 0u) == "SIO");
     CHECK(format_activity_label(CZX_ACTIVITY_TAPE_READ | CZX_ACTIVITY_DISK, 5, 0x01u) == "TAPE 5% FD1");
+    CHECK(format_activity_label(CZX_ACTIVITY_TAPE_READ | CZX_ACTIVITY_FASTFORWARD, 42, 0u) ==
+          "TAPE 42% >>");
+    CHECK(format_activity_label(CZX_ACTIVITY_TAPE_READ | CZX_ACTIVITY_FASTFORWARD, -1, 0u) ==
+          "TAPE >>");
+    CHECK(format_activity_label(CZX_ACTIVITY_DISK | CZX_ACTIVITY_FASTFORWARD, -1, 0u) ==
+          "DISK >>");
+    CHECK(format_activity_label(CZX_ACTIVITY_FASTFORWARD, -1, 0u) == "WARP >>");
     CHECK(format_activity_label(0u, -1, 0u).empty());
 }
 
@@ -98,6 +105,7 @@ void test_overlay_menu() {
     vm.src_width = 320;
     vm.src_height = 200;
     vm.show_activity_indicator = true;
+    vm.tape_warp_enabled = true;
 
     menu.set_open(true);
     for (int i = 0; i < 7; ++i) {
@@ -107,12 +115,17 @@ void test_overlay_menu() {
     CHECK(menu.handle_key(key_press(CZX_KEY_LEFT), vm) == czx::video::MenuAction::ToggleActivityIndicator);
     CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), vm) == czx::video::MenuAction::ToggleActivityIndicator);
 
+    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), vm) == czx::video::MenuAction::None);
+    CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), vm) == czx::video::MenuAction::ToggleTapeWarp);
+    CHECK(menu.handle_key(key_press(CZX_KEY_LEFT), vm) == czx::video::MenuAction::ToggleTapeWarp);
+    CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), vm) == czx::video::MenuAction::ToggleTapeWarp);
+
     for (int i = 0; i < 3; ++i) {
         CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), vm) == czx::video::MenuAction::None);
     }
     CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), vm) == czx::video::MenuAction::Quit);
 
-    // Wrap around from last item (10) back to Core (0).
+    // Wrap around from last item (11) back to Core (0).
     CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), vm) == czx::video::MenuAction::None);
     CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), vm) == czx::video::MenuAction::CycleCoreNext);
 

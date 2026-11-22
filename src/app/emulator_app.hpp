@@ -30,6 +30,8 @@ struct AppConfig {
     czx::video::MarginFill margin_fill = czx::video::MarginFill::Auto;
     bool show_activity_indicator = true;
     bool activity_indicator_override = false;
+    bool tape_warp_enabled = true;
+    bool tape_warp_override = false;
     int headless_frames = 0;
     bool verify_nonblank = false;
     czx::platform::PlatformOptions platform;
@@ -86,6 +88,8 @@ private:
     bool force_present_ = true;
     bool prev_overlay_active_ = false;
     bool show_activity_indicator_ = true;
+    bool tape_warp_enabled_ = true;
+    bool live_warp_requested_ = false;
     uint32_t activity_flags_ = 0;
     int8_t activity_tape_percent_ = -1;
     uint8_t activity_drive_mask_ = 0;
@@ -99,6 +103,7 @@ private:
     void ensure_data_dirs();
     void load_app_config();
     void save_app_config() const;
+    void sync_core_warp_option();
     void clear_activity_state() noexcept;
     void poll_core_activity();
     std::string default_media_dir_for_core() const;

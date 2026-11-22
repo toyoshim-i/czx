@@ -19,6 +19,7 @@ void print_usage(const char* prog) {
         "  --crt43                       Use 4:3 CRT aspect policy in aspect mode\n"
         "  --margin <auto|black>         Fill letterbox/pillarbox margins (default: auto)\n"
         "  --activity <on|off>           Show bottom-right tape/disk access indicator (default: on)\n"
+        "  --tape-warp <on|off>          Uncapped fast-forward during MZ/C64 tape loads (default: on)\n"
         "  --drm <path>                  Override DRM device path\n"
         "  --fb <path>                   Override fbdev device path\n"
         "  --fbdev                       Prefer fbdev over DRM on device\n"
@@ -85,6 +86,18 @@ int main(int argc, char** argv) {
                 cfg.activity_indicator_override = true;
             } else {
                 std::fprintf(stderr, "Unknown activity mode: %s\n", act);
+                return 2;
+            }
+        } else if (std::strcmp(arg, "--tape-warp") == 0 && i + 1 < argc) {
+            const char* tw = argv[++i];
+            if (std::strcmp(tw, "on") == 0) {
+                cfg.tape_warp_enabled = true;
+                cfg.tape_warp_override = true;
+            } else if (std::strcmp(tw, "off") == 0) {
+                cfg.tape_warp_enabled = false;
+                cfg.tape_warp_override = true;
+            } else {
+                std::fprintf(stderr, "Unknown tape-warp mode: %s\n", tw);
                 return 2;
             }
         } else if (std::strcmp(arg, "--drm") == 0 && i + 1 < argc) {

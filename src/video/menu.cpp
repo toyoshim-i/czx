@@ -64,14 +64,16 @@ MenuAction OverlayMenu::handle_key(const czx_key_event_t& ev, const MenuViewMode
         case 7:
             return MenuAction::ToggleActivityIndicator;
         case 8:
-            return MenuAction::ToggleInputMode;
+            return MenuAction::ToggleTapeWarp;
         case 9:
+            return MenuAction::ToggleInputMode;
+        case 10:
             if (ok) {
                 open_ = false;
                 return MenuAction::ResetCore;
             }
             return MenuAction::None;
-        case 10:
+        case 11:
             if (ok) {
                 return MenuAction::Quit;
             }
@@ -126,6 +128,7 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
         {"Borders", vm.show_borders ? "Show Full" : "Crop Active"},
         {"Margin", margin_fill_name(vm.margin_fill)},
         {"Access LED", vm.show_activity_indicator ? "On" : "Off"},
+        {"Tape Warp", vm.tape_warp_enabled ? "On" : "Off"},
         {"Input", input_label},
         {"Reset Core", "[Enter]"},
         {"Quit App", "[Enter]"},

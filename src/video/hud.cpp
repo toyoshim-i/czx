@@ -146,6 +146,9 @@ void draw_activity_indicator(Rgb565Canvas& canvas, const HudState& hud, const Vi
     } else if ((hud.activity_flags & CZX_ACTIVITY_DISK) != 0u) {
         led_col = pack_rgb565(255, 204, 64);
         border_col = pack_rgb565(220, 172, 52);
+    } else if ((hud.activity_flags & CZX_ACTIVITY_FASTFORWARD) != 0u) {
+        led_col = pack_rgb565(96, 232, 255);
+        border_col = pack_rgb565(76, 196, 235);
     }
 
     const int tw = Rgb565Canvas::text_width(label.c_str(), 1);
@@ -219,6 +222,14 @@ std::string format_activity_label(uint32_t flags, int8_t tape_percent, uint8_t d
 
     if ((flags & CZX_ACTIVITY_SIO) != 0u) {
         append("SIO");
+    }
+
+    if ((flags & CZX_ACTIVITY_FASTFORWARD) != 0u) {
+        if (out.empty()) {
+            out = "WARP >>";
+        } else {
+            out += " >>";
+        }
     }
 
     return out;

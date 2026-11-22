@@ -62,6 +62,7 @@ EmulatorApp::EmulatorApp(AppConfig cfg)
     scaler_cfg_.show_borders = cfg_.show_borders;
     scaler_cfg_.margin_fill = cfg_.margin_fill;
     show_activity_indicator_ = cfg_.show_activity_indicator;
+    tape_warp_enabled_ = cfg_.tape_warp_enabled;
     load_app_config();
     hud_.show_activity_indicator = show_activity_indicator_;
     preset_index_ = cfg_.preset_index;
@@ -97,7 +98,7 @@ void EmulatorApp::ensure_data_dirs() {
 }
 
 void EmulatorApp::load_app_config() {
-    if (cfg_.activity_indicator_override) return;
+    if (cfg_.activity_indicator_override && cfg_.tape_warp_override) return;
     const fs::path cfg_path = fs::path(cfg_.data_dir) / "config" / "czx.cfg";
     std::ifstream ifs(cfg_path);
     if (!ifs.is_open()) return;
@@ -120,12 +121,17 @@ void EmulatorApp::load_app_config() {
                 ch = static_cast<char>(ch - 'A' + 'a');
             }
         }
-        if (key == "access_led") {
+        auto parse_bool = [&](bool& dst) {
             if (val == "off" || val == "0" || val == "false" || val == "disabled") {
-                show_activity_indicator_ = false;
+                dst = false;
             } else if (val == "on" || val == "1" || val == "true" || val == "enabled") {
-                show_activity_indicator_ = true;
+                dst = true;
             }
+        };
+        if (key == "access_led" && !cfg_.activity_indicator_override) {
+            parse_bool(show_activity_indicator_);
+        } else if (key == "tape_warp" && !cfg_.tape_warp_override) {
+            parse_bool(tape_warp_enabled_);
         }
     }
 }
@@ -136,7 +142,8 @@ void EmulatorApp::save_app_config() const {
     fs::create_directories(cfg_path.parent_path(), ec);
 
     std::vector<std::string> lines;
-    bool updated = false;
+    bool updated_led = false;
+    bool updated_warp = false;
     {
         std::ifstream ifs(cfg_path);
         std::string line;
@@ -152,14 +159,20 @@ void EmulatorApp::save_app_config() const {
                 key = (a == std::string::npos) ? std::string{} : key.substr(a, b - a + 1);
                 if (key == "access_led") {
                     line = std::string("access_led = ") + (show_activity_indicator_ ? "on" : "off");
-                    updated = true;
+                    updated_led = true;
+                } else if (key == "tape_warp") {
+                    line = std::string("tape_warp = ") + (tape_warp_enabled_ ? "on" : "off");
+                    updated_warp = true;
                 }
             }
             lines.push_back(std::move(line));
         }
     }
-    if (!updated) {
+    if (!updated_led) {
         lines.emplace_back(std::string("access_led = ") + (show_activity_indicator_ ? "on" : "off"));
+    }
+    if (!updated_warp) {
+        lines.emplace_back(std::string("tape_warp = ") + (tape_warp_enabled_ ? "on" : "off"));
     }
 
     std::ofstream ofs(cfg_path, std::ios::trunc);
@@ -169,7 +182,20 @@ void EmulatorApp::save_app_config() const {
     }
 }
 
+void EmulatorApp::sync_core_warp_option() {
+    if (!core_api_ || !core_inst_ || !core_api_->set_option || !core_api_->get_desc) return;
+    const czx_core_desc_t* desc = core_api_->get_desc(core_api_);
+    const std::string id = (desc && desc->id) ? desc->id : "";
+    const char* val = tape_warp_enabled_ ? "enabled" : "disabled";
+    if (id.rfind("vice", 0) == 0) {
+        core_api_->set_option(core_inst_, "vice_autoloadwarp", val);
+    } else if (id == "emuz700") {
+        core_api_->set_option(core_inst_, "emuz700_tape_turbo", val);
+    }
+}
+
 void EmulatorApp::clear_activity_state() noexcept {
+    live_warp_requested_ = false;
     activity_flags_ = 0u;
     activity_tape_percent_ = -1;
     activity_drive_mask_ = 0u;
@@ -182,15 +208,25 @@ void EmulatorApp::clear_activity_state() noexcept {
 void EmulatorApp::poll_core_activity() {
     czx_activity_t act{};
     act.tape_percent = -1;
-    if (core_api_ && core_inst_ && core_api_->get_activity &&
-        core_api_->get_activity(core_inst_, &act) && act.flags != 0u) {
+    if (core_api_ && core_inst_ && core_api_->get_activity) {
+        (void)core_api_->get_activity(core_inst_, &act);
+    }
+    live_warp_requested_ = (act.flags & CZX_ACTIVITY_FASTFORWARD) != 0u;
+    if (!tape_warp_enabled_) {
+        act.flags &= ~static_cast<uint32_t>(CZX_ACTIVITY_FASTFORWARD);
+    }
+
+    if (act.flags != 0u) {
         activity_flags_ = act.flags;
         activity_tape_percent_ = act.tape_percent;
         activity_drive_mask_ = act.drive_mask;
         activity_hold_frames_ = 12u;
     } else if (activity_hold_frames_ > 0u) {
         --activity_hold_frames_;
-        if (activity_hold_frames_ == 0u) {
+        if (!live_warp_requested_) {
+            activity_flags_ &= ~static_cast<uint32_t>(CZX_ACTIVITY_FASTFORWARD);
+        }
+        if (activity_hold_frames_ == 0u || activity_flags_ == 0u) {
             activity_flags_ = 0u;
             activity_tape_percent_ = -1;
             activity_drive_mask_ = 0u;
@@ -269,6 +305,7 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media) {
     host.audio_samples = cb_audio_samples;
     host.log = cb_log;
     host.initial_media = initial_media.empty() ? nullptr : initial_media.c_str();
+    host.disable_tape_warp = !tape_warp_enabled_;
 
     core_inst_ = core_api_->create(core_api_, &host);
     if (!core_inst_) {
@@ -281,6 +318,7 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media) {
     if (core_api_->set_data_dir) {
         core_api_->set_data_dir(core_inst_, cfg_.data_dir.c_str());
     }
+    sync_core_warp_option();
 
     if (core_api_->select_preset && core_api_->get_preset_count) {
         const uint32_t count = core_api_->get_preset_count(core_inst_);
@@ -461,6 +499,7 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
     vm.show_borders = scaler_cfg_.show_borders;
     vm.margin_fill = scaler_cfg_.margin_fill;
     vm.show_activity_indicator = show_activity_indicator_;
+    vm.tape_warp_enabled = tape_warp_enabled_;
     vm.input_mode = static_cast<int>(router_.input_mode());
     return vm;
 }
@@ -673,6 +712,16 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
             save_app_config();
             force_present_ = true;
             show_toast(show_activity_indicator_ ? "ACCESS LED: ON" : "ACCESS LED: OFF");
+            break;
+        case czx::video::MenuAction::ToggleTapeWarp:
+            tape_warp_enabled_ = !tape_warp_enabled_;
+            save_app_config();
+            sync_core_warp_option();
+            if (!tape_warp_enabled_ && core_inst_ && core_api_ && core_api_->set_fast_forward) {
+                core_api_->set_fast_forward(core_inst_, false, false);
+            }
+            force_present_ = true;
+            show_toast(tape_warp_enabled_ ? "TAPE WARP: ON" : "TAPE WARP: OFF");
             break;
         case czx::video::MenuAction::ToggleInputMode:
             handle_host_command(czx::input::HostCommand::ToggleInputMode);
@@ -939,10 +988,47 @@ int EmulatorApp::run() {
         hud_.input_mode = static_cast<int>(router_.input_mode());
         hud_.menu_open = menu_.is_open();
 
-        if (core_inst_) {
-            core_api_->run_frame(core_inst_);
+        const bool interactive_overlay = browser_.is_open() || menu_.is_open() || hud_.alt_held;
+        const bool do_warp = (cfg_.headless_frames == 0) && tape_warp_enabled_ && core_inst_ &&
+                             live_warp_requested_ && !interactive_overlay;
+        if (!do_warp) {
+            if (core_inst_ && core_api_->set_fast_forward) {
+                core_api_->set_fast_forward(core_inst_, false, false);
+            }
+            if (core_inst_) {
+                core_api_->run_frame(core_inst_);
+            }
+            poll_core_activity();
+        } else {
+            constexpr auto kWarpSlice = std::chrono::milliseconds(33);
+            const auto slice_end = std::chrono::steady_clock::now() + kWarpSlice;
+            for (;;) {
+                if (core_api_->set_fast_forward) {
+                    core_api_->set_fast_forward(core_inst_, true, true);
+                }
+                core_api_->run_frame(core_inst_);
+                czx_activity_t live{};
+                live.tape_percent = -1;
+                const bool has_live =
+                    core_api_->get_activity && core_api_->get_activity(core_inst_, &live);
+                if (!has_live || (live.flags & CZX_ACTIVITY_FASTFORWARD) == 0u) {
+                    if (core_api_->set_fast_forward) {
+                        core_api_->set_fast_forward(core_inst_, false, false);
+                    }
+                    core_api_->run_frame(core_inst_);
+                    poll_core_activity();
+                    break;
+                }
+                if (std::chrono::steady_clock::now() >= slice_end) {
+                    if (core_api_->set_fast_forward) {
+                        core_api_->set_fast_forward(core_inst_, true, false);
+                    }
+                    core_api_->run_frame(core_inst_);
+                    poll_core_activity();
+                    break;
+                }
+            }
         }
-        poll_core_activity();
 
         if (scale_thread_running_) {
             const bool activity_overlay = hud_.show_activity_indicator && hud_.activity_flags != 0u &&
@@ -1004,14 +1090,18 @@ int EmulatorApp::run() {
         }
 
         if (cfg_.headless_frames == 0) {
-            const auto frame_period = get_frame_period();
-            const auto after = std::chrono::steady_clock::now();
-            if (after < next_frame) {
-                std::this_thread::sleep_until(next_frame);
-            } else if (after - next_frame > frame_period * 3) {
-                next_frame = after;
+            if (do_warp || (tape_warp_enabled_ && live_warp_requested_ && !interactive_overlay)) {
+                next_frame = std::chrono::steady_clock::now() + get_frame_period();
+            } else {
+                const auto frame_period = get_frame_period();
+                const auto after = std::chrono::steady_clock::now();
+                if (after < next_frame) {
+                    std::this_thread::sleep_until(next_frame);
+                } else if (after - next_frame > frame_period * 3) {
+                    next_frame = after;
+                }
+                next_frame += frame_period;
             }
-            next_frame += frame_period;
         }
     }
 

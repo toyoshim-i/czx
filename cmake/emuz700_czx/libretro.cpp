@@ -2,6 +2,7 @@
 
 #include "paths.h"
 #include "emu.h"
+#include "vm/device.h"
 #include "vm/mz700/joystick.h"
 #include "vm/mz700/mz700.h"
 
@@ -129,11 +130,36 @@ void update_fastforward() {
     }
 }
 
+void prime_cmt_idle_state() {
+    if (!g_vm) return;
+    for (int id = 0; id < 64; ++id) {
+        DEVICE* dev = g_vm->get_device(id);
+        if (!dev) break;
+        const char* name = dev->get_device_name();
+        if (name && std::strcmp(name, "8255 PIO") == 0) {
+            // Real MZ-700 idles PC3 (M-ON) HIGH and PC2 (INTMASK) HIGH while
+            // the CMT motor starts OFF. Priming Port C = 0x0C sets
+            // DATAREC::trigger = true before mounting media so 1Z-009's
+            // initial PC3=1 write at cold boot does not fire a spurious
+            // L->H edge that starts the tape at the '*' monitor prompt.
+            dev->write_io8(2, 0x0C);
+            break;
+        }
+    }
+    g_vm->push_stop(0);
+}
+
 void init_default_config() {
     std::memset(&config, 0, sizeof(config));
     config.dipswitch = 0;
     config.joystick_type = DEVICE_JOYSTICK_JOY700;
     config.scan_line = false;
+    config.correct_disk_timing[0] = true;
+    config.correct_disk_timing[1] = true;
+    config.wave_shaper[0] = true;
+    config.direct_load_mzt[0] = true;
+    config.baud_high[0] = true;
+    config.drive_vm_in_opecode = true;
     config.sound_frequency = 6;  // 48000 Hz
     config.sound_strict_rendering = false;
     config.sound_noise_fdd = false;
@@ -141,7 +167,6 @@ void init_default_config() {
     config.sound_noise_cmt = false;
     config.sound_tape_signal = false;
     config.sound_tape_voice = false;
-    config.wave_shaper[0] = false;
     config.cpu_power = 0;
     for (int i = 0; i < USE_SOUND_VOLUME; ++i) {
         config.sound_volume_l[i] = 0;
@@ -277,7 +302,7 @@ void RETRO_CALLCONV on_retro_keyboard(bool down, unsigned keycode, uint32_t, uin
             g_vm->push_stop(0);
             log_msg(RETRO_LOG_INFO, "tape: manual stop");
         } else {
-            if ((!g_vm->is_tape_inserted(0) || g_vm->get_tape_position(0) >= 100) && !g_media_path.empty()) {
+            if ((!g_vm->is_tape_inserted(0) || g_vm->get_tape_position(0) >= 99) && !g_media_path.empty()) {
                 (void)mount_media(g_media_path.c_str());
             }
             if (g_vm->is_tape_inserted(0)) {
@@ -484,6 +509,7 @@ RETRO_EXPORT void retro_reset(void) {
     if (g_vm) {
         g_vm->reset();
         g_vm->close_tape(0);
+        prime_cmt_idle_state();
         if (!g_media_path.empty()) {
             (void)mount_media(g_media_path.c_str());
         }
@@ -532,6 +558,7 @@ RETRO_EXPORT bool retro_load_game(const struct retro_game_info* game) {
     }
     g_vm->reset();
     g_vm->close_tape(0);
+    prime_cmt_idle_state();
 
     if (game && game->path && game->path[0] != '\0') {
         if (!mount_media(game->path)) {

@@ -100,6 +100,18 @@ void test_render_hud_activity_overlay() {
     hud.desktop_scale = 2;
     czx::video::render_hud(fb.data(), hud, layout);
     CHECK(count_nonzero_in_rect(fb, 0, 144, czx::video::kLcdWidth, czx::video::kLcdHeight) > 400);
+
+    // Alt held with fps_x10 > 0 draws top-left FPS pill; releasing Alt hides it.
+    std::fill(fb.begin(), fb.end(), 0);
+    hud.fps_x10 = 312;
+    hud.alt_held = true;
+    czx::video::render_hud(fb.data(), hud, layout);
+    CHECK(count_nonzero_in_rect(fb, 4, 4, 70, 18) > 40);
+
+    std::fill(fb.begin(), fb.end(), 0);
+    hud.alt_held = false;
+    czx::video::render_hud(fb.data(), hud, layout);
+    CHECK(count_nonzero_in_rect(fb, 4, 4, 70, 18) == 0);
 }
 
 void test_overlay_menu() {

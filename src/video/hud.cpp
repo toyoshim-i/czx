@@ -173,6 +173,36 @@ void draw_activity_indicator(Rgb565Canvas& canvas, const HudState& hud, const Vi
     canvas.draw_text(bx + 13, by + 3, label.c_str(), pack_rgb565(245, 250, 255), 1);
 }
 
+void draw_fps_indicator(Rgb565Canvas& canvas, const HudState& hud) {
+    if (!hud.alt_held || hud.menu_open || hud.fps_x10 <= 0) {
+        return;
+    }
+
+    char label[24];
+    std::snprintf(label, sizeof(label), "%d.%d FPS", hud.fps_x10 / 10, hud.fps_x10 % 10);
+
+    uint16_t dot_col = pack_rgb565(64, 235, 160);
+    uint16_t border_col = pack_rgb565(56, 196, 136);
+    if (hud.fps_x10 < 300) {
+        dot_col = pack_rgb565(255, 88, 72);
+        border_col = pack_rgb565(230, 80, 68);
+    } else if (hud.fps_x10 < 550) {
+        dot_col = pack_rgb565(255, 204, 64);
+        border_col = pack_rgb565(220, 172, 52);
+    }
+
+    const int tw = Rgb565Canvas::text_width(label, 1);
+    const int box_w = 4 + 5 + 4 + tw + 4;
+    constexpr int kBoxH = 13;
+    constexpr int kBoxX = 4;
+    constexpr int kBoxY = 4;
+
+    canvas.fill_rect_alpha(kBoxX, kBoxY, box_w, kBoxH, pack_rgb565(10, 14, 22), 215);
+    canvas.draw_rect(kBoxX, kBoxY, box_w, kBoxH, border_col);
+    canvas.fill_rect(kBoxX + 4, kBoxY + 4, 5, 5, dot_col);
+    canvas.draw_text(kBoxX + 13, kBoxY + 3, label, pack_rgb565(245, 250, 255), 1);
+}
+
 }  // namespace
 
 std::string format_activity_label(uint32_t flags, int8_t tape_percent, uint8_t drive_mask) {
@@ -241,6 +271,7 @@ void render_hud(uint16_t* fb_rgb565, const HudState& hud, const ViewportLayout& 
 
     draw_scrollbars(canvas, hud, layout);
     draw_activity_indicator(canvas, hud, layout);
+    draw_fps_indicator(canvas, hud);
 
     if (hud.toast_frames > 0 && !hud.toast_text.empty() && !hud.menu_open) {
         const std::string toast = truncate_head_px(hud.toast_text, kLcdWidth - 22, 1);

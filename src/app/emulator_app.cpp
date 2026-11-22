@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -291,6 +292,7 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media) {
     destroy_active_core();
     reset_scaled_frame();
     clear_activity_state();
+    hud_.fps_x10 = 0;
     core_api_ = next_api;
     core_index_ = wrapped;
     pending_drive_ = 0;
@@ -1239,6 +1241,9 @@ int EmulatorApp::run() {
 
     auto last_tick = std::chrono::steady_clock::now();
     auto next_frame = last_tick + get_frame_period();
+    auto fps_window_start = last_tick;
+    int fps_window_frames = 0;
+    bool fps_initialized = false;
     std::vector<czx::input::RawKeyEvent> raw_events;
     std::vector<czx::platform::RawMouseEvent> raw_mouse;
     int frames_done = 0;
@@ -1251,6 +1256,16 @@ int EmulatorApp::run() {
         const auto now = std::chrono::steady_clock::now();
         const double dt_sec = std::chrono::duration<double>(now - last_tick).count();
         last_tick = now;
+
+        const double fps_ms = std::chrono::duration<double, std::milli>(now - fps_window_start).count();
+        const double fps_interval = fps_initialized ? 500.0 : 250.0;
+        if (fps_window_frames > 0 && fps_ms >= fps_interval) {
+            const double fps = static_cast<double>(fps_window_frames) * 1000.0 / fps_ms;
+            hud_.fps_x10 = std::clamp(static_cast<int>(std::lround(fps * 10.0)), 1, 9999);
+            fps_window_start = now;
+            fps_window_frames = 0;
+            fps_initialized = true;
+        }
 
         raw_events.clear();
         raw_mouse.clear();
@@ -1422,6 +1437,7 @@ int EmulatorApp::run() {
         }
 
         ++frames_done;
+        ++fps_window_frames;
         if (cfg_.headless_frames > 0 && frames_done >= cfg_.headless_frames) {
             break;
         }

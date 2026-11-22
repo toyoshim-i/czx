@@ -17,6 +17,7 @@ struct HudState {
     uint32_t pan_hint_frames = 0;
     uint32_t toast_frames = 0;
     std::string toast_text;
+    int fps_x10 = 0;  // Tenths of FPS (e.g. 599 = 59.9 FPS); <=0 hides indicator
     bool desktop_native = false;
     int desktop_scale = 2;
     DisplayMode display_mode = DisplayMode::OverflowFit;

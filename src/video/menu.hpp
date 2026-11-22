@@ -26,6 +26,7 @@ enum class MenuAction {
     ToggleAspectPolicy,
     ToggleBorders,
     ToggleMarginFill,
+    ToggleActivityIndicator,
     ToggleInputMode,
     ResetCore,
     Quit,
@@ -48,6 +49,7 @@ struct MenuViewModel {
     AspectPolicy aspect_policy = AspectPolicy::ParAware;
     bool show_borders = false;
     MarginFill margin_fill = MarginFill::Auto;
+    bool show_activity_indicator = true;
     int input_mode = 0;  // 0=Keyboard, 1=Joy P1, 2=Joy P2, 3=Mouse
 };
 
@@ -61,7 +63,7 @@ public:
     void render(uint16_t* fb_rgb565, const MenuViewModel& vm) const;
 
 private:
-    static constexpr int kItemCount = 10;
+    static constexpr int kItemCount = 11;
     bool open_ = false;
     int cursor_ = 0;
 };

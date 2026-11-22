@@ -113,6 +113,20 @@ enum {
     CZX_MOUSE_MIDDLE = 1u << 2,
 };
 
+enum {
+    CZX_ACTIVITY_TAPE_READ  = 1u << 0,
+    CZX_ACTIVITY_TAPE_WRITE = 1u << 1,
+    CZX_ACTIVITY_DISK       = 1u << 2,
+    CZX_ACTIVITY_QD         = 1u << 3,
+    CZX_ACTIVITY_SIO        = 1u << 4,
+};
+
+typedef struct czx_activity {
+    uint32_t flags;      /* bitmask of CZX_ACTIVITY_* */
+    int8_t tape_percent; /* 0..100 when known, -1 if unknown */
+    uint8_t drive_mask;  /* bitmask of active drives (bit0=drive1, bit1=drive2, ...) */
+} czx_activity_t;
+
 typedef struct czx_key_event {
     czx_key_t key;
     bool pressed;
@@ -169,6 +183,7 @@ typedef struct czx_core_api {
                             const char* path1, const char* label1);
     bool (*eject_drive)(czx_core_instance_t* inst, uint32_t drive);
     void (*on_mouse)(czx_core_instance_t* inst, int32_t dx, int32_t dy, uint32_t buttons);
+    bool (*get_activity)(const czx_core_instance_t* inst, czx_activity_t* out);
 } czx_core_api_t;
 
 #ifdef __cplusplus

@@ -18,6 +18,7 @@ void print_usage(const char* prog) {
         "  --borders                     Show overscan/PAL borders when present\n"
         "  --crt43                       Use 4:3 CRT aspect policy in aspect mode\n"
         "  --margin <auto|black>         Fill letterbox/pillarbox margins (default: auto)\n"
+        "  --activity <on|off>           Show bottom-right tape/disk access indicator (default: on)\n"
         "  --drm <path>                  Override DRM device path\n"
         "  --fb <path>                   Override fbdev device path\n"
         "  --fbdev                       Prefer fbdev over DRM on device\n"
@@ -72,6 +73,18 @@ int main(int argc, char** argv) {
                 cfg.margin_fill = czx::video::MarginFill::Black;
             } else {
                 std::fprintf(stderr, "Unknown margin mode: %s\n", mf);
+                return 2;
+            }
+        } else if (std::strcmp(arg, "--activity") == 0 && i + 1 < argc) {
+            const char* act = argv[++i];
+            if (std::strcmp(act, "on") == 0) {
+                cfg.show_activity_indicator = true;
+                cfg.activity_indicator_override = true;
+            } else if (std::strcmp(act, "off") == 0) {
+                cfg.show_activity_indicator = false;
+                cfg.activity_indicator_override = true;
+            } else {
+                std::fprintf(stderr, "Unknown activity mode: %s\n", act);
                 return 2;
             }
         } else if (std::strcmp(arg, "--drm") == 0 && i + 1 < argc) {

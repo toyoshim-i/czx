@@ -1,10 +1,12 @@
 #include "video/hud.hpp"
 
+#include "czx/core.h"
 #include "video/font6x8.hpp"
 #include "video/pixel.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 
 namespace czx::video {
 
@@ -121,13 +123,113 @@ void draw_scrollbars(Rgb565Canvas& canvas, const HudState& hud, const ViewportLa
     }
 }
 
+void draw_activity_indicator(Rgb565Canvas& canvas, const HudState& hud, const ViewportLayout& layout) {
+    if (!hud.show_activity_indicator || hud.activity_flags == 0u || hud.menu_open) {
+        return;
+    }
+
+    const std::string label =
+        format_activity_label(hud.activity_flags, hud.activity_tape_percent, hud.activity_drive_mask);
+    if (label.empty()) return;
+
+    uint16_t led_col = pack_rgb565(112, 224, 255);
+    uint16_t border_col = pack_rgb565(84, 184, 224);
+    if ((hud.activity_flags & CZX_ACTIVITY_TAPE_WRITE) != 0u) {
+        led_col = pack_rgb565(255, 88, 72);
+        border_col = pack_rgb565(230, 80, 68);
+    } else if ((hud.activity_flags & CZX_ACTIVITY_TAPE_READ) != 0u) {
+        led_col = pack_rgb565(64, 235, 160);
+        border_col = pack_rgb565(56, 196, 136);
+    } else if ((hud.activity_flags & CZX_ACTIVITY_QD) != 0u) {
+        led_col = pack_rgb565(96, 200, 255);
+        border_col = pack_rgb565(76, 176, 235);
+    } else if ((hud.activity_flags & CZX_ACTIVITY_DISK) != 0u) {
+        led_col = pack_rgb565(255, 204, 64);
+        border_col = pack_rgb565(220, 172, 52);
+    }
+
+    const int tw = Rgb565Canvas::text_width(label.c_str(), 1);
+    const int box_w = 4 + 5 + 4 + tw + 4;
+    constexpr int box_h = 13;
+
+    const bool scrollbars_shown =
+        (hud.display_mode == DisplayMode::NativePan) &&
+        (hud.alt_held || hud.panning_active || hud.pan_hint_frames > 0);
+    const int right_margin = (scrollbars_shown && layout.max_pan_y > 0) ? 8 : 4;
+    int bottom_edge = hud.alt_held ? (144 - 3) : (kLcdHeight - 4);
+    if (scrollbars_shown && layout.max_pan_x > 0) {
+        bottom_edge -= 6;
+    }
+
+    const int bx = std::max(2, kLcdWidth - right_margin - box_w);
+    const int by = std::max(2, bottom_edge - box_h);
+
+    canvas.fill_rect_alpha(bx, by, box_w, box_h, pack_rgb565(10, 14, 22), 215);
+    canvas.draw_rect(bx, by, box_w, box_h, border_col);
+    canvas.fill_rect(bx + 4, by + 4, 5, 5, led_col);
+    canvas.draw_text(bx + 13, by + 3, label.c_str(), pack_rgb565(245, 250, 255), 1);
+}
+
 }  // namespace
+
+std::string format_activity_label(uint32_t flags, int8_t tape_percent, uint8_t drive_mask) {
+    if (flags == 0u) return {};
+
+    std::string out;
+    auto append = [&](const std::string& token) {
+        if (token.empty()) return;
+        if (!out.empty()) out += ' ';
+        out += token;
+    };
+
+    const bool has_pct = (tape_percent >= 0 && tape_percent <= 100);
+    if ((flags & CZX_ACTIVITY_TAPE_WRITE) != 0u) {
+        if (has_pct) {
+            char buf[20];
+            std::snprintf(buf, sizeof(buf), "REC %d%%", static_cast<int>(tape_percent));
+            append(buf);
+        } else {
+            append("REC");
+        }
+    } else if ((flags & CZX_ACTIVITY_TAPE_READ) != 0u) {
+        if (has_pct) {
+            char buf[20];
+            std::snprintf(buf, sizeof(buf), "TAPE %d%%", static_cast<int>(tape_percent));
+            append(buf);
+        } else {
+            append("TAPE");
+        }
+    }
+
+    if ((flags & CZX_ACTIVITY_QD) != 0u) {
+        append("QD");
+    }
+
+    if ((flags & CZX_ACTIVITY_DISK) != 0u) {
+        if (drive_mask == 0x01u) {
+            append("FD1");
+        } else if (drive_mask == 0x02u) {
+            append("FD2");
+        } else if (drive_mask == 0x03u) {
+            append("FD1+2");
+        } else {
+            append("DISK");
+        }
+    }
+
+    if ((flags & CZX_ACTIVITY_SIO) != 0u) {
+        append("SIO");
+    }
+
+    return out;
+}
 
 void render_hud(uint16_t* fb_rgb565, const HudState& hud, const ViewportLayout& layout) {
     if (!fb_rgb565) return;
     Rgb565Canvas canvas(fb_rgb565, kLcdWidth, kLcdHeight);
 
     draw_scrollbars(canvas, hud, layout);
+    draw_activity_indicator(canvas, hud, layout);
 
     if (hud.toast_frames > 0 && !hud.toast_text.empty() && !hud.menu_open) {
         const std::string toast = truncate_head_px(hud.toast_text, kLcdWidth - 22, 1);

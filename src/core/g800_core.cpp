@@ -163,6 +163,14 @@ public:
         return media_label_.c_str();
     }
 
+    bool get_activity(czx_activity_t* out) const noexcept {
+        if (!out) return false;
+        out->flags = (last_sio_mode_ != 0) ? static_cast<uint32_t>(CZX_ACTIVITY_SIO) : 0u;
+        out->tape_percent = -1;
+        out->drive_mask = 0u;
+        return out->flags != 0u;
+    }
+
     void on_key(const czx_key_event_t& ev) {
         const size_t idx = static_cast<size_t>(ev.key);
         if (idx >= held_keys_.size()) return;
@@ -229,6 +237,7 @@ public:
 
         if (!have_frame) return;
 
+        last_sio_mode_ = lcd.sio_mode;
         render_lcd(lcd);
 
         if (host_.video_frame) {
@@ -365,6 +374,7 @@ private:
             step_budget_ = 0;
             has_pending_media_ = false;
             pending_media_.clear();
+            last_sio_mode_ = 0;
             dc_prev_in_ = 0.0f;
             dc_prev_out_ = 0.0f;
         }
@@ -561,6 +571,7 @@ private:
     uint32_t joy_state_ = 0;
     std::string pending_media_;
     bool has_pending_media_ = false;
+    int last_sio_mode_ = 0;
 
     float dc_prev_in_ = 0.0f;
     float dc_prev_out_ = 0.0f;
@@ -635,6 +646,10 @@ void g800_set_data_dir(czx_core_instance_t* inst, const char* dir) {
     if (inst && dir) reinterpret_cast<G800CoreInstance*>(inst)->set_data_dir(dir);
 }
 
+bool g800_get_activity(const czx_core_instance_t* inst, czx_activity_t* out) {
+    return inst && reinterpret_cast<const G800CoreInstance*>(inst)->get_activity(out);
+}
+
 const czx_core_api_t kG800Api = {
     nullptr,
     g800_get_desc,
@@ -661,6 +676,7 @@ const czx_core_api_t kG800Api = {
     nullptr,
     nullptr,
     nullptr,
+    g800_get_activity,
 };
 
 extern "C" void czx_g800_host_on_frame(const czx_g800_lcd_snapshot_t* lcd,

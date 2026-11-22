@@ -28,6 +28,8 @@ struct AppConfig {
     czx::video::AspectPolicy aspect_policy = czx::video::AspectPolicy::ParAware;
     bool show_borders = false;
     czx::video::MarginFill margin_fill = czx::video::MarginFill::Auto;
+    bool show_activity_indicator = true;
+    bool activity_indicator_override = false;
     int headless_frames = 0;
     bool verify_nonblank = false;
     czx::platform::PlatformOptions platform;
@@ -83,6 +85,11 @@ private:
     uint64_t presented_seq_ = 0;
     bool force_present_ = true;
     bool prev_overlay_active_ = false;
+    bool show_activity_indicator_ = true;
+    uint32_t activity_flags_ = 0;
+    int8_t activity_tape_percent_ = -1;
+    uint8_t activity_drive_mask_ = 0;
+    uint32_t activity_hold_frames_ = 0;
 
     void start_scale_worker();
     void stop_scale_worker();
@@ -90,6 +97,10 @@ private:
     void reset_scaled_frame();
 
     void ensure_data_dirs();
+    void load_app_config();
+    void save_app_config() const;
+    void clear_activity_state() noexcept;
+    void poll_core_activity();
     std::string default_media_dir_for_core() const;
     bool activate_core(int index, const std::string& initial_media = {});
     void destroy_active_core();

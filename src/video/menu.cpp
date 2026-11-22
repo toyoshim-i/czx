@@ -62,14 +62,16 @@ MenuAction OverlayMenu::handle_key(const czx_key_event_t& ev, const MenuViewMode
         case 6:
             return MenuAction::ToggleMarginFill;
         case 7:
-            return MenuAction::ToggleInputMode;
+            return MenuAction::ToggleActivityIndicator;
         case 8:
+            return MenuAction::ToggleInputMode;
+        case 9:
             if (ok) {
                 open_ = false;
                 return MenuAction::ResetCore;
             }
             return MenuAction::None;
-        case 9:
+        case 10:
             if (ok) {
                 return MenuAction::Quit;
             }
@@ -85,9 +87,9 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
     Rgb565Canvas canvas(fb_rgb565, kLcdWidth, kLcdHeight);
 
     constexpr int kBoxX = 12;
-    constexpr int kBoxY = 5;
+    constexpr int kBoxY = 3;
     constexpr int kBoxW = 296;
-    constexpr int kBoxH = 160;
+    constexpr int kBoxH = 164;
 
     canvas.fill_rect_alpha(0, 0, kLcdWidth, kLcdHeight, pack_rgb565(0, 0, 0), 140);
     canvas.fill_rect(kBoxX, kBoxY, kBoxW, kBoxH, pack_rgb565(18, 24, 34));
@@ -123,13 +125,14 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
         {"Aspect", aspect_policy_name(vm.aspect_policy)},
         {"Borders", vm.show_borders ? "Show Full" : "Crop Active"},
         {"Margin", margin_fill_name(vm.margin_fill)},
+        {"Access LED", vm.show_activity_indicator ? "On" : "Off"},
         {"Input", input_label},
         {"Reset Core", "[Enter]"},
         {"Quit App", "[Enter]"},
     }};
 
-    constexpr int kListY = kBoxY + 18;
-    constexpr int kRowH = 12;
+    constexpr int kListY = kBoxY + 17;
+    constexpr int kRowH = 11;
 
     for (int i = 0; i < kItemCount; ++i) {
         const int ry = kListY + i * kRowH;
@@ -141,12 +144,12 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
         const uint16_t label_col = selected ? pack_rgb565(255, 240, 140) : pack_rgb565(195, 205, 220);
         const uint16_t val_col = selected ? pack_rgb565(255, 255, 255) : pack_rgb565(130, 210, 245);
 
-        canvas.draw_char(kBoxX + 10, ry + 2, selected ? '>' : ' ', label_col);
-        canvas.draw_text(kBoxX + 20, ry + 2, rows[static_cast<size_t>(i)].label, label_col);
+        canvas.draw_char(kBoxX + 10, ry + 1, selected ? '>' : ' ', label_col);
+        canvas.draw_text(kBoxX + 20, ry + 1, rows[static_cast<size_t>(i)].label, label_col);
 
         const char* val = rows[static_cast<size_t>(i)].value;
         const int vw = Rgb565Canvas::text_width(val);
-        canvas.draw_text(kBoxX + kBoxW - 10 - vw, ry + 2, val, val_col);
+        canvas.draw_text(kBoxX + kBoxW - 10 - vw, ry + 1, val, val_col);
     }
 
     canvas.draw_hline(kBoxX + 6, kBoxY + kBoxH - 14, kBoxW - 12, pack_rgb565(56, 74, 98));

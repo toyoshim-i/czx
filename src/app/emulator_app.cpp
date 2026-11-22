@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <thread>
 
 namespace fs = std::filesystem;
@@ -60,6 +61,9 @@ EmulatorApp::EmulatorApp(AppConfig cfg)
     scaler_cfg_.aspect_policy = cfg_.aspect_policy;
     scaler_cfg_.show_borders = cfg_.show_borders;
     scaler_cfg_.margin_fill = cfg_.margin_fill;
+    show_activity_indicator_ = cfg_.show_activity_indicator;
+    load_app_config();
+    hud_.show_activity_indicator = show_activity_indicator_;
     preset_index_ = cfg_.preset_index;
 }
 
@@ -90,6 +94,117 @@ void EmulatorApp::ensure_data_dirs() {
     fs::create_directories(root / "media" / "mz700", ec);
     fs::create_directories(root / "saves", ec);
     fs::create_directories(root / "config", ec);
+}
+
+void EmulatorApp::load_app_config() {
+    if (cfg_.activity_indicator_override) return;
+    const fs::path cfg_path = fs::path(cfg_.data_dir) / "config" / "czx.cfg";
+    std::ifstream ifs(cfg_path);
+    if (!ifs.is_open()) return;
+
+    auto trim = [](std::string s) {
+        const auto a = s.find_first_not_of(" \t\r\n\"");
+        if (a == std::string::npos) return std::string{};
+        const auto b = s.find_last_not_of(" \t\r\n\"");
+        return s.substr(a, b - a + 1);
+    };
+
+    std::string line;
+    while (std::getline(ifs, line)) {
+        const auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = trim(line.substr(0, eq));
+        std::string val = trim(line.substr(eq + 1));
+        for (char& ch : val) {
+            if (ch >= 'A' && ch <= 'Z') {
+                ch = static_cast<char>(ch - 'A' + 'a');
+            }
+        }
+        if (key == "access_led") {
+            if (val == "off" || val == "0" || val == "false" || val == "disabled") {
+                show_activity_indicator_ = false;
+            } else if (val == "on" || val == "1" || val == "true" || val == "enabled") {
+                show_activity_indicator_ = true;
+            }
+        }
+    }
+}
+
+void EmulatorApp::save_app_config() const {
+    const fs::path cfg_path = fs::path(cfg_.data_dir) / "config" / "czx.cfg";
+    std::error_code ec;
+    fs::create_directories(cfg_path.parent_path(), ec);
+
+    std::vector<std::string> lines;
+    bool updated = false;
+    {
+        std::ifstream ifs(cfg_path);
+        std::string line;
+        while (std::getline(ifs, line)) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            const auto eq = line.find('=');
+            if (eq != std::string::npos) {
+                std::string key = line.substr(0, eq);
+                const auto a = key.find_first_not_of(" \t");
+                const auto b = key.find_last_not_of(" \t");
+                key = (a == std::string::npos) ? std::string{} : key.substr(a, b - a + 1);
+                if (key == "access_led") {
+                    line = std::string("access_led = ") + (show_activity_indicator_ ? "on" : "off");
+                    updated = true;
+                }
+            }
+            lines.push_back(std::move(line));
+        }
+    }
+    if (!updated) {
+        lines.emplace_back(std::string("access_led = ") + (show_activity_indicator_ ? "on" : "off"));
+    }
+
+    std::ofstream ofs(cfg_path, std::ios::trunc);
+    if (!ofs.is_open()) return;
+    for (const auto& l : lines) {
+        ofs << l << '\n';
+    }
+}
+
+void EmulatorApp::clear_activity_state() noexcept {
+    activity_flags_ = 0u;
+    activity_tape_percent_ = -1;
+    activity_drive_mask_ = 0u;
+    activity_hold_frames_ = 0u;
+    hud_.activity_flags = 0u;
+    hud_.activity_tape_percent = -1;
+    hud_.activity_drive_mask = 0u;
+}
+
+void EmulatorApp::poll_core_activity() {
+    czx_activity_t act{};
+    act.tape_percent = -1;
+    if (core_api_ && core_inst_ && core_api_->get_activity &&
+        core_api_->get_activity(core_inst_, &act) && act.flags != 0u) {
+        activity_flags_ = act.flags;
+        activity_tape_percent_ = act.tape_percent;
+        activity_drive_mask_ = act.drive_mask;
+        activity_hold_frames_ = 12u;
+    } else if (activity_hold_frames_ > 0u) {
+        --activity_hold_frames_;
+        if (activity_hold_frames_ == 0u) {
+            activity_flags_ = 0u;
+            activity_tape_percent_ = -1;
+            activity_drive_mask_ = 0u;
+        }
+    } else {
+        activity_flags_ = 0u;
+        activity_tape_percent_ = -1;
+        activity_drive_mask_ = 0u;
+    }
+
+    hud_.show_activity_indicator = show_activity_indicator_;
+    hud_.activity_flags = activity_flags_;
+    hud_.activity_tape_percent = activity_tape_percent_;
+    hud_.activity_drive_mask = activity_drive_mask_;
 }
 
 std::string EmulatorApp::default_media_dir_for_core() const {
@@ -137,6 +252,7 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media) {
 
     destroy_active_core();
     reset_scaled_frame();
+    clear_activity_state();
     core_api_ = next_api;
     core_index_ = wrapped;
     pending_drive_ = 0;
@@ -344,6 +460,7 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
     vm.aspect_policy = scaler_cfg_.aspect_policy;
     vm.show_borders = scaler_cfg_.show_borders;
     vm.margin_fill = scaler_cfg_.margin_fill;
+    vm.show_activity_indicator = show_activity_indicator_;
     vm.input_mode = static_cast<int>(router_.input_mode());
     return vm;
 }
@@ -550,11 +667,19 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
             show_toast(scaler_cfg_.margin_fill == czx::video::MarginFill::Auto ? "MARGIN: AUTO"
                                                                                : "MARGIN: BLACK");
             break;
+        case czx::video::MenuAction::ToggleActivityIndicator:
+            show_activity_indicator_ = !show_activity_indicator_;
+            hud_.show_activity_indicator = show_activity_indicator_;
+            save_app_config();
+            force_present_ = true;
+            show_toast(show_activity_indicator_ ? "ACCESS LED: ON" : "ACCESS LED: OFF");
+            break;
         case czx::video::MenuAction::ToggleInputMode:
             handle_host_command(czx::input::HostCommand::ToggleInputMode);
             break;
         case czx::video::MenuAction::ResetCore:
             if (core_api_ && core_inst_ && core_api_->reset) {
+                clear_activity_state();
                 core_api_->reset(core_inst_, true);
                 show_toast("CORE RESET");
             }
@@ -817,10 +942,14 @@ int EmulatorApp::run() {
         if (core_inst_) {
             core_api_->run_frame(core_inst_);
         }
+        poll_core_activity();
 
         if (scale_thread_running_) {
+            const bool activity_overlay = hud_.show_activity_indicator && hud_.activity_flags != 0u &&
+                                          !browser_.is_open() && !menu_.is_open();
             const bool overlay_active = (!core_inst_) || browser_.is_open() || menu_.is_open() ||
-                                        hud_.alt_held || hud_.pan_hint_frames > 0 || hud_.toast_frames > 0;
+                                        hud_.alt_held || hud_.pan_hint_frames > 0 || hud_.toast_frames > 0 ||
+                                        activity_overlay;
             uint64_t latest_seq = 0;
             {
                 std::lock_guard<std::mutex> lock(scale_mtx_);

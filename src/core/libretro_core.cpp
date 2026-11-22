@@ -620,6 +620,7 @@ public:
     void reset(bool) {
         g_active_instance = this;
         clear_held_inputs();
+        clear_leds();
         if (loader_->symbols().retro_reset) {
             loader_->symbols().retro_reset();
         }
@@ -1000,6 +1001,36 @@ public:
         return !has_media_ || reload_core_with_media("");
     }
 
+    bool get_activity(czx_activity_t* out) const noexcept {
+        if (!out) return false;
+        out->flags = 0u;
+        out->tape_percent = -1;
+        out->drive_mask = 0u;
+
+        if (led_tape_ != 0) {
+            if (is_emuz700_ && led_tape_ >= 100 && led_tape_ <= 200) {
+                out->flags |= CZX_ACTIVITY_TAPE_READ;
+                out->tape_percent = static_cast<int8_t>(led_tape_ - 100);
+            } else if (is_emuz700_ && led_tape_ >= 300 && led_tape_ <= 400) {
+                out->flags |= CZX_ACTIVITY_TAPE_WRITE;
+                out->tape_percent = static_cast<int8_t>(led_tape_ - 300);
+            } else {
+                out->flags |= CZX_ACTIVITY_TAPE_READ;
+                out->tape_percent = -1;
+            }
+        }
+        if (led_qd_ != 0) {
+            out->flags |= CZX_ACTIVITY_QD;
+        }
+        if (led_fdd_ != 0) {
+            out->flags |= CZX_ACTIVITY_DISK;
+            if (is_emuz700_) {
+                out->drive_mask = static_cast<uint8_t>(led_fdd_ & 0x0F);
+            }
+        }
+        return out->flags != 0u;
+    }
+
 private:
     struct HeldKey {
         bool down = false;
@@ -1094,6 +1125,25 @@ private:
     uint32_t pulsed_retrok_ = RETROK_UNKNOWN;
     int pulsed_frames_ = 0;
     bool pulsed_emitted_ = false;
+    int led_fdd_ = 0;
+    int led_tape_ = 0;
+    int led_qd_ = 0;
+
+    void clear_leds() noexcept {
+        led_fdd_ = 0;
+        led_tape_ = 0;
+        led_qd_ = 0;
+    }
+
+    void handle_led_state(int led, int state) noexcept {
+        if (led == 1) {
+            led_fdd_ = state;
+        } else if (led == 2) {
+            led_tape_ = state;
+        } else if (led == 3) {
+            led_qd_ = state;
+        }
+    }
 
     std::vector<uint16_t> cached_16_;
     std::vector<uint32_t> cached_32_;
@@ -1279,6 +1329,7 @@ private:
     void teardown_core() {
         g_active_instance = this;
         clear_held_inputs();
+        clear_leds();
         if (loader_->is_library_open()) {
             const auto& syms = loader_->symbols();
             if (game_loaded_ && syms.retro_unload_game) {
@@ -1310,6 +1361,7 @@ private:
         g_active_instance = this;
         loader_->set_last_error({});
         shutdown_requested_ = false;
+        clear_leds();
 
         std::string rom_err;
         if (!check_required_roms(rom_err)) {
@@ -2055,6 +2107,12 @@ private:
                 if (data) *static_cast<unsigned*>(data) = 1;
                 return true;
 
+            case RETRO_ENVIRONMENT_GET_LED_INTERFACE:
+                if (data) {
+                    static_cast<retro_led_interface*>(data)->set_led_state = cb_led_state;
+                }
+                return true;
+
             case RETRO_ENVIRONMENT_SET_MESSAGE:
             case RETRO_ENVIRONMENT_SET_MESSAGE_EXT:
             case RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS:
@@ -2110,6 +2168,9 @@ private:
         const size_t len = std::strlen(buf);
         if (len > 0 && buf[len - 1] == '\n') buf[len - 1] = '\0';
         g_active_instance->log(static_cast<int>(level), buf);
+    }
+    static void RETRO_CALLCONV cb_led_state(int led, int state) {
+        if (g_active_instance) g_active_instance->handle_led_state(led, state);
     }
 };
 
@@ -2208,6 +2269,10 @@ bool lr_load_dual_media(czx_core_instance_t* inst,
 
 bool lr_eject_drive(czx_core_instance_t* inst, uint32_t drive) {
     return inst && reinterpret_cast<LibretroCoreInstance*>(inst)->eject_drive(drive);
+}
+
+bool lr_get_activity(const czx_core_instance_t* inst, czx_activity_t* out) {
+    return inst && reinterpret_cast<const LibretroCoreInstance*>(inst)->get_activity(out);
 }
 
 }  // namespace
@@ -2332,6 +2397,7 @@ bool LibretroCoreLoader::load(const std::string& so_path) {
         lr_load_dual_media,
         lr_eject_drive,
         lr_on_mouse,
+        lr_get_activity,
     };
 
     loaded_ = true;

@@ -200,4 +200,8 @@ if(CZX_BUILD_TESTS)
     add_executable(test_d88 tests/test_d88.cpp)
     target_link_libraries(test_d88 PRIVATE czx_runtime)
     add_test(NAME test_d88 COMMAND test_d88)
+
+    add_executable(test_hud_menu tests/test_hud_menu.cpp)
+    target_link_libraries(test_hud_menu PRIVATE czx_runtime)
+    add_test(NAME test_hud_menu COMMAND test_hud_menu)
 endif()

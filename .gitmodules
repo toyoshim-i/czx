@@ -17,3 +17,6 @@
 	path = third_party/takeda-cscp-emulators
 	url = https://github.com/mc68-net/takeda-cscp-emulators.git
 	branch = vendor
+[submodule "third_party/msx68k"]
+	path = third_party/msx68k
+	url = https://github.com/toyoshim-i/msx68k.git

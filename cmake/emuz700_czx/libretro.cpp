@@ -42,6 +42,8 @@ VM* g_vm = nullptr;
 bool g_tape_turbo = true;
 bool g_host_supports_ff = false;
 bool g_ff_active = false;
+bool g_ejected = false;
+bool g_resume_tape_on_insert = false;
 std::string g_media_path;
 int g_last_led_fdd = -1;
 int g_last_led_tape = -1;
@@ -208,6 +210,14 @@ void apply_core_options() {
     }
 }
 
+bool is_supported_media_ext(const char* path) {
+    if (!path || path[0] == '\0') return false;
+    const std::string ext = to_lower(std::filesystem::path(path).extension().string());
+    return ext == ".q20" || ext == ".d88" || ext == ".2d" ||
+           ext == ".mzt" || ext == ".mzf" || ext == ".m12" ||
+           ext == ".wav" || ext == ".cas" || ext == ".tap" || ext == ".t77";
+}
+
 bool mount_media(const char* path) {
     if (!g_vm || !path || path[0] == '\0') return false;
     const std::string ext = to_lower(std::filesystem::path(path).extension().string());
@@ -232,6 +242,68 @@ bool mount_media(const char* path) {
     }
     log_msg(RETRO_LOG_ERROR, "unsupported media extension '%s': %s", ext.c_str(), path);
     return false;
+}
+
+bool RETRO_CALLCONV disk_set_eject_state(bool ejected) {
+    if (!g_vm) return false;
+    if (ejected == g_ejected) return true;
+    if (ejected) {
+        g_resume_tape_on_insert = g_vm->is_tape_playing(0);
+        g_vm->close_tape(0);
+        g_vm->close_quick_disk(0);
+        g_vm->close_floppy_disk(0);
+        g_ejected = true;
+        update_leds();
+        update_fastforward();
+        return true;
+    }
+    g_ejected = false;
+    bool ok = true;
+    if (!g_media_path.empty()) {
+        ok = mount_media(g_media_path.c_str());
+        if (ok && g_resume_tape_on_insert && g_vm->is_tape_inserted(0)) {
+            g_vm->push_play(0);
+        }
+    }
+    g_resume_tape_on_insert = false;
+    update_leds();
+    update_fastforward();
+    return ok;
+}
+
+bool RETRO_CALLCONV disk_get_eject_state(void) {
+    return g_ejected;
+}
+
+unsigned RETRO_CALLCONV disk_get_image_index(void) {
+    return 0u;
+}
+
+bool RETRO_CALLCONV disk_set_image_index(unsigned index) {
+    return index == 0u;
+}
+
+unsigned RETRO_CALLCONV disk_get_num_images(void) {
+    return g_media_path.empty() ? 0u : 1u;
+}
+
+bool RETRO_CALLCONV disk_replace_image_index(unsigned index, const struct retro_game_info* info) {
+    if (index != 0u || !g_ejected) return false;
+    if (!info || !info->path || info->path[0] == '\0') {
+        g_media_path.clear();
+        return true;
+    }
+    std::error_code ec;
+    if (!is_supported_media_ext(info->path) || !std::filesystem::is_regular_file(info->path, ec)) {
+        log_msg(RETRO_LOG_ERROR, "cannot replace media with '%s'", info->path);
+        return false;
+    }
+    g_media_path = info->path;
+    return true;
+}
+
+bool RETRO_CALLCONV disk_add_image_index(void) {
+    return true;
 }
 
 int retrok_to_vk(unsigned keycode) {
@@ -329,6 +401,8 @@ void RETRO_CALLCONV on_retro_keyboard(bool down, unsigned keycode, uint32_t, uin
 void destroy_vm() {
     clear_fastforward();
     clear_leds();
+    g_ejected = false;
+    g_resume_tape_on_insert = false;
     g_media_path.clear();
     g_last_led_fdd = -1;
     g_last_led_tape = -1;
@@ -470,6 +544,17 @@ RETRO_EXPORT void retro_set_environment(retro_environment_t cb) {
         {nullptr, nullptr},
     };
     cb(RETRO_ENVIRONMENT_SET_VARIABLES, const_cast<retro_variable*>(vars));
+
+    static const retro_disk_control_callback disk_cb{
+        disk_set_eject_state,
+        disk_get_eject_state,
+        disk_get_image_index,
+        disk_set_image_index,
+        disk_get_num_images,
+        disk_replace_image_index,
+        disk_add_image_index,
+    };
+    cb(RETRO_ENVIRONMENT_SET_DISK_CONTROL_INTERFACE, const_cast<retro_disk_control_callback*>(&disk_cb));
 }
 
 RETRO_EXPORT void retro_set_video_refresh(retro_video_refresh_t cb) {
@@ -506,6 +591,8 @@ RETRO_EXPORT void retro_reset(void) {
     std::memset(g_key_buf, 0, sizeof(g_key_buf));
     std::memset(g_vk_count, 0, sizeof(g_vk_count));
     std::memset(g_retrok_down, 0, sizeof(g_retrok_down));
+    g_ejected = false;
+    g_resume_tape_on_insert = false;
     if (g_vm) {
         g_vm->reset();
         g_vm->close_tape(0);

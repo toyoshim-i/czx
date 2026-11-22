@@ -174,6 +174,11 @@ bool is_mz700_tape_ext(const std::string& path) {
            ext == ".cas" || ext == ".tap" || ext == ".t77";
 }
 
+bool is_mz700_media_ext(const std::string& path) {
+    const std::string ext = to_lower_copy(fs::path(path).extension().string());
+    return is_mz700_tape_ext(path) || ext == ".q20" || ext == ".d88" || ext == ".2d";
+}
+
 bool is_pc98_hdd_ext(const std::string& path) {
     const std::string ext = to_lower_copy(fs::path(path).extension().string());
     return ext == ".hdi" || ext == ".nhd" || ext == ".thd" || ext == ".vhd" ||
@@ -643,7 +648,29 @@ public:
             }
         }
 
+        // Hot-swap MZ-700 removable media (CMT/QD/FD) without resetting the VM so
+        // multi-tape titles (e.g. program tape -> side A/B tape) keep RAM intact.
+        if (is_emuz700_ && game_loaded_ && has_disk_control()) {
+            if (!is_mz700_media_ext(path)) {
+                return false;
+            }
+            if (hot_swap_disk(path)) {
+                has_media_ = true;
+                media_path_ = path;
+                media_label_ = fs::path(path).filename().string();
+                ejected_ = false;
+                drive_paths_[0] = path;
+                drive_labels_[0] = media_label_;
+                return true;
+            }
+            return false;
+        }
+
         if (is_vice_ || is_quasi88_ || is_np2kai_ || is_bluemsx_ || is_emuz700_) {
+            std::error_code ec;
+            if (!fs::is_regular_file(path, ec)) {
+                return false;
+            }
             const bool ok = reload_core_with_media(path);
             if (ok) {
                 drive_paths_[0] = path;
@@ -1678,8 +1705,8 @@ private:
         }
 
         const bool ok = replace_idx(idx, &info) && set_idx(idx);
-        disk_set_eject_(false);
-        return ok;
+        const bool inserted = disk_set_eject_(false);
+        return ok && inserted;
     }
 
     void emit_retro_key(bool down, uint32_t retrok, uint32_t character, uint16_t mods) {

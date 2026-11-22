@@ -1,5 +1,6 @@
 #include "app/emulator_app.hpp"
 
+#include "core/d88_image.hpp"
 #include "video/font6x8.hpp"
 #include "video/pixel.hpp"
 
@@ -417,6 +418,7 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media, con
     pending_core_index_ = wrapped;
     ++core_epoch_;
     pending_drive_ = 0;
+    drive_d88_ = {};
     core_error_.clear();
     scaler_cfg_.pan_x = 0;
     scaler_cfg_.pan_y = 0;
@@ -474,6 +476,29 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media, con
         platform_.audio->init(desc->audio_sample_rate);
     }
 
+    const uint32_t dcount = (core_api_ && core_api_->get_drive_count) ? core_api_->get_drive_count(core_api_) : 1u;
+    if (dcount >= 2u) {
+        if (!initial_media.empty() && initial_media2.empty() && czx::core::is_d88_ext(initial_media)) {
+            std::vector<czx::core::D88SubDisk> disks;
+            if (czx::core::inspect_d88(initial_media, disks) && disks.size() >= 2u) {
+                drive_d88_[0] = {initial_media, 0};
+                drive_d88_[1] = {initial_media, 1};
+            }
+        } else {
+            if (!initial_media.empty() && czx::core::is_d88_ext(initial_media)) {
+                std::vector<czx::core::D88SubDisk> disks;
+                if (czx::core::inspect_d88(initial_media, disks) && disks.size() >= 2u) {
+                    drive_d88_[0] = {initial_media, 0};
+                }
+            }
+            if (!initial_media2.empty() && czx::core::is_d88_ext(initial_media2)) {
+                std::vector<czx::core::D88SubDisk> disks;
+                if (czx::core::inspect_d88(initial_media2, disks) && disks.size() >= 2u) {
+                    drive_d88_[1] = {initial_media2, 0};
+                }
+            }
+        }
+    }
     return true;
 }
 
@@ -736,12 +761,27 @@ void EmulatorApp::open_browser_for_drive(uint32_t drive) {
     }
     const std::string d88_cache_dir = (fs::path(cfg_.data_dir) / "saves" / "d88_cache").string();
     const bool allow_auto_dual = (drive_count >= 2u && drive == 0u);
-    browser_.open(start_dir, exts ? exts : "", title, d88_cache_dir, allow_auto_dual);
+    czx::video::D88PickerHint d88_hint{};
+    if (!has_pending_core_change() && core_inst_ != nullptr && drive < 2u) {
+        std::string source = !drive_d88_[drive].source_path.empty()
+                                 ? drive_d88_[drive].source_path
+                                 : ((drive_count >= 2u) ? drive_d88_[drive ^ 1u].source_path : std::string());
+        if (!source.empty()) {
+            d88_hint.source_path = source;
+            d88_hint.drive1_disk_index = (drive_d88_[0].source_path == source) ? drive_d88_[0].disk_index : -1;
+            d88_hint.drive2_disk_index = (drive_d88_[1].source_path == source) ? drive_d88_[1].disk_index : -1;
+            d88_hint.focus_disk_index = (drive == 0u) ? d88_hint.drive1_disk_index : d88_hint.drive2_disk_index;
+        }
+    }
+    browser_.open(start_dir, exts ? exts : "", title, d88_cache_dir, allow_auto_dual, d88_hint);
 }
 
 void EmulatorApp::eject_drive_slot(uint32_t drive) {
     if (has_pending_core_change() || !core_api_ || !core_inst_) return;
     if (core_api_->eject_drive && core_api_->eject_drive(core_inst_, drive)) {
+        if (drive < 2u) {
+            drive_d88_[drive] = {};
+        }
         const char* dname =
             (core_api_->get_drive_name) ? core_api_->get_drive_name(core_api_, drive) : nullptr;
         show_toast((std::string(dname ? dname : "Drive") + ": EJECTED").c_str());
@@ -824,7 +864,29 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
             const std::string& label = browser_.selected_label();
             const std::string& path2 = browser_.selected_drive2_path();
             const std::string& label2 = browser_.selected_drive2_label();
+            const std::string d88_src = browser_.selected_d88_source_path();
+            const int d88_idx1 = browser_.selected_d88_disk_index();
+            const int d88_idx2 = browser_.selected_drive2_d88_disk_index();
             const std::string d1_disp = label.empty() ? fs::path(path).filename().string() : label;
+            auto record_drive_d88 = [&](bool ok) {
+                if (!ok) return;
+                if (!path2.empty()) {
+                    drive_d88_[0] = {d88_src, d88_idx1};
+                    drive_d88_[1] = {d88_src, d88_idx2};
+                } else if (pending_drive_ < 2u) {
+                    std::string ext = fs::path(path).extension().string();
+                    for (char& ch : ext) {
+                        if (ch >= 'A' && ch <= 'Z') {
+                            ch = static_cast<char>(ch - 'A' + 'a');
+                        }
+                    }
+                    if (ext == ".cmt" || ext == ".t88" || ext == ".m3u" || ext == ".zip" || ext == ".cmd") {
+                        drive_d88_ = {};
+                    } else {
+                        drive_d88_[pending_drive_] = {d88_src, d88_idx1};
+                    }
+                }
+            };
             if (has_pending_core_change() || !core_inst_) {
                 const uint32_t drive_count =
                     (menu_api && menu_api->get_drive_count) ? menu_api->get_drive_count(menu_api) : 1u;
@@ -839,6 +901,7 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
                     m1 = path;
                 }
                 const bool ok = activate_core_with_loading(pending_core_index_, m1, m2, d1_disp);
+                record_drive_d88(ok);
                 if (ok) {
                     if (!path2.empty()) {
                         show_toast(("LOADED D1+D2: " + d1_disp).c_str());
@@ -884,6 +947,7 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
                     show_toast(("LOADED: " + d1_disp).c_str());
                 }
             }
+            record_drive_d88(ok);
             if (!ok) {
                 show_toast("LOAD FAILED");
             }

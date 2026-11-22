@@ -538,6 +538,17 @@ uint16_t rgb1555_to_rgb565(uint16_t p) noexcept {
     return static_cast<uint16_t>((r5 << 11) | (g6 << 5) | b5);
 }
 
+std::string friendly_d88_label(const std::string& path) {
+    const std::string fname = fs::path(path).filename().string();
+    if (fname.rfind("d88_", 0) == 0 && is_d88_ext(path)) {
+        std::vector<D88SubDisk> tmp;
+        if (inspect_d88(path, tmp) && !tmp.empty()) {
+            return tmp[0].name_utf8;
+        }
+    }
+    return fname;
+}
+
 class LibretroCoreInstance {
 public:
     LibretroCoreInstance(LibretroCoreLoader* loader, const czx_host_t* host, std::string extensions)
@@ -572,8 +583,8 @@ public:
         if (has_m1 && has_m2 && get_drive_count() >= 2u) {
             const std::string p0 = host_.initial_media;
             const std::string p1 = host_.initial_media2;
-            const std::string lbl0 = fs::path(p0).filename().string();
-            const std::string lbl1 = fs::path(p1).filename().string();
+            const std::string lbl0 = friendly_d88_label(p0);
+            const std::string lbl1 = friendly_d88_label(p1);
             if (is_msx68k_) {
                 if (is_x68k_hdd_ext(p0) && !is_x68k_hdd_ext(p1)) {
                     hdd_path_ = p0;
@@ -624,7 +635,7 @@ public:
             if (!start_core(init_path.c_str())) {
                 return false;
             }
-            const std::string lbl = fs::path(init_path).filename().string();
+            const std::string lbl = friendly_d88_label(init_path);
             if ((is_np2kai_ && is_pc98_hdd_ext(init_path)) ||
                 (is_msx68k_ && is_x68k_hdd_ext(init_path))) {
                 hdd_path_ = init_path;
@@ -640,7 +651,8 @@ public:
                 return false;
             }
             if (get_drive_count() >= 2u) {
-                return load_media_in_drive(1u, host_.initial_media2, nullptr);
+                const std::string lbl2 = friendly_d88_label(host_.initial_media2);
+                return load_media_in_drive(1u, host_.initial_media2, lbl2.c_str());
             }
             return load_media(host_.initial_media2);
         }
@@ -984,6 +996,20 @@ public:
             }
             drive_paths_[drive] = path;
             drive_labels_[drive] = lbl;
+            const bool can_hot_swap = game_loaded_ && has_disk_control() && (has_media_ || drive == 1u);
+            if (can_hot_swap) {
+                options_["q88_drive"] = (drive == 0u) ? "DRIVE1" : "DRIVE2";
+                option_dirty_ = true;
+                if (hot_swap_disk(path)) {
+                    ejected_ = false;
+                    if (drive == 0u) {
+                        has_media_ = true;
+                        media_path_ = path;
+                        media_label_ = lbl;
+                    }
+                    return true;
+                }
+            }
             if (!drive_paths_[0].empty() && !drive_paths_[1].empty()) {
                 const std::string target = build_dual_boot_file();
                 return !target.empty() && reload_core_with_media(target);
@@ -1119,6 +1145,21 @@ public:
         }
         drive_paths_[drive].clear();
         drive_labels_[drive] = "Empty";
+
+        if (is_quasi88_) {
+            if (game_loaded_ && has_disk_control()) {
+                options_["q88_drive"] = (drive == 0u) ? "DRIVE1" : "DRIVE2";
+                option_dirty_ = true;
+                return disk_set_eject_(true);
+            }
+            if (!drive_paths_[0].empty() || !drive_paths_[1].empty()) {
+                const std::string target = (!drive_paths_[0].empty() && !drive_paths_[1].empty())
+                                               ? build_dual_boot_file()
+                                               : (!drive_paths_[0].empty() ? drive_paths_[0] : drive_paths_[1]);
+                return !target.empty() && reload_core_with_media(target);
+            }
+            return !has_media_ || reload_core_with_media("");
+        }
 
         if (is_msx68k_) {
             if (game_loaded_ && has_disk_control()) {

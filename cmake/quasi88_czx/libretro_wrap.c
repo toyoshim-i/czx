@@ -8,7 +8,9 @@
 #define retro_init czx_unused_upstream_retro_init
 #define retro_load_game czx_unused_upstream_retro_load_game
 #define retro_run czx_unused_upstream_retro_run
+#define retro_set_environment czx_unused_upstream_retro_set_environment
 #include "LIBRETRO/libretro.c"
+#undef retro_set_environment
 #undef retro_run
 #undef retro_load_game
 #undef retro_init
@@ -21,6 +23,103 @@
 
 static bool czx_pad_state[2][6];
 static bool czx_mouse_btn[3];
+static bool czx_drive_ejected[2];
+static char czx_pending_disk[2][OSD_MAX_FILENAME];
+static bool czx_has_pending_disk[2];
+
+static int czx_parse_drive_option(void)
+{
+    struct retro_variable var;
+    var.key = "q88_drive";
+    var.value = NULL;
+    if (environ_cb && environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+    {
+        if (strcmp(var.value, "DRIVE2") == 0 ||
+            strcmp(var.value, "2") == 0 ||
+            strcmp(var.value, "1") == 0)
+        {
+            return DRIVE_2;
+        }
+    }
+    return DRIVE_1;
+}
+
+static bool RETRO_CALLCONV czx_disk_set_eject_state(bool ejected)
+{
+    int drv = czx_parse_drive_option();
+    czx_drive_ejected[drv] = ejected;
+    if (ejected)
+    {
+        quasi88_disk_eject(drv);
+        return true;
+    }
+    if (czx_has_pending_disk[drv])
+    {
+        czx_has_pending_disk[drv] = false;
+        return quasi88_disk_insert(drv, czx_pending_disk[drv], 0, 0) != FALSE;
+    }
+    return true;
+}
+
+static bool RETRO_CALLCONV czx_disk_get_eject_state(void)
+{
+    return czx_drive_ejected[czx_parse_drive_option()];
+}
+
+static unsigned RETRO_CALLCONV czx_disk_get_image_index(void)
+{
+    return 0;
+}
+
+static bool RETRO_CALLCONV czx_disk_set_image_index(unsigned index)
+{
+    (void)index;
+    return true;
+}
+
+static unsigned RETRO_CALLCONV czx_disk_get_num_images(void)
+{
+    return 1;
+}
+
+static bool RETRO_CALLCONV czx_disk_replace_image_index(unsigned index, const struct retro_game_info *info)
+{
+    int drv;
+    (void)index;
+    drv = czx_parse_drive_option();
+    if (!info || !info->path || info->path[0] == '\0')
+    {
+        czx_has_pending_disk[drv] = false;
+        czx_pending_disk[drv][0] = '\0';
+        return true;
+    }
+    if (strlen(info->path) >= sizeof(czx_pending_disk[drv]))
+        return false;
+    strlcpy(czx_pending_disk[drv], info->path, sizeof(czx_pending_disk[drv]));
+    czx_has_pending_disk[drv] = true;
+    return true;
+}
+
+static bool RETRO_CALLCONV czx_disk_add_image_index(void)
+{
+    return true;
+}
+
+void retro_set_environment(retro_environment_t cb)
+{
+    struct retro_disk_control_callback disk_cb;
+
+    czx_unused_upstream_retro_set_environment(cb);
+    memset(&disk_cb, 0, sizeof(disk_cb));
+    disk_cb.set_eject_state = czx_disk_set_eject_state;
+    disk_cb.get_eject_state = czx_disk_get_eject_state;
+    disk_cb.get_image_index = czx_disk_get_image_index;
+    disk_cb.set_image_index = czx_disk_set_image_index;
+    disk_cb.get_num_images = czx_disk_get_num_images;
+    disk_cb.replace_image_index = czx_disk_replace_image_index;
+    disk_cb.add_image_index = czx_disk_add_image_index;
+    cb(RETRO_ENVIRONMENT_SET_DISK_CONTROL_INTERFACE, &disk_cb);
+}
 
 static bool czx_find_file_in_dir(const char *dir, const char *target, char *out, size_t out_sz)
 {
@@ -439,6 +538,9 @@ void retro_init(void)
 
     memset(czx_pad_state, 0, sizeof(czx_pad_state));
     memset(czx_mouse_btn, 0, sizeof(czx_mouse_btn));
+    memset(czx_drive_ejected, 0, sizeof(czx_drive_ejected));
+    memset(czx_pending_disk, 0, sizeof(czx_pending_disk));
+    memset(czx_has_pending_disk, 0, sizeof(czx_has_pending_disk));
     mouse_mode = MOUSE_JOYSTICK;
     use_swcursor = TRUE;
 }
@@ -448,6 +550,9 @@ bool retro_load_game(const struct retro_game_info *info)
     init_variables();
     quasi88_start();
     quasi88_disk_eject_all();
+    memset(czx_drive_ejected, 0, sizeof(czx_drive_ejected));
+    memset(czx_pending_disk, 0, sizeof(czx_pending_disk));
+    memset(czx_has_pending_disk, 0, sizeof(czx_has_pending_disk));
 
     tape_path[0] = '\0';
     autotype_count = 0;

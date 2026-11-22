@@ -43,6 +43,8 @@
 #undef osd_dir_lcfg
 #undef osd_dir_gcfg
 
+#include "drive.h"
+
 static int czx_alloc_dir_slot(char **slot, const char *defval)
 {
     if (*slot == NULL)
@@ -194,6 +196,24 @@ OSD_FILE *osd_fopen(int type, const char *path, const char *mode)
         {
             current_stream = &osd_stream[i];
             break;
+        }
+    }
+    if (current_stream == NULL)
+    {
+        for (i = 0; i < MAX_STREAM; i++)
+        {
+            if (osd_stream[i].type == FTYPE_DISK &&
+                &osd_stream[i] != drive[0].fp &&
+                &osd_stream[i] != drive[1].fp)
+            {
+                if (osd_stream[i].sfp)
+                    filestream_close(osd_stream[i].sfp);
+                if (osd_stream[i].fp)
+                    filestream_close(osd_stream[i].fp);
+                memset(&osd_stream[i], 0, sizeof(osd_stream[i]));
+                current_stream = &osd_stream[i];
+                break;
+            }
         }
     }
     if (current_stream == NULL)

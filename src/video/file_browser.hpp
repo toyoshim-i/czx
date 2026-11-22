@@ -15,6 +15,13 @@ enum class FileBrowserAction {
     Selected,
 };
 
+struct D88PickerHint {
+    std::string source_path;
+    int drive1_disk_index = -1;
+    int drive2_disk_index = -1;
+    int focus_disk_index = -1;
+};
+
 class FileBrowser {
 public:
     bool is_open() const noexcept { return open_; }
@@ -22,10 +29,12 @@ public:
               const std::string& pipe_extensions,
               const std::string& title = "MEDIA",
               const std::string& d88_cache_dir = "",
-              bool allow_auto_dual = false);
+              bool allow_auto_dual = false,
+              const D88PickerHint& d88_hint = {});
     void close() noexcept {
         open_ = false;
         in_d88_picker_ = false;
+        d88_direct_mode_ = false;
     }
 
     FileBrowserAction handle_key(const czx_key_event_t& ev);
@@ -35,6 +44,9 @@ public:
     const std::string& selected_label() const noexcept { return selected_label_; }
     const std::string& selected_drive2_path() const noexcept { return selected_drive2_path_; }
     const std::string& selected_drive2_label() const noexcept { return selected_drive2_label_; }
+    const std::string& selected_d88_source_path() const noexcept { return selected_d88_source_path_; }
+    int selected_d88_disk_index() const noexcept { return selected_d88_disk_index_; }
+    int selected_drive2_d88_disk_index() const noexcept { return selected_drive2_d88_disk_index_; }
     const std::string& current_dir() const noexcept { return current_dir_; }
 
 private:
@@ -62,9 +74,15 @@ private:
     int scroll_ = 0;
 
     bool in_d88_picker_ = false;
+    bool d88_direct_mode_ = false;
+    int d88_drive1_index_ = -1;
+    int d88_drive2_index_ = -1;
     std::string d88_source_path_;
     std::string d88_source_name_;
     std::vector<czx::core::D88SubDisk> d88_disks_;
+    std::string selected_d88_source_path_;
+    int selected_d88_disk_index_ = -1;
+    int selected_drive2_d88_disk_index_ = -1;
     int saved_cursor_ = 0;
     int saved_scroll_ = 0;
 

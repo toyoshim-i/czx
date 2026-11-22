@@ -8,6 +8,7 @@
 #include "video/menu.hpp"
 #include "video/scaler.hpp"
 
+#include <array>
 #include <condition_variable>
 #include <cstdint>
 #include <map>
@@ -74,6 +75,11 @@ private:
     bool running_ = true;
     bool saw_nonblank_frame_ = false;
     uint32_t pending_drive_ = 0;
+    struct DriveD88State {
+        std::string source_path;
+        int disk_index = -1;
+    };
+    std::array<DriveD88State, 2> drive_d88_{};
     std::string core_error_;
     std::map<std::string, std::string> last_media_dirs_;
 

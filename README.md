@@ -13,7 +13,7 @@
 | [NEC PC-8801](docs/pc88.md) | `quasi88` | Optional *(pseudo BIOS fallback; UPPER/lower accepted)* | `quasi88/` | `pc88/` — `.d88` `.t88` `.cmt` `.m3u` `.zip` |
 | [NEC PC-9801](docs/pc98.md) | `np2kai` | Optional *(HLE BIOS fallback; lowercase)* | `np2kai/` | `pc98/` — `.fdi` `.hdm` `.d88` `.nhd` `.hdi` `.cmd` `.zip` |
 | [MSX / MSX2 / MSX2+](docs/msx.md) | `bluemsx` | Cartridges: **No** *(bundled C-BIOS)*<br>BASIC / `.dsk`: **Yes** *(case-insensitive in `Shared Roms/`)* | `bluemsx/Machines/Shared Roms/` | `msx/` — `.rom` `.mx1` `.mx2` `.dsk` `.cas` `.m3u` `.zip` |
-| [SHARP PC-G850 / G815 / E200](docs/g800.md) | `g800` *(built-in)* | Optional *(compat BASIC/IOCS fallback; lowercase)* | `g800/` *(or `g850/`, `g815/`, `e200/`)* | `g800/` — `.ihx` `.hex` `.bas` `.txt` |
+| [SHARP PC-G850 / G815 / E200](docs/g800.md) | `g800` *(built-in)* | Optional *(compat BASIC/IOCS fallback; case-insensitive)* | `g800/` *(or `g850/`, `g815/`, `e200/`)* | `g800/` — `.ihx` `.hex` `.bas` `.txt` |
 | [SHARP MZ-700](docs/mz700.md) | `emuz700` | **Yes** *(case-insensitive + aliases)* | `mz700/` | `mz700/` — `.mzt` `.mzf` `.m12` `.wav` `.tap` `.q20` `.d88` `.2d` |
 
 `czx` also includes a built-in `test_pattern` core (requires no ROMs or media) with interactive `280×192`, `560×192`, `320×200`, `384×272`, and `640×400` calibration patterns.

@@ -4,11 +4,15 @@
  */
 
 #include <ctype.h>
+#include <dirent.h>
+#include <limits.h>
 #include <setjmp.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -26,6 +30,74 @@ static int g_default_base_saved = 0;
 static int g_updatekey_calls = 0;
 static int g_phys_shift_held = 0;
 static int g_lcd_dirty = 0;
+static int g_rom_frames = 0;
+static int g_blank_warned = 0;
+static int g_halt_logged = 0;
+
+static void g800_logf(int level, const char* fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    czx_g800_host_log(level, buf);
+}
+
+static FILE* fopen_ci(const char* path, const char* mode) {
+    FILE* fp;
+    const char* slash;
+    char dir_buf[PATH_MAX];
+    const char* base_name;
+    DIR* dir;
+    struct dirent* ent;
+
+    if (path == NULL || path[0] == '\0' || mode == NULL) {
+        return NULL;
+    }
+    fp = fopen(path, mode);
+    if (fp != NULL || mode[0] != 'r') {
+        return fp;
+    }
+
+    slash = strrchr(path, '/');
+    if (slash == NULL) {
+        snprintf(dir_buf, sizeof(dir_buf), ".");
+        base_name = path;
+    } else if (slash == path) {
+        snprintf(dir_buf, sizeof(dir_buf), "/");
+        base_name = slash + 1;
+    } else {
+        size_t dlen = (size_t)(slash - path);
+        if (dlen >= sizeof(dir_buf)) {
+            dlen = sizeof(dir_buf) - 1;
+        }
+        memcpy(dir_buf, path, dlen);
+        dir_buf[dlen] = '\0';
+        base_name = slash + 1;
+    }
+    if (base_name[0] == '\0') {
+        return NULL;
+    }
+
+    dir = opendir(dir_buf);
+    if (dir == NULL) {
+        return NULL;
+    }
+    while ((ent = readdir(dir)) != NULL) {
+        if (strcasecmp(ent->d_name, base_name) == 0) {
+            char resolved[PATH_MAX];
+            if (strcmp(dir_buf, "/") == 0) {
+                snprintf(resolved, sizeof(resolved), "/%s", ent->d_name);
+            } else {
+                snprintf(resolved, sizeof(resolved), "%s/%s", dir_buf, ent->d_name);
+            }
+            closedir(dir);
+            return fopen(resolved, mode);
+        }
+    }
+    closedir(dir);
+    return NULL;
+}
 
 int (stricmp)(const char* a, const char* b) {
     return strcasecmp(a, b);
@@ -73,6 +145,7 @@ static void build_lcd_snapshot(czx_g800_lcd_snapshot_t* out) {
     out->lcd_dark = lcdEffectDark;
     out->use_rom = useROM;
     out->sio_mode = sioMode;
+    out->cpu_halted = isoff() ? 1 : 0;
 
     top_row = lcdTop / 8;
     shift = lcdTop % 8;
@@ -91,6 +164,34 @@ static void build_lcd_snapshot(czx_g800_lcd_snapshot_t* out) {
 static void yield_frame(void) {
     czx_g800_lcd_snapshot_t snap;
     build_lcd_snapshot(&snap);
+    if (useROM && !g_blank_warned) {
+        g_rom_frames++;
+        if (!snap.lcd_disabled) {
+            int vram_bytes = snap.vram_rows * snap.vram_width;
+            int k;
+            if (vram_bytes > (int)sizeof(snap.vram)) {
+                vram_bytes = (int)sizeof(snap.vram);
+            }
+            for (k = 0; k < vram_bytes; k++) {
+                if (snap.vram[k] != 0) {
+                    g_blank_warned = 1;
+                    break;
+                }
+            }
+        }
+        if (!g_blank_warned && g_rom_frames >= 120) {
+            g_blank_warned = 1;
+            g800_logf(2,
+                      "g800: ROM LCD still blank after 120 frames (PC=0x%04x SP=0x%04x bank=%d lcdDisabled=%d contrast=%d halt=%d iff=%d)",
+                      z80.r16.pc,
+                      z80.r16.sp,
+                      romBank,
+                      (int)lcdDisabled,
+                      (int)lcdContrast,
+                      (int)z80.r.halt,
+                      (int)z80.r.iff);
+        }
+    }
     czx_g800_host_on_frame(&snap, soundReadBuffer, soundBufferSize);
     g_updatekey_calls = 0;
     g_lcd_dirty = 0;
@@ -127,7 +228,7 @@ static int parse_ihex(FILE* fp, uint8* mem, int* ret_top, int mem_size, int chec
     for (;;) {
         int ch = fgetc(fp);
         int len, off_h, off_l, off, rec, sum, chk, i;
-        if (ch == EOF) break;
+        if (ch == EOF || ch == 0x1a) break;
         if (ch == '\r' || ch == '\n' || ch == ' ' || ch == '\t') continue;
         if (ch != ':') return -1;
 
@@ -179,7 +280,7 @@ int readBin(const char* path, void* mem, int mem_size) {
     size_t got;
 
     if (path == NULL || path[0] == '\0') return -1;
-    fp = fopen(path, "rb");
+    fp = fopen_ci(path, "rb");
     if (fp == NULL) return -1;
 
     if (mem_size <= 0) {
@@ -220,7 +321,7 @@ int readHex(const char* path, void* mem, int* off, int mem_size, int check) {
     int sz;
 
     if (path == NULL || path[0] == '\0') return -1;
-    fp = fopen(path, "r");
+    fp = fopen_ci(path, "r");
     if (fp == NULL) return -1;
     sz = parse_ihex(fp, (uint8*)mem, off, mem_size, check, 0);
     fclose(fp);
@@ -233,7 +334,7 @@ int readHexAbs(const char* path, void* mem, int* off, int mem_size, int check) {
     int sz;
 
     if (path == NULL || path[0] == '\0') return -1;
-    fp = fopen(path, "r");
+    fp = fopen_ci(path, "r");
     if (fp == NULL) return -1;
     sz = parse_ihex(fp, NULL, &top, 0x10000, check, 0);
     if (sz >= 0 && mem != NULL) {
@@ -626,20 +727,37 @@ uint16_t czx_g800_map_joy_key(int joy_bit) {
     }
 }
 
-static int dir_has_g800_rom(const char* dir) {
+static int dir_has_g800_rom(const char* dir, const char** reason_out) {
     uint8 probe[0x40];
-    if (dir == NULL || dir[0] == '\0') return FALSE;
-    if (loadROM1page(probe, dir, -1, 0x40) < 0x40) return FALSE;
-    if (loadROM1page(NULL, dir, 0, 0x4000) != 0x4000) return FALSE;
+    if (dir == NULL || dir[0] == '\0') {
+        if (reason_out) *reason_out = "empty rom_dir";
+        return FALSE;
+    }
+    if (loadROM1page(probe, dir, -1, 0x40) < 0x40) {
+        if (reason_out) *reason_out = "no base.bin/base.txt";
+        return FALSE;
+    }
+    if (loadROM1page(NULL, dir, 0, 0x4000) != 0x4000) {
+        if (reason_out) *reason_out = "base found, missing or invalid 16KiB rom00.bin/rom00.txt";
+        return FALSE;
+    }
+    if (reason_out) *reason_out = "ok";
     return TRUE;
 }
 
 int czx_g800_session_run(int model,
                          const char* rom_dir,
-                         const char* ram_path,
+                         const char* ram_path_sim,
+                         const char* ram_path_rom,
                          const char* basic_path,
-                         const char* initial_media) {
+                         const char* initial_media,
+                         int cold_boot) {
     const Machineinfo* m;
+    const char* model_name = "PC-G850";
+    const char* rom_reason = "no base.bin/base.txt";
+    const char* selected_ram = NULL;
+    const char* ram_status = "fresh";
+    int ram_loaded = FALSE;
 
     if (!g_default_base_saved) {
         memcpy(g_default_base, base, sizeof(base));
@@ -664,20 +782,25 @@ int czx_g800_session_run(int model,
         free(bas.vars);
     }
     memset(&bas, 0, sizeof(bas));
+    memset(memory, 0, sizeof(memory));
+    memset(&z80, 0, sizeof(z80));
 
     switch (model) {
         case CZX_G800_MODEL_G815:
             machine = MACHINE_G815;
             machineSub = MACHINE_SUB_PCG815;
+            model_name = "PC-G815";
             break;
         case CZX_G800_MODEL_E200:
             machine = MACHINE_E200;
             machineSub = MACHINE_SUB_PCE200;
+            model_name = "PC-E200";
             break;
         case CZX_G800_MODEL_G850:
         default:
             machine = MACHINE_G850;
             machineSub = MACHINE_SUB_PCG850V;
+            model_name = "PC-G850";
             break;
     }
 
@@ -686,7 +809,27 @@ int czx_g800_session_run(int model,
     freqUpdateIO = 60;
     noWait = FALSE;
     useBasic = TRUE;
+    romBanks = 0;
+    romBank = 0;
+    exBank = 0;
+    ramBank = 0;
+    ioReset = 1;
+    onCd = 0;
+    m1Wait = 0;
+    ioWait = 0;
+    csClk = 0;
+    interruptType = 0;
+    interruptMask = 0;
+    timer = 0;
+    timerCount = 0;
     lcdScales = 2;
+    lcdRead = 0;
+    lcdX = 0;
+    lcdY = 0;
+    lcdX2 = 0;
+    lcdY2 = 0;
+    lcdMod = 0;
+    lcdTrim = 0;
     lcdTop = 0;
     lcdBegin = 0;
     lcdDisabled = 0;
@@ -696,8 +839,22 @@ int czx_g800_session_run(int model,
     lcdEffectReverse = 0;
     lcdEffectDark = 0;
     lcdEffectWhite = 0;
+    pin11If = PIN11IF_3IO;
+    pin11In = 0;
+    xinEnabled = 0;
+    io3Out = 0;
+    pio8Io = 0;
+    pio8Out = 0;
+    uartIo = 0;
+    uartMode = 0;
+    uartCommand = 0;
+    uartStatus = 0;
+    battChk = 0;
     emulatorMode = EMULATOR_MODE_RUN;
     sioMode = SIO_MODE_STOP;
+    sioBufferSize = 0;
+    sioCount = 0;
+    sioBusy = 0;
     pathSioIn[0] = '\0';
     pathSioOut[0] = '\0';
     memset(vram, 0, sizeof(vram));
@@ -707,16 +864,13 @@ int czx_g800_session_run(int model,
     keyReset = FALSE;
     g_phys_shift_held = 0;
     g_updatekey_calls = 0;
+    g_rom_frames = 0;
+    g_blank_warned = 0;
+    g_halt_logged = 0;
     setAutoKeyText("", FALSE);
 
     updateLayout();
 
-    if (ram_path != NULL) {
-        strncpy(pathRAM, ram_path, sizeof(pathRAM) - 1);
-        pathRAM[sizeof(pathRAM) - 1] = '\0';
-    } else {
-        pathRAM[0] = '\0';
-    }
     if (basic_path != NULL) {
         strncpy(pathBasic, basic_path, sizeof(pathBasic) - 1);
         pathBasic[sizeof(pathBasic) - 1] = '\0';
@@ -730,7 +884,7 @@ int czx_g800_session_run(int model,
     soundWriteBuffer = soundReadBuffer + soundBufferSize;
     soundPlayed = TRUE;
 
-    if (dir_has_g800_rom(rom_dir)) {
+    if (dir_has_g800_rom(rom_dir, &rom_reason)) {
         useROM = TRUE;
         emulateIOCS = FALSE;
         strncpy(dirROM, rom_dir, sizeof(dirROM) - 1);
@@ -744,11 +898,47 @@ int czx_g800_session_run(int model,
     if (!loadROM(dirROM)) {
         useROM = FALSE;
         emulateIOCS = TRUE;
+        rom_reason = "loadROM failed";
         dirROM[0] = '\0';
         (void)loadROM(dirROM);
     }
 
-    loadRAM(pathRAM);
+    selected_ram = useROM ? ram_path_rom : ram_path_sim;
+    if (selected_ram != NULL) {
+        strncpy(pathRAM, selected_ram, sizeof(pathRAM) - 1);
+        pathRAM[sizeof(pathRAM) - 1] = '\0';
+    } else {
+        pathRAM[0] = '\0';
+    }
+
+    if (!cold_boot) {
+        ram_loaded = loadRAM(pathRAM);
+        ram_status = ram_loaded ? "loaded" : "fresh";
+    } else {
+        ram_status = "cold-boot";
+        if (!useROM) {
+            memory[0x7901] = 0x02;
+            memory[0x7903] = 0x60;
+        }
+    }
+
+    if (useROM) {
+        g800_logf(1,
+                  "g800: model=%s mode=ROM dir=%s banks=%d ram=%s (%s)",
+                  model_name,
+                  dirROM,
+                  romBanks,
+                  pathRAM,
+                  ram_status);
+    } else {
+        g800_logf(1,
+                  "g800: model=%s mode=SIM dir=%s (%s) ram=%s (%s)",
+                  model_name,
+                  rom_dir ? rom_dir : "",
+                  rom_reason,
+                  pathRAM,
+                  ram_status);
+    }
 
     z80.m = memory;
     z80.i.trace = FALSE;
@@ -770,9 +960,24 @@ int czx_g800_session_run(int model,
         }
         /* Keep pumping LCD frames if pocket computer entered software power-off state. */
         while (g_jmp_active) {
+            if (useROM && !g_halt_logged) {
+                g_halt_logged = 1;
+                g800_logf(1,
+                          "g800: CPU entered power-off/HALT (PC=0x%04x SP=0x%04x bank=%d lcdDisabled=%d iff=%d ioReset=%d); press ESC (ON/BRK) to wake",
+                          z80.r16.pc,
+                          z80.r16.sp,
+                          romBank,
+                          (int)lcdDisabled,
+                          (int)z80.r.iff,
+                          (int)ioReset);
+            }
             updateKey();
             if (keyReset || (keyBreak & 0x80)) {
                 keyReset = FALSE;
+                if (useROM) {
+                    g800_logf(1, "g800: waking CPU from power-off/HALT");
+                    g_halt_logged = 0;
+                }
                 boot();
                 if (useROM) {
                     exec(FALSE);

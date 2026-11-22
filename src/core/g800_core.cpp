@@ -6,10 +6,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
@@ -99,24 +101,24 @@ public:
 
     bool init() {
         ensure_dirs();
-        return start_session(initial_media_);
+        return start_session(initial_media_, false);
     }
 
     void set_data_dir(const std::string& dir) {
         if (dir.empty() || dir == data_dir_) return;
         data_dir_ = dir;
         ensure_dirs();
-        (void)start_session(initial_media_);
+        (void)start_session(initial_media_, false);
     }
 
-    void reset(bool) {
+    void reset(bool hard) {
         {
             std::lock_guard<std::mutex> lock(mtx_);
             key_queue_.clear();
             held_keys_.fill(0);
             joy_state_ = 0;
         }
-        (void)start_session(initial_media_);
+        (void)start_session(initial_media_, hard);
     }
 
     uint32_t get_preset_count() const noexcept {
@@ -139,7 +141,7 @@ public:
             held_keys_.fill(0);
             joy_state_ = 0;
         }
-        return start_session(initial_media_);
+        return start_session(initial_media_, false);
     }
 
     bool load_media(const std::string& path) {
@@ -235,14 +237,14 @@ public:
             frame.pitch_bytes = static_cast<uint32_t>(kLcdScreenW * 2);
             frame.width = static_cast<uint16_t>(kLcdScreenW);
             frame.height = static_cast<uint16_t>(kLcdScreenH);
-            frame.crop_x = static_cast<uint16_t>(crop_x_);
-            frame.crop_y = static_cast<uint16_t>(crop_y_);
-            frame.crop_w = static_cast<uint16_t>(crop_w_);
-            frame.crop_h = static_cast<uint16_t>(crop_h_);
+            frame.crop_x = 0;
+            frame.crop_y = 0;
+            frame.crop_w = 0;
+            frame.crop_h = 0;
             frame.par_num = 1;
             frame.par_den = 1;
             frame.format = CZX_PIXEL_RGB565;
-            frame.flags = CZX_FRAME_HAS_BORDER;
+            frame.flags = 0;
             host_.video_frame(host_.user_data, &frame);
         }
 
@@ -317,25 +319,41 @@ private:
         fs::create_directories(root / "saves", ec);
     }
 
+    static bool has_base_rom_ci(const fs::path& dir) {
+        std::error_code ec;
+        if (!fs::is_directory(dir, ec)) return false;
+        for (const auto& entry : fs::directory_iterator(dir, ec)) {
+            if (!entry.is_regular_file(ec) && !entry.is_symlink(ec)) continue;
+            std::string name = entry.path().filename().string();
+            for (char& ch : name) {
+                ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            }
+            if ((name == "base.bin" || name == "base.txt") && entry.file_size(ec) > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     std::string resolve_rom_dir() const {
         const fs::path base_dir = fs::path(data_dir_) / "roms" / "g800";
         const char* sub = (model_index_ == 1u) ? "g815" : (model_index_ == 2u) ? "e200" : "g850";
         const fs::path model_dir = base_dir / sub;
-        std::error_code ec;
-        if (fs::is_regular_file(model_dir / "base.bin", ec) ||
-            fs::is_regular_file(model_dir / "base.txt", ec)) {
+        if (has_base_rom_ci(model_dir)) {
             return model_dir.string();
         }
         return base_dir.string();
     }
 
-    bool start_session(const std::string& media_path) {
+    bool start_session(const std::string& media_path, bool cold_boot) {
         stop_session();
         g_active_g800 = this;
 
         const char* tag = (model_index_ == 1u) ? "g815" : (model_index_ == 2u) ? "e200" : "g850";
         const std::string rom_dir = resolve_rom_dir();
-        const std::string ram_path = (fs::path(data_dir_) / "saves" / (std::string("g800_") + tag + ".ram")).string();
+        const std::string ram_path_sim = (fs::path(data_dir_) / "saves" / (std::string("g800_") + tag + ".ram")).string();
+        const std::string ram_path_rom =
+            (fs::path(data_dir_) / "saves" / (std::string("g800_") + tag + "_rom.ram")).string();
         const std::string basic_path = (fs::path(data_dir_) / "saves" / (std::string("g800_") + tag + "_basic.txt")).string();
         const int model = static_cast<int>(model_index_);
 
@@ -351,12 +369,14 @@ private:
             dc_prev_out_ = 0.0f;
         }
 
-        emu_thread_ = std::thread([this, model, rom_dir, ram_path, basic_path, media_path]() {
+        emu_thread_ = std::thread([this, model, rom_dir, ram_path_sim, ram_path_rom, basic_path, media_path, cold_boot]() {
             (void)czx_g800_session_run(model,
                                        rom_dir.c_str(),
-                                       ram_path.c_str(),
+                                       ram_path_sim.c_str(),
+                                       ram_path_rom.c_str(),
                                        basic_path.c_str(),
-                                       media_path.empty() ? nullptr : media_path.c_str());
+                                       media_path.empty() ? nullptr : media_path.c_str(),
+                                       cold_boot ? 1 : 0);
             std::lock_guard<std::mutex> lock(mtx_);
             worker_exited_ = true;
             cv_.notify_all();
@@ -470,10 +490,6 @@ private:
         const int mat_h = rows * 8 * 2;
         const int x0 = (kLcdScreenW - mat_w) / 2;
         const int y0 = (rows <= 4) ? 49 : 31;
-        crop_x_ = x0;
-        crop_y_ = y0;
-        crop_w_ = mat_w;
-        crop_h_ = mat_h;
 
         canvas.fill_rect(x0 - 2, y0 - 2, mat_w + 4, mat_h + 4, lcd_back);
 
@@ -513,9 +529,12 @@ private:
             canvas.draw_text(192, 146, "SIO", lcd_on);
         }
         const char* mtag = (model_index_ == 1u) ? "G815" : (model_index_ == 2u) ? "E200" : "G850";
+        const char* state_tag = (lcd.lcd_disabled || lcd.cpu_halted) ? "OFF" : (lcd.use_rom ? "ROM" : "SIM");
         char badge[24];
-        std::snprintf(badge, sizeof(badge), "[%s %s]", mtag, lcd.use_rom ? "ROM" : "SIM");
-        canvas.draw_text(236, 146, badge, lcd_on);
+        std::snprintf(badge, sizeof(badge), "[%s %s]", mtag, state_tag);
+        const int badge_x = 306 - static_cast<int>(std::strlen(badge)) * 6;
+        const uint16_t badge_col = pack_rgb565(36, 68, 44);
+        canvas.draw_text(badge_x, 146, badge, badge_col);
     }
 
     czx_host_t host_{};
@@ -526,10 +545,6 @@ private:
 
     std::vector<uint16_t> fb_;
     std::vector<int16_t> audio_out_;
-    int crop_x_ = 16;
-    int crop_y_ = 31;
-    int crop_w_ = 288;
-    int crop_h_ = 96;
 
     std::mutex mtx_;
     std::condition_variable cv_;

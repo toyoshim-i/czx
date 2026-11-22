@@ -32,6 +32,7 @@ typedef struct czx_g800_lcd_snapshot {
     int lcd_dark;
     int use_rom;
     int sio_mode;
+    int cpu_halted;
     uint32_t status_bits;
 } czx_g800_lcd_snapshot_t;
 
@@ -45,9 +46,11 @@ void czx_g800_host_log(int level, const char* msg);
 /* Control entry points implemented in cmake/g800_czx/g800_wrap.c */
 int czx_g800_session_run(int model,
                          const char* rom_dir,
-                         const char* ram_path,
+                         const char* ram_path_sim,
+                         const char* ram_path_rom,
                          const char* basic_path,
-                         const char* initial_media);
+                         const char* initial_media,
+                         int cold_boot);
 uint16_t czx_g800_map_key(int czx_key, uint32_t mods, uint32_t codepoint);
 uint16_t czx_g800_map_joy_key(int joy_bit);
 

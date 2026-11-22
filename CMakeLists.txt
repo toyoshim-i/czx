@@ -79,6 +79,8 @@ target_include_directories(czx_g800_upstream PRIVATE
 target_compile_definitions(czx_g800_upstream PRIVATE Z80_LITTLEENDIAN=1)
 target_compile_options(czx_g800_upstream PRIVATE
     -include ${CMAKE_CURRENT_SOURCE_DIR}/cmake/g800_czx/depend.h
+    -fsigned-char
+    -fno-strict-aliasing
     -w
     -Wno-incompatible-pointer-types
     -Wno-implicit-function-declaration

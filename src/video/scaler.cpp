@@ -66,38 +66,25 @@ void fill_margins(const czx_frame_t& frame, const ScalerConfig& cfg,
     }
 
     const int rx = layout.dst_x + layout.dst_w;
-    if (cfg.margin_fill == MarginFill::Auto && (frame.flags & CZX_FRAME_HAS_BORDER) != 0) {
-        for (int y = layout.dst_y; y < layout.dst_y + layout.dst_h; ++y) {
-            uint16_t* row = dst_rgb565 + y * kLcdWidth;
-            if (layout.dst_x > 0) {
-                std::fill_n(row, layout.dst_x, row[layout.dst_x]);
-            }
-            if (rx < kLcdWidth) {
-                std::fill_n(row + rx, kLcdWidth - rx, row[rx - 1]);
-            }
-        }
-        const size_t row_bytes = static_cast<size_t>(kLcdWidth) * sizeof(uint16_t);
-        const uint16_t* top_ref = dst_rgb565 + layout.dst_y * kLcdWidth;
-        for (int y = 0; y < layout.dst_y; ++y) {
-            std::memcpy(dst_rgb565 + y * kLcdWidth, top_ref, row_bytes);
-        }
-        const uint16_t* bot_ref = dst_rgb565 + (layout.dst_y + layout.dst_h - 1) * kLcdWidth;
-        for (int y = layout.dst_y + layout.dst_h; y < kLcdHeight; ++y) {
-            std::memcpy(dst_rgb565 + y * kLcdWidth, bot_ref, row_bytes);
-        }
-        return;
-    }
-
     uint16_t bg = 0;
     if (cfg.margin_fill == MarginFill::Auto && frame.data != nullptr &&
+        frame.width > 0 && frame.height > 0 &&
         layout.src_w > 0 && layout.src_h > 0 &&
         layout.src_x + layout.src_w <= static_cast<int>(frame.width) &&
         layout.src_y + layout.src_h <= static_cast<int>(frame.height)) {
+        const bool sample_outer_border =
+            (frame.flags & CZX_FRAME_HAS_BORDER) != 0 &&
+            frame.crop_w > 0 && frame.crop_h > 0 &&
+            (frame.crop_w < frame.width || frame.crop_h < frame.height);
         const auto* base = static_cast<const uint8_t*>(frame.data);
-        const uint32_t x0 = static_cast<uint32_t>(layout.src_x);
-        const uint32_t x1 = static_cast<uint32_t>(layout.src_x + layout.src_w - 1);
-        const uint8_t* r0 = base + static_cast<size_t>(layout.src_y) * frame.pitch_bytes;
-        const uint8_t* r1 = base + static_cast<size_t>(layout.src_y + layout.src_h - 1) * frame.pitch_bytes;
+        const uint32_t x0 = sample_outer_border ? 0u : static_cast<uint32_t>(layout.src_x);
+        const uint32_t x1 = sample_outer_border ? (frame.width - 1u)
+                                                : static_cast<uint32_t>(layout.src_x + layout.src_w - 1);
+        const uint32_t y0 = sample_outer_border ? 0u : static_cast<uint32_t>(layout.src_y);
+        const uint32_t y1 = sample_outer_border ? (frame.height - 1u)
+                                                : static_cast<uint32_t>(layout.src_y + layout.src_h - 1);
+        const uint8_t* r0 = base + static_cast<size_t>(y0) * frame.pitch_bytes;
+        const uint8_t* r1 = base + static_cast<size_t>(y1) * frame.pitch_bytes;
         const uint8_t* rows[4] = {r0, r0, r1, r1};
         const uint32_t cols[4] = {x0, x1, x0, x1};
         uint32_t sum_r = 0;

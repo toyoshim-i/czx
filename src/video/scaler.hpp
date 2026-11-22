@@ -22,7 +22,7 @@ enum class AspectPolicy {
 };
 
 enum class MarginFill {
-    Auto = 0,   // Border extension / scanline border edge fill when CZX_FRAME_HAS_BORDER, else 4-corner average
+    Auto = 0,   // Hardware border color (when CZX_FRAME_HAS_BORDER w/ overscan), else 4-corner average
     Black = 1,  // Classic black pillarbox / letterbox
 };
 

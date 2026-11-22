@@ -182,7 +182,7 @@ void test_pixel_accuracy_and_resampling() {
         CHECK(out[0] == 0x0000 && out[kLcdWidth - 1] == 0x0000);
     }
 
-    // Hardware-bordered frame: horizontal border expansion & per-scanline edge extension
+    // Hardware-bordered frame: horizontal border expansion & 4-corner average margin fill
     {
         auto abgr = [](uint8_t r, uint8_t g, uint8_t b) -> uint32_t {
             return 0xFF000000u | (static_cast<uint32_t>(b) << 16) | (static_cast<uint32_t>(g) << 8) | r;
@@ -210,7 +210,7 @@ void test_pixel_accuracy_and_resampling() {
         CHECK(l_black.dst_x == 24 && l_black.dst_w == 272 && l_black.src_x == 32 && l_black.src_w == 320);
         CHECK(out[85 * kLcdWidth + 0] == 0x0000 && out[85 * kLcdWidth + 319] == 0x0000);
 
-        // Distinct raster bars per half in Show Full mode extend to LCD left/right edges
+        // Distinct raster bars per half in Show Full mode fill margins with 4-corner average (no edge stretching)
         for (int y = 0; y < 272; ++y) {
             const uint32_t lc = (y < 136) ? abgr(255, 0, 0) : abgr(0, 0, 255);
             const uint32_t rc = (y < 136) ? abgr(0, 255, 0) : abgr(255, 255, 0);
@@ -219,11 +219,60 @@ void test_pixel_accuracy_and_resampling() {
         }
         ScalerConfig cfg_full{DisplayMode::AspectFit, AspectPolicy::ParAware, true, 0, 0, MarginFill::Auto};
         const auto l_full = scaler.render(f, cfg_full, out.data());
+        const uint16_t expected_avg = pack_rgb565(128, 128, 64);
         CHECK(l_full.dst_x == 40 && l_full.dst_w == 240);
-        CHECK(out[10 * kLcdWidth + 0] == pack_rgb565(255, 0, 0));
-        CHECK(out[10 * kLcdWidth + 319] == pack_rgb565(0, 255, 0));
-        CHECK(out[160 * kLcdWidth + 0] == pack_rgb565(0, 0, 255));
-        CHECK(out[160 * kLcdWidth + 319] == pack_rgb565(255, 255, 0));
+        CHECK(out[10 * kLcdWidth + 0] == expected_avg);
+        CHECK(out[10 * kLcdWidth + 319] == expected_avg);
+        CHECK(out[160 * kLcdWidth + 0] == expected_avg);
+        CHECK(out[160 * kLcdWidth + 319] == expected_avg);
+    }
+
+    // MSX active crop (272x240, crop 8,14,256,212, CZX_FRAME_HAS_BORDER):
+    // margins must use the outer hardware border color, NOT active-area edges or corners.
+    {
+        const uint16_t border_c = pack_rgb565(0, 128, 192);
+        const uint16_t inner_c = pack_rgb565(0, 0, 64);
+        const uint16_t edge_c = pack_rgb565(255, 0, 0);
+        const uint16_t corner_c = pack_rgb565(255, 255, 0);
+        std::vector<uint16_t> src(272u * 240u, border_c);
+        for (int y = 14; y < 226; ++y) {
+            for (int x = 8; x < 264; ++x) {
+                src[static_cast<size_t>(y) * 272u + static_cast<size_t>(x)] = inner_c;
+            }
+        }
+        for (int y = 30; y <= 160; ++y) {
+            src[static_cast<size_t>(y) * 272u + 8u] = edge_c;
+            src[static_cast<size_t>(y) * 272u + 263u] = edge_c;
+        }
+        src[14u * 272u + 8u] = corner_c;
+        src[14u * 272u + 263u] = corner_c;
+        src[225u * 272u + 8u] = corner_c;
+        src[225u * 272u + 263u] = corner_c;
+
+        czx_frame_t f{src.data(), 272u * 2u, 272, 240, 8, 14, 256, 212, 1, 1, CZX_PIXEL_RGB565, CZX_FRAME_HAS_BORDER};
+
+        for (DisplayMode mode : {DisplayMode::NativePan, DisplayMode::OverflowFit}) {
+            ScalerConfig cfg{mode, AspectPolicy::ParAware, false, 0, 0, MarginFill::Auto};
+            const auto l = scaler.render(f, cfg, out.data());
+            CHECK(l.dst_x == 32 && l.dst_w == 256);
+            CHECK(out[80 * kLcdWidth + 32] == edge_c);
+            CHECK(out[80 * kLcdWidth + 287] == edge_c);
+            CHECK(out[0 * kLcdWidth + 0] == border_c);
+            CHECK(out[0 * kLcdWidth + 31] == border_c);
+            CHECK(out[0 * kLcdWidth + 288] == border_c);
+            CHECK(out[0 * kLcdWidth + 319] == border_c);
+            CHECK(out[80 * kLcdWidth + 0] == border_c);
+            CHECK(out[80 * kLcdWidth + 31] == border_c);
+            CHECK(out[80 * kLcdWidth + 288] == border_c);
+            CHECK(out[80 * kLcdWidth + 319] == border_c);
+            CHECK(out[169 * kLcdWidth + 0] == border_c);
+            CHECK(out[169 * kLcdWidth + 319] == border_c);
+        }
+
+        ScalerConfig cfg_black{DisplayMode::NativePan, AspectPolicy::ParAware, false, 0, 0, MarginFill::Black};
+        scaler.render(f, cfg_black, out.data());
+        CHECK(out[80 * kLcdWidth + 0] == 0x0000);
+        CHECK(out[80 * kLcdWidth + 319] == 0x0000);
     }
 }
 

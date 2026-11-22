@@ -189,6 +189,335 @@ bool write_text_file(const fs::path& path, const std::string& content) {
     return ofs.good();
 }
 
+bool starts_with_ignore_case(std::string_view s, std::string_view prefix) noexcept {
+    if (s.size() < prefix.size()) return false;
+    return equals_ignore_case(s.substr(0, prefix.size()), prefix);
+}
+
+std::string trim_ascii(std::string_view s) {
+    size_t a = 0;
+    while (a < s.size() && (s[a] == ' ' || s[a] == '\t' || s[a] == '\r' || s[a] == '\n')) {
+        ++a;
+    }
+    size_t b = s.size();
+    while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t' || s[b - 1] == '\r' || s[b - 1] == '\n')) {
+        --b;
+    }
+    return std::string(s.substr(a, b - a));
+}
+
+std::string find_rom_filename_ci(const fs::path& dir, const char* filename) {
+    std::error_code ec;
+    if (!filename || filename[0] == '\0' || !fs::is_directory(dir, ec)) return {};
+    if (fs::exists(dir / filename, ec) &&
+        (fs::is_regular_file(dir / filename, ec) || fs::is_symlink(dir / filename, ec)) &&
+        fs::file_size(dir / filename, ec) > 0) {
+        return filename;
+    }
+    for (const auto& entry : fs::directory_iterator(dir, ec)) {
+        if (!entry.is_regular_file(ec) && !entry.is_symlink(ec)) continue;
+        if (equals_ignore_case(entry.path().filename().string(), filename) &&
+            entry.file_size(ec) > 0) {
+            return entry.path().filename().string();
+        }
+    }
+    return {};
+}
+
+struct BluemsxSlotRom {
+    int slot = 0;
+    int subslot = 0;
+    int start_page = 0;
+    int page_count = 0;
+    int rom_type = 0;
+    std::string rom_path;
+    std::string in_zip;
+};
+
+struct BluemsxMachineInfo {
+    bool valid_ini = false;
+    int fdc_count = 0;
+    bool has_disk_rom = false;
+    std::vector<BluemsxSlotRom> slot_roms;
+};
+
+bool is_bluemsx_disk_rom_type(int rom_type) noexcept {
+    switch (rom_type) {
+        case 21:   // ROM_DISKPATCH
+        case 57:   // ROM_TC8566AF
+        case 63:   // ROM_MICROSOL
+        case 64:   // ROM_NATIONALFDC
+        case 65:   // ROM_PHILIPSFDC
+        case 67:   // ROM_SVI738FDC
+        case 75:   // ROM_SVI328FDC
+        case 143:  // ROM_TC8566AF_TR
+        case 162:  // ROM_SVI707FDC
+            return true;
+        default:
+            return false;
+    }
+}
+
+std::string resolve_bluemsx_machine_dir_name(const std::string& machine_name) {
+    if (machine_name == "ColecoVision") return "COL - ColecoVision";
+    if (machine_name == "Coleco (Spectravideo SVI-603)") return "COL - Spectravideo SVI-603 Coleco";
+    return machine_name;
+}
+
+fs::path resolve_bluemsx_rom_path(const fs::path& system_dir, const std::string& raw_path) {
+    std::string norm = raw_path;
+    std::replace(norm.begin(), norm.end(), '\\', '/');
+    if (norm.empty()) return {};
+    if (norm.front() == '/') return fs::path(norm);
+    if (starts_with_ignore_case(norm, "Machines/")) {
+        return system_dir / "Machines" / norm.substr(9);
+    }
+    return system_dir / norm;
+}
+
+bool check_bluemsx_rom_size(int rom_type, int start_page, uintmax_t size) noexcept {
+    if (size == 0 || start_page < 0 || start_page >= 8) return false;
+    switch (rom_type) {
+        case 24:  // ROM_KANJI
+            return size == 0x20000u || size == 0x40000u;
+        case 16:  // ROM_FMPAC
+            return size == 0x10000u;
+        case 19:  // ROM_PLAIN
+            return size <= 0x10000u;
+        case 39:  // ROM_BASIC
+            return size <= 0x8000u;
+        case 66: {  // ROM_CASPATCH
+            const uintmax_t pages = size / 0x2000u;
+            return pages > 0 && static_cast<uintmax_t>(start_page) + pages <= 8u;
+        }
+        case 20:  // ROM_NORMAL
+        case 42:  // ROM_0x4000
+        case 78:  // ROM_MSXMUSIC
+        case 86: {  // ROM_0xC000
+            const uintmax_t pages = (size + 0x1fffu) / 0x2000u;
+            return pages > 0 && static_cast<uintmax_t>(start_page) + pages <= 8u;
+        }
+        default:
+            return true;
+    }
+}
+
+bool parse_bluemsx_slot_line(const std::string& line, BluemsxSlotRom& out) {
+    const char* p = line.c_str();
+    std::array<int, 5> nums{};
+    for (int& v : nums) {
+        while (*p == ' ' || *p == '\t') ++p;
+        if (*p == '\0') return false;
+        char* end = nullptr;
+        const long val = std::strtol(p, &end, 10);
+        if (end == p) return false;
+        v = static_cast<int>(val);
+        p = end;
+    }
+    auto parse_quoted = [&](std::string& dst) -> bool {
+        while (*p == ' ' || *p == '\t') ++p;
+        if (*p != '"') return false;
+        ++p;
+        const char* start = p;
+        while (*p != '\0' && *p != '"') ++p;
+        if (*p != '"') return false;
+        dst.assign(start, static_cast<size_t>(p - start));
+        ++p;
+        return true;
+    };
+    std::string rom_path;
+    std::string in_zip;
+    if (!parse_quoted(rom_path)) return false;
+    (void)parse_quoted(in_zip);
+
+    out.slot = nums[0];
+    out.subslot = nums[1];
+    out.start_page = nums[2];
+    out.page_count = nums[3];
+    out.rom_type = nums[4];
+    out.rom_path = std::move(rom_path);
+    out.in_zip = std::move(in_zip);
+    return true;
+}
+
+BluemsxMachineInfo inspect_bluemsx_machine_ini(const fs::path& system_dir, const std::string& machine_name) {
+    BluemsxMachineInfo info{};
+    const fs::path ini_path =
+        system_dir / "Machines" / resolve_bluemsx_machine_dir_name(machine_name) / "config.ini";
+    std::ifstream ifs(ini_path);
+    if (!ifs.is_open()) return info;
+
+    info.valid_ini = true;
+    std::string section;
+    std::string line;
+    while (std::getline(ifs, line)) {
+        const std::string trimmed = trim_ascii(line);
+        if (trimmed.empty() || trimmed.front() == ';') continue;
+        if (trimmed.front() == '[') {
+            const auto close = trimmed.find(']');
+            section = to_lower_copy((close == std::string::npos) ? trimmed.substr(1) : trimmed.substr(1, close - 1));
+            continue;
+        }
+        if (section == "fdc") {
+            const auto eq = trimmed.find('=');
+            if (eq != std::string::npos &&
+                equals_ignore_case(trim_ascii(trimmed.substr(0, eq)), "count")) {
+                info.fdc_count = std::atoi(trim_ascii(trimmed.substr(eq + 1)).c_str());
+            }
+        } else if (section == "slots") {
+            BluemsxSlotRom sr;
+            if (!parse_bluemsx_slot_line(trimmed, sr)) continue;
+            if (is_bluemsx_disk_rom_type(sr.rom_type)) {
+                info.has_disk_rom = true;
+            }
+            if (!sr.rom_path.empty() && sr.in_zip.empty()) {
+                info.slot_roms.push_back(std::move(sr));
+            }
+        }
+    }
+    return info;
+}
+
+bool validate_bluemsx_machine_roms(const fs::path& system_dir,
+                                   const std::string& machine_name,
+                                   std::vector<std::string>& problems,
+                                   BluemsxMachineInfo* out_info = nullptr) {
+    problems.clear();
+    const BluemsxMachineInfo info = inspect_bluemsx_machine_ini(system_dir, machine_name);
+    if (out_info) *out_info = info;
+
+    if (!info.valid_ini) {
+        problems.push_back("Machines/" + resolve_bluemsx_machine_dir_name(machine_name) + "/config.ini (missing)");
+        return false;
+    }
+
+    std::error_code ec;
+    for (const auto& sr : info.slot_roms) {
+        const fs::path full_path = resolve_bluemsx_rom_path(system_dir, sr.rom_path);
+        const bool exists = fs::is_regular_file(full_path, ec) || fs::is_symlink(full_path, ec);
+        if (!exists) {
+            problems.push_back(sr.rom_path);
+            continue;
+        }
+        const uintmax_t sz = fs::file_size(full_path, ec);
+        if (ec || sz == 0 || !check_bluemsx_rom_size(sr.rom_type, sr.start_page, sz)) {
+            problems.push_back(sr.rom_path + " (invalid size)");
+        }
+    }
+    return problems.empty();
+}
+
+bool generate_czx_bluemsx_config(const fs::path& system_dir,
+                                 const char* base_machine,
+                                 const char* czx_machine) {
+    const fs::path src_ini = system_dir / "Machines" / base_machine / "config.ini";
+    std::ifstream ifs(src_ini);
+    if (!ifs.is_open()) return false;
+
+    const fs::path shared_dir = system_dir / "Machines" / "Shared Roms";
+    std::vector<std::string> out_lines;
+    std::string section;
+    size_t fdc_line_idx = std::string::npos;
+    bool has_disk = false;
+
+    std::string line;
+    std::error_code ec;
+    while (std::getline(ifs, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        const std::string trimmed = trim_ascii(line);
+        if (!trimmed.empty() && trimmed.front() == '[') {
+            const auto close = trimmed.find(']');
+            section = to_lower_copy((close == std::string::npos) ? trimmed.substr(1) : trimmed.substr(1, close - 1));
+            out_lines.push_back(line);
+            continue;
+        }
+        if (section == "fdc") {
+            const auto eq = trimmed.find('=');
+            if (eq != std::string::npos &&
+                equals_ignore_case(trim_ascii(trimmed.substr(0, eq)), "count")) {
+                fdc_line_idx = out_lines.size();
+                out_lines.push_back("Count=0");
+                continue;
+            }
+            out_lines.push_back(line);
+            continue;
+        }
+        if (section == "slots") {
+            if (trimmed.empty()) continue;
+            BluemsxSlotRom sr;
+            if (!parse_bluemsx_slot_line(trimmed, sr)) continue;
+            if (sr.rom_path.empty() || !sr.in_zip.empty()) {
+                out_lines.push_back(trimmed);
+                continue;
+            }
+
+            std::string norm = sr.rom_path;
+            std::replace(norm.begin(), norm.end(), '\\', '/');
+            std::string actual_rel;
+            fs::path resolved_file;
+            int eff_type = sr.rom_type;
+
+            constexpr std::string_view kSharedPrefix = "Machines/Shared Roms/";
+            if (starts_with_ignore_case(norm, kSharedPrefix)) {
+                const std::string fname = norm.substr(kSharedPrefix.size());
+                std::string actual = find_rom_filename_ci(shared_dir, fname.c_str());
+                if (actual.empty() && (sr.rom_type == 57 || sr.rom_type == 65)) {
+                    const char* alt_name = (sr.rom_type == 57) ? "PHILIPSDISK.rom" : "PANASONICDISK.rom";
+                    const int alt_type = (sr.rom_type == 57) ? 65 : 57;
+                    actual = find_rom_filename_ci(shared_dir, alt_name);
+                    if (!actual.empty()) eff_type = alt_type;
+                }
+                if (!actual.empty()) {
+                    actual_rel = "Machines/Shared Roms/" + actual;
+                    resolved_file = shared_dir / actual;
+                }
+            } else {
+                const fs::path candidate = resolve_bluemsx_rom_path(system_dir, norm);
+                const std::string actual = find_rom_filename_ci(
+                    candidate.parent_path(), candidate.filename().string().c_str());
+                if (!actual.empty()) {
+                    resolved_file = candidate.parent_path() / actual;
+                    actual_rel = fs::path(norm).parent_path().empty()
+                                     ? actual
+                                     : (fs::path(norm).parent_path() / actual).string();
+                }
+            }
+
+            if (resolved_file.empty()) continue;
+            const uintmax_t sz = fs::file_size(resolved_file, ec);
+            if (ec || !check_bluemsx_rom_size(eff_type, sr.start_page, sz)) continue;
+
+            if (is_bluemsx_disk_rom_type(eff_type)) {
+                has_disk = true;
+            }
+            out_lines.push_back(std::to_string(sr.slot) + " " + std::to_string(sr.subslot) + " " +
+                                std::to_string(sr.start_page) + " " + std::to_string(sr.page_count) + " " +
+                                std::to_string(eff_type) + " \"" + actual_rel + "\" \"\"");
+            continue;
+        }
+        out_lines.push_back(line);
+    }
+
+    if (fdc_line_idx != std::string::npos) {
+        out_lines[fdc_line_idx] = has_disk ? "Count=2" : "Count=0";
+    }
+
+    std::string body;
+    for (const auto& l : out_lines) {
+        body += l;
+        body += '\n';
+    }
+    const fs::path dst_ini = system_dir / "Machines" / czx_machine / "config.ini";
+    if (!write_text_file(dst_ini, body)) return false;
+
+    std::vector<std::string> problems;
+    BluemsxMachineInfo check_info{};
+    return validate_bluemsx_machine_roms(system_dir, czx_machine, problems, &check_info) &&
+           !check_info.slot_roms.empty();
+}
+
 uint16_t rgb1555_to_rgb565(uint16_t p) noexcept {
     const uint16_t r5 = static_cast<uint16_t>((p >> 10) & 0x1Fu);
     const uint16_t g5 = static_cast<uint16_t>((p >> 5) & 0x1Fu);
@@ -775,23 +1104,74 @@ private:
     int16_t audio_prev_r_ = 0;
     bool audio_has_prev_ = false;
 
-    const char* detect_default_bluemsx_machine() const {
-        const fs::path machines = fs::path(system_dir_) / "Machines";
+    std::string detect_default_bluemsx_machine() const {
+        const fs::path sys_dir(system_dir_);
+        const fs::path machines = sys_dir / "Machines";
         const fs::path shared = machines / "Shared Roms";
-        if (rom_file_exists(machines / "MSX2+", "config.ini", false) &&
-            rom_file_exists(shared, "MSX2P.rom", false) &&
-            rom_file_exists(shared, "MSX2PEXT.rom", false)) {
+        std::vector<std::string> problems;
+
+        // 1. Evaluate MSX tiers from highest to lowest (complete stock profile,
+        //    else auto-generated partial-ROM profile using present Shared Roms).
+        auto has_valid_shared_rom = [&](const char* fname, int rom_type, int start_page) -> bool {
+            const std::string actual = find_rom_filename_ci(shared, fname);
+            if (actual.empty()) return false;
+            std::error_code ec;
+            const uintmax_t sz = fs::file_size(shared / actual, ec);
+            return !ec && check_bluemsx_rom_size(rom_type, start_page, sz);
+        };
+        std::error_code ec;
+
+        if (validate_bluemsx_machine_roms(sys_dir, "MSX2+", problems)) {
             return "MSX2+";
         }
-        if (rom_file_exists(machines / "MSX2", "config.ini", false) &&
-            rom_file_exists(shared, "MSX2.rom", false) &&
-            rom_file_exists(shared, "MSX2EXT.rom", false)) {
+        if (has_valid_shared_rom("MSX2P.rom", 66, 0) &&
+            has_valid_shared_rom("MSX2PEXT.rom", 20, 0) &&
+            fs::is_regular_file(machines / "MSX2+" / "config.ini", ec) &&
+            generate_czx_bluemsx_config(sys_dir, "MSX2+", "CZX - MSX2+")) {
+            return "CZX - MSX2+";
+        }
+        if (validate_bluemsx_machine_roms(sys_dir, "MSX2", problems)) {
             return "MSX2";
         }
-        if (rom_file_exists(machines / "MSX", "config.ini", false) &&
-            rom_file_exists(shared, "MSX.rom", false)) {
+        if (has_valid_shared_rom("MSX2.rom", 66, 0) &&
+            has_valid_shared_rom("MSX2EXT.rom", 20, 0) &&
+            fs::is_regular_file(machines / "MSX2" / "config.ini", ec) &&
+            generate_czx_bluemsx_config(sys_dir, "MSX2", "CZX - MSX2")) {
+            return "CZX - MSX2";
+        }
+        if (validate_bluemsx_machine_roms(sys_dir, "MSX", problems)) {
             return "MSX";
         }
+        if (has_valid_shared_rom("MSX.rom", 66, 0) &&
+            fs::is_regular_file(machines / "MSX" / "config.ini", ec) &&
+            generate_czx_bluemsx_config(sys_dir, "MSX", "CZX - MSX")) {
+            return "CZX - MSX";
+        }
+
+        // 3. Complete user-populated specific machine directory (e.g. FS-A1WSX, HB-F1XDJ).
+        std::vector<std::pair<int, std::string>> candidates;
+        if (fs::is_directory(machines, ec)) {
+            for (const auto& entry : fs::directory_iterator(machines, ec)) {
+                if (!entry.is_directory(ec)) continue;
+                const std::string name = entry.path().filename().string();
+                if (!starts_with_ignore_case(name, "MSX")) continue;
+                if (name.find("C-BIOS") != std::string::npos ||
+                    starts_with_ignore_case(name, "CZX - ")) {
+                    continue;
+                }
+                if (!validate_bluemsx_machine_roms(sys_dir, name, problems)) continue;
+                int rank = 3;
+                if (starts_with_ignore_case(name, "MSXturboR")) rank = 0;
+                else if (starts_with_ignore_case(name, "MSX2+")) rank = 1;
+                else if (starts_with_ignore_case(name, "MSX2")) rank = 2;
+                candidates.emplace_back(rank, name);
+            }
+        }
+        if (!candidates.empty()) {
+            std::sort(candidates.begin(), candidates.end());
+            return candidates.front().second;
+        }
+
         return "MSX2+ - C-BIOS";
     }
 
@@ -852,7 +1232,7 @@ private:
             }
         } else if (is_bluemsx_) {
             const fs::path cbios_dir = fs::path(system_dir_) / "Machines" / "MSX2+ - C-BIOS";
-            const bool has_real = std::string_view(detect_default_bluemsx_machine()) != "MSX2+ - C-BIOS";
+            const bool has_real = (detect_default_bluemsx_machine() != "MSX2+ - C-BIOS");
             const bool has_cbios = rom_file_exists(cbios_dir, "config.ini", false) &&
                                    rom_file_exists(cbios_dir, "cbios_main_msx2+.rom", false);
             if (!has_real && !has_cbios) {
@@ -948,16 +1328,40 @@ private:
         seed_default_options();
         load_user_config();
 
-        if (is_bluemsx_ && media_path && media_path[0] != '\0' && is_msx_disk_ext(media_path)) {
+        if (is_bluemsx_) {
             const auto it = options_.find("bluemsx_msxtype");
-            if (it != options_.end() && it->second.find("C-BIOS") != std::string::npos) {
-                const std::string msg =
-                    "MSX disk images (.dsk/.m3u) require real MSX BIOS + Disk ROMs in:\n" +
-                    system_dir_ + "/Machines/Shared Roms/\n(e.g. MSX2P.rom, MSX2PEXT.rom, PANASONICDISK.rom)";
-                loader_->set_last_error(msg);
-                log(3, msg.c_str());
-                teardown_core();
-                return false;
+            const std::string msxtype = (it != options_.end()) ? it->second : std::string{};
+            if (!msxtype.empty() && msxtype != "Auto") {
+                std::vector<std::string> problems;
+                BluemsxMachineInfo minfo{};
+                if (!validate_bluemsx_machine_roms(fs::path(system_dir_), msxtype, problems, &minfo)) {
+                    std::string msg = "blueMSX machine '" + msxtype + "' is missing required ROMs in:\n" +
+                                      system_dir_ + "/\nMissing/Invalid:";
+                    const size_t limit = std::min<size_t>(problems.size(), 6u);
+                    for (size_t i = 0; i < limit; ++i) {
+                        msg += "\n  " + problems[i];
+                    }
+                    if (problems.size() > limit) {
+                        msg += "\n  ... (+" + std::to_string(problems.size() - limit) + " more)";
+                    }
+                    loader_->set_last_error(msg);
+                    log(3, msg.c_str());
+                    teardown_core();
+                    return false;
+                }
+                if (media_path && media_path[0] != '\0' && is_msx_disk_ext(media_path) &&
+                    (!minfo.has_disk_rom || minfo.fdc_count <= 0)) {
+                    const std::string msg =
+                        "MSX disk images (.dsk/.m3u) require a Disk BIOS ROM (e.g. PANASONICDISK.rom or PHILIPSDISK.rom) in:\n" +
+                        system_dir_ + "/Machines/Shared Roms/";
+                    loader_->set_last_error(msg);
+                    log(3, msg.c_str());
+                    teardown_core();
+                    return false;
+                }
+                log(1, ("bluemsx: machine = " + msxtype).c_str());
+            } else if (media_path && media_path[0] != '\0' && is_msx_disk_ext(media_path)) {
+                log(2, "bluemsx: bluemsx_msxtype=Auto does not auto-enable MSX disk machines");
             }
         }
 

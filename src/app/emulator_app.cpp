@@ -276,8 +276,21 @@ void EmulatorApp::poll_core_activity() {
     hud_.activity_drive_mask = activity_drive_mask_;
 }
 
-std::string EmulatorApp::default_media_dir_for_core() const {
-    const czx_core_desc_t* desc = (core_api_ && core_api_->get_desc) ? core_api_->get_desc(core_api_) : nullptr;
+const czx_core_api_t* EmulatorApp::displayed_menu_core_api() const noexcept {
+    if (registry_.count() > 0 && pending_core_index_ >= 0 &&
+        static_cast<size_t>(pending_core_index_) < registry_.count()) {
+        return registry_.get(static_cast<size_t>(pending_core_index_));
+    }
+    return core_api_;
+}
+
+bool EmulatorApp::has_pending_core_change() const noexcept {
+    return registry_.count() > 0 && pending_core_index_ != core_index_;
+}
+
+std::string EmulatorApp::default_media_dir_for_core(const czx_core_api_t* api) const {
+    const czx_core_api_t* target = api ? api : core_api_;
+    const czx_core_desc_t* desc = (target && target->get_desc) ? target->get_desc(target) : nullptr;
     const std::string id = (desc && desc->id) ? desc->id : "";
     const fs::path media_root = fs::path(cfg_.data_dir) / "media";
     std::error_code ec;
@@ -308,6 +321,79 @@ std::string EmulatorApp::default_media_dir_for_core() const {
     return media_root.string();
 }
 
+void EmulatorApp::present_loading_screen(const char* core_name, const std::string& media_label) {
+    if (!platform_.display || cfg_.headless_frames > 0) return;
+
+    using namespace czx::video;
+    if (!desktop_native_mode_ && scale_thread_running_ && core_inst_) {
+        {
+            std::lock_guard<std::mutex> lock(scale_mtx_);
+            std::copy(ready_fb_.begin(), ready_fb_.end(), lcd_fb_.begin());
+        }
+        Rgb565Canvas bg(lcd_fb_.data(), kLcdWidth, kLcdHeight);
+        bg.fill_rect_alpha(0, 0, kLcdWidth, kLcdHeight, pack_rgb565(0, 0, 0), 175);
+    } else {
+        std::fill(lcd_fb_.begin(), lcd_fb_.end(), pack_rgb565(14, 18, 28));
+    }
+
+    Rgb565Canvas canvas(lcd_fb_.data(), kLcdWidth, kLcdHeight);
+    constexpr int kBoxX = 28;
+    constexpr int kBoxY = 54;
+    constexpr int kBoxW = 264;
+    constexpr int kBoxH = 62;
+
+    canvas.fill_rect(kBoxX, kBoxY, kBoxW, kBoxH, pack_rgb565(18, 24, 34));
+    canvas.draw_rect(kBoxX, kBoxY, kBoxW, kBoxH, pack_rgb565(88, 210, 255));
+    canvas.fill_rect(kBoxX + 1, kBoxY + 1, kBoxW - 2, 15, pack_rgb565(26, 44, 68));
+    canvas.draw_text(kBoxX + 8, kBoxY + 5, "LOADING CORE...", pack_rgb565(255, 225, 110));
+
+    const std::string cname = truncate_tail_px(
+        (core_name && core_name[0] != '\0') ? core_name : "Core", kBoxW - 16, 1);
+    canvas.draw_text(kBoxX + 8, 75, cname.c_str(), pack_rgb565(255, 255, 255));
+
+    if (!media_label.empty()) {
+        const std::string mname = truncate_tail_px(media_label, kBoxW - 16, 1);
+        canvas.draw_text(kBoxX + 8, 91, mname.c_str(), pack_rgb565(150, 210, 245));
+    }
+
+    platform_.display->present(lcd_fb_.data());
+}
+
+bool EmulatorApp::activate_core_with_loading(int index,
+                                             const std::string& initial_media,
+                                             const std::string& initial_media2,
+                                             const std::string& display_media_label) {
+    if (registry_.count() == 0) return false;
+    const int n = static_cast<int>(registry_.count());
+    const int wrapped = ((index % n) + n) % n;
+    const czx_core_api_t* next_api = registry_.get(static_cast<size_t>(wrapped));
+    const auto* desc = (next_api && next_api->get_desc) ? next_api->get_desc(next_api) : nullptr;
+    const char* core_name = (desc && desc->name) ? desc->name : "Core";
+    std::string shown_media = display_media_label;
+    if (shown_media.empty()) {
+        const std::string& p = !initial_media.empty() ? initial_media : initial_media2;
+        if (!p.empty()) {
+            shown_media = fs::path(p).filename().string();
+        }
+    }
+    present_loading_screen(core_name, shown_media);
+    return activate_core(wrapped, initial_media, initial_media2);
+}
+
+void EmulatorApp::commit_pending_core(bool force_reload) {
+    if (!force_reload && !has_pending_core_change()) {
+        return;
+    }
+    if (activate_core_with_loading(pending_core_index_)) {
+        const auto* desc = (core_api_ && core_api_->get_desc) ? core_api_->get_desc(core_api_) : nullptr;
+        if (desc && desc->name) {
+            show_toast(desc->name);
+        }
+    } else {
+        show_toast("ROM REQUIRED");
+    }
+}
+
 void EmulatorApp::destroy_active_core() {
     if (core_api_ && core_inst_ && core_api_->destroy) {
         core_api_->destroy(core_inst_);
@@ -328,6 +414,8 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media, con
     hud_.fps_x10 = 0;
     core_api_ = next_api;
     core_index_ = wrapped;
+    pending_core_index_ = wrapped;
+    ++core_epoch_;
     pending_drive_ = 0;
     core_error_.clear();
     scaler_cfg_.pan_x = 0;
@@ -335,6 +423,11 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media, con
     last_src_w_ = 0;
     last_src_h_ = 0;
     last_layout_ = {};
+    last_frame_meta_ = {};
+    has_last_frame_meta_ = false;
+    desktop_has_last_raw_ = false;
+    desktop_last_raw_bytes_.clear();
+    desktop_last_raw_frame_ = {};
     native_w_ = 0;
     native_h_ = 0;
     native_par_num_ = 1;
@@ -380,6 +473,7 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media, con
     if (platform_.audio && desc && desc->audio_sample_rate > 0) {
         platform_.audio->init(desc->audio_sample_rate);
     }
+
     return true;
 }
 
@@ -532,12 +626,9 @@ void EmulatorApp::apply_pan_delta(int dx, int dy) {
 
 void EmulatorApp::cycle_core(int delta) {
     if (registry_.count() <= 1) return;
-    if (activate_core(core_index_ + delta)) {
-        const auto* desc = core_api_->get_desc(core_api_);
-        if (desc && desc->name) show_toast(desc->name);
-    } else {
-        show_toast("ROM REQUIRED");
-    }
+    const int n = static_cast<int>(registry_.count());
+    pending_core_index_ = ((pending_core_index_ + delta) % n + n) % n;
+    force_present_ = true;
 }
 
 void EmulatorApp::cycle_preset(int delta) {
@@ -572,36 +663,36 @@ void EmulatorApp::cycle_display_mode(int delta) {
 
 czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
     czx::video::MenuViewModel vm{};
-    const auto* desc = (core_api_ && core_api_->get_desc) ? core_api_->get_desc(core_api_) : nullptr;
+    const czx_core_api_t* menu_api = displayed_menu_core_api();
+    const bool core_pending = has_pending_core_change();
+    const auto* desc = (menu_api && menu_api->get_desc) ? menu_api->get_desc(menu_api) : nullptr;
     vm.core_name = (desc && desc->name) ? desc->name : "Core";
-    const char* exts = (core_api_ && core_inst_ && core_api_->get_extensions)
-                           ? core_api_->get_extensions(core_inst_)
-                           : nullptr;
+    vm.core_pending = core_pending;
+    const char* exts = (menu_api && menu_api->get_extensions) ? menu_api->get_extensions(menu_api) : nullptr;
     vm.has_media_browser = (exts != nullptr);
-    vm.can_eject = (core_api_ && core_inst_ && core_api_->eject_media != nullptr);
+    const bool live_core = (!core_pending && core_inst_ != nullptr);
+    vm.can_eject = (live_core && core_api_ && core_api_->eject_media != nullptr);
     if (vm.has_media_browser) {
-        const char* lbl = (core_api_->get_media_label)
+        const char* lbl = (live_core && core_api_ && core_api_->get_media_label)
                               ? core_api_->get_media_label(core_inst_)
                               : nullptr;
         vm.preset_or_media_label = lbl ? lbl : "None";
-        vm.is_tape_media = is_tape_media_label(vm.preset_or_media_label);
-    } else if (core_api_ && core_inst_ && core_api_->get_preset_name) {
+        vm.is_tape_media = live_core && is_tape_media_label(vm.preset_or_media_label);
+    } else if (live_core && core_api_ && core_api_->get_preset_name) {
         vm.preset_or_media_label = core_api_->get_preset_name(core_inst_, preset_index_);
     } else {
-        vm.preset_or_media_label = "Default";
+        vm.preset_or_media_label = core_pending ? "(Pending)" : "Default";
     }
-    vm.drive_count = (core_api_ && core_inst_ && core_api_->get_drive_count)
-                         ? core_api_->get_drive_count(core_inst_)
-                         : 1u;
+    vm.drive_count = (menu_api && menu_api->get_drive_count) ? menu_api->get_drive_count(menu_api) : 1u;
     if (vm.drive_count >= 2u && vm.has_media_browser) {
-        if (core_api_->get_drive_name) {
-            if (const char* n0 = core_api_->get_drive_name(core_inst_, 0)) vm.drive1_name = n0;
-            if (const char* n1 = core_api_->get_drive_name(core_inst_, 1)) vm.drive2_name = n1;
+        if (menu_api->get_drive_name) {
+            if (const char* n0 = menu_api->get_drive_name(menu_api, 0)) vm.drive1_name = n0;
+            if (const char* n1 = menu_api->get_drive_name(menu_api, 1)) vm.drive2_name = n1;
         }
-        const char* l0 = (core_api_->get_drive_media_label)
+        const char* l0 = (live_core && core_api_ && core_api_->get_drive_media_label)
                              ? core_api_->get_drive_media_label(core_inst_, 0)
                              : nullptr;
-        const char* l1 = (core_api_->get_drive_media_label)
+        const char* l1 = (live_core && core_api_ && core_api_->get_drive_media_label)
                              ? core_api_->get_drive_media_label(core_inst_, 1)
                              : nullptr;
         vm.drive1_label = (l0 && l0[0] != '\0') ? l0 : "Empty";
@@ -623,9 +714,10 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
 
 void EmulatorApp::open_browser_for_drive(uint32_t drive) {
     pending_drive_ = drive;
-    const auto* desc = (core_api_ && core_api_->get_desc) ? core_api_->get_desc(core_api_) : nullptr;
+    const czx_core_api_t* menu_api = displayed_menu_core_api();
+    const auto* desc = (menu_api && menu_api->get_desc) ? menu_api->get_desc(menu_api) : nullptr;
     const std::string core_id = (desc && desc->id) ? desc->id : "";
-    std::string start_dir = default_media_dir_for_core();
+    std::string start_dir = default_media_dir_for_core(menu_api);
     if (!core_id.empty()) {
         const auto it = last_media_dirs_.find(core_id);
         std::error_code ec;
@@ -633,15 +725,12 @@ void EmulatorApp::open_browser_for_drive(uint32_t drive) {
             start_dir = it->second;
         }
     }
-    const char* exts = (core_api_ && core_inst_ && core_api_->get_extensions)
-                           ? core_api_->get_extensions(core_inst_)
-                           : nullptr;
-    const uint32_t drive_count = (core_api_ && core_inst_ && core_api_->get_drive_count)
-                                     ? core_api_->get_drive_count(core_inst_)
-                                     : 1u;
+    const char* exts = (menu_api && menu_api->get_extensions) ? menu_api->get_extensions(menu_api) : nullptr;
+    const uint32_t drive_count =
+        (menu_api && menu_api->get_drive_count) ? menu_api->get_drive_count(menu_api) : 1u;
     std::string title = "MEDIA";
-    if (drive_count >= 2u && core_api_ && core_inst_ && core_api_->get_drive_name) {
-        if (const char* dname = core_api_->get_drive_name(core_inst_, drive)) {
+    if (drive_count >= 2u && menu_api && menu_api->get_drive_name) {
+        if (const char* dname = menu_api->get_drive_name(menu_api, drive)) {
             title = dname;
         }
     }
@@ -651,10 +740,10 @@ void EmulatorApp::open_browser_for_drive(uint32_t drive) {
 }
 
 void EmulatorApp::eject_drive_slot(uint32_t drive) {
-    if (!core_api_ || !core_inst_) return;
+    if (has_pending_core_change() || !core_api_ || !core_inst_) return;
     if (core_api_->eject_drive && core_api_->eject_drive(core_inst_, drive)) {
         const char* dname =
-            (core_api_->get_drive_name) ? core_api_->get_drive_name(core_inst_, drive) : nullptr;
+            (core_api_->get_drive_name) ? core_api_->get_drive_name(core_api_, drive) : nullptr;
         show_toast((std::string(dname ? dname : "Drive") + ": EJECTED").c_str());
     } else {
         show_toast("EJECT FAILED");
@@ -695,7 +784,8 @@ void EmulatorApp::handle_host_command(czx::input::HostCommand cmd) {
                                                                  : "INPUT: KEYBOARD")));
             break;
         }
-        case czx::input::HostCommand::ToggleMenu:
+        case czx::input::HostCommand::ToggleMenu: {
+            const bool was_open = menu_.is_open() || browser_.is_open();
             if (browser_.is_open()) {
                 browser_.close();
                 menu_.set_open(false);
@@ -704,7 +794,15 @@ void EmulatorApp::handle_host_command(czx::input::HostCommand cmd) {
             }
             router_.set_menu_open(menu_.is_open());
             hud_.menu_open = menu_.is_open();
+            if (!was_open && menu_.is_open()) {
+                pending_core_index_ = core_index_;
+                force_present_ = true;
+            } else if (was_open && !menu_.is_open()) {
+                commit_pending_core();
+                force_present_ = true;
+            }
             break;
+        }
         case czx::input::HostCommand::None:
             break;
     }
@@ -714,7 +812,8 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
     if (browser_.is_open()) {
         const auto ba = browser_.handle_key(ev);
         if (ba == czx::video::FileBrowserAction::Selected) {
-            const auto* desc = (core_api_ && core_api_->get_desc) ? core_api_->get_desc(core_api_) : nullptr;
+            const czx_core_api_t* menu_api = displayed_menu_core_api();
+            const auto* desc = (menu_api && menu_api->get_desc) ? menu_api->get_desc(menu_api) : nullptr;
             if (desc && desc->id && !browser_.current_dir().empty()) {
                 last_media_dirs_[desc->id] = browser_.current_dir();
             }
@@ -726,6 +825,37 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
             const std::string& path2 = browser_.selected_drive2_path();
             const std::string& label2 = browser_.selected_drive2_label();
             const std::string d1_disp = label.empty() ? fs::path(path).filename().string() : label;
+            if (has_pending_core_change() || !core_inst_) {
+                const uint32_t drive_count =
+                    (menu_api && menu_api->get_drive_count) ? menu_api->get_drive_count(menu_api) : 1u;
+                std::string m1;
+                std::string m2;
+                if (!path2.empty()) {
+                    m1 = path;
+                    m2 = path2;
+                } else if (drive_count >= 2u && pending_drive_ == 1u) {
+                    m2 = path;
+                } else {
+                    m1 = path;
+                }
+                const bool ok = activate_core_with_loading(pending_core_index_, m1, m2, d1_disp);
+                if (ok) {
+                    if (!path2.empty()) {
+                        show_toast(("LOADED D1+D2: " + d1_disp).c_str());
+                    } else if (drive_count >= 2u && menu_api && menu_api->get_drive_name) {
+                        const char* dname = menu_api->get_drive_name(menu_api, pending_drive_);
+                        show_toast((std::string(dname ? dname : "Drive") + ": " + d1_disp).c_str());
+                    } else {
+                        show_toast(("LOADED: " + d1_disp).c_str());
+                    }
+                } else if (!core_inst_) {
+                    show_toast("ROM REQUIRED");
+                } else {
+                    show_toast("LOAD FAILED");
+                }
+                return;
+            }
+
             bool ok = false;
             if (!path2.empty() && core_api_ && core_inst_ && core_api_->load_dual_media) {
                 const std::string d2_disp =
@@ -740,9 +870,9 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
                                                     d1_disp.c_str());
                 if (ok) {
                     const uint32_t drive_count =
-                        core_api_->get_drive_count ? core_api_->get_drive_count(core_inst_) : 1u;
+                        core_api_->get_drive_count ? core_api_->get_drive_count(core_api_) : 1u;
                     if (drive_count >= 2u && core_api_->get_drive_name) {
-                        const char* dname = core_api_->get_drive_name(core_inst_, pending_drive_);
+                        const char* dname = core_api_->get_drive_name(core_api_, pending_drive_);
                         show_toast((std::string(dname ? dname : "Drive") + ": " + d1_disp).c_str());
                     } else {
                         show_toast(("LOADED: " + d1_disp).c_str());
@@ -775,6 +905,9 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
         case czx::video::MenuAction::CycleCoreNext:
             cycle_core(1);
             break;
+        case czx::video::MenuAction::ApplyCore:
+            commit_pending_core();
+            break;
         case czx::video::MenuAction::OpenMediaBrowser:
         case czx::video::MenuAction::OpenDrive1Browser:
             open_browser_for_drive(0);
@@ -789,13 +922,13 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
             eject_drive_slot(1);
             break;
         case czx::video::MenuAction::CyclePresetPrev:
-            cycle_preset(-1);
+            if (!has_pending_core_change()) cycle_preset(-1);
             break;
         case czx::video::MenuAction::CyclePresetNext:
-            cycle_preset(1);
+            if (!has_pending_core_change()) cycle_preset(1);
             break;
         case czx::video::MenuAction::EjectMedia:
-            if (core_api_ && core_inst_ && core_api_->eject_media &&
+            if (!has_pending_core_change() && core_api_ && core_inst_ && core_api_->eject_media &&
                 core_api_->eject_media(core_inst_)) {
                 if (vm.is_tape_media) {
                     menu_.set_open(false);
@@ -812,9 +945,11 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
             break;
         case czx::video::MenuAction::CycleDisplayModePrev:
             cycle_display_mode(-1);
+            refresh_paused_preview();
             break;
         case czx::video::MenuAction::CycleDisplayModeNext:
             cycle_display_mode(1);
+            refresh_paused_preview();
             break;
         case czx::video::MenuAction::ToggleAspectPolicy:
             scaler_cfg_.aspect_policy =
@@ -825,20 +960,20 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
             if (desktop_native_mode_) {
                 sync_desktop_window_size(false);
             }
-            force_present_ = true;
+            refresh_paused_preview();
             break;
         case czx::video::MenuAction::ToggleBorders:
             scaler_cfg_.show_borders = !scaler_cfg_.show_borders;
             scaler_cfg_.pan_x = 0;
             scaler_cfg_.pan_y = 0;
-            force_present_ = true;
+            refresh_paused_preview();
             break;
         case czx::video::MenuAction::ToggleMarginFill:
             scaler_cfg_.margin_fill =
                 (scaler_cfg_.margin_fill == czx::video::MarginFill::Auto)
                     ? czx::video::MarginFill::Black
                     : czx::video::MarginFill::Auto;
-            force_present_ = true;
+            refresh_paused_preview();
             show_toast(scaler_cfg_.margin_fill == czx::video::MarginFill::Auto ? "MARGIN: AUTO"
                                                                                : "MARGIN: BLACK");
             break;
@@ -863,7 +998,9 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
             handle_host_command(czx::input::HostCommand::ToggleInputMode);
             break;
         case czx::video::MenuAction::ResetCore:
-            if (core_api_ && core_inst_ && core_api_->reset) {
+            if (has_pending_core_change() || !core_inst_) {
+                commit_pending_core(true);
+            } else if (core_api_ && core_inst_ && core_api_->reset) {
                 clear_activity_state();
                 core_api_->reset(core_inst_, true);
                 show_toast("CORE RESET");
@@ -873,6 +1010,8 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
             running_ = false;
             break;
         case czx::video::MenuAction::Close:
+            commit_pending_core();
+            break;
         case czx::video::MenuAction::None:
             break;
     }
@@ -884,6 +1023,8 @@ void EmulatorApp::start_scale_worker() {
         std::lock_guard<std::mutex> lock(scale_mtx_);
         scale_stop_ = false;
         has_pending_raw_ = false;
+        has_rescale_request_ = false;
+        clear_work_frame_ = false;
         std::fill(ready_fb_.begin(), ready_fb_.end(), 0);
         ready_seq_ = 0;
         presented_seq_ = 0;
@@ -911,31 +1052,63 @@ void EmulatorApp::reset_scaled_frame() {
     {
         std::lock_guard<std::mutex> lock(scale_mtx_);
         has_pending_raw_ = false;
+        has_rescale_request_ = false;
+        clear_work_frame_ = true;
         std::fill(ready_fb_.begin(), ready_fb_.end(), 0);
         ++ready_seq_;
     }
+    scale_cv_.notify_one();
     force_present_ = true;
 }
 
 void EmulatorApp::scale_worker_loop() {
+    czx_frame_t last_work_frame{};
+    bool has_work_frame = false;
     while (true) {
         czx_frame_t work_frame{};
         czx::video::ScalerConfig work_cfg{};
+        bool do_render = false;
         {
             std::unique_lock<std::mutex> lock(scale_mtx_);
-            scale_cv_.wait(lock, [this]() { return scale_stop_ || has_pending_raw_; });
+            scale_cv_.wait(lock, [this]() {
+                return scale_stop_ || has_pending_raw_ || has_rescale_request_ || clear_work_frame_;
+            });
             if (scale_stop_) break;
-            work_raw_.swap(pending_raw_);
-            work_frame = pending_frame_;
-            work_cfg = pending_cfg_;
-            has_pending_raw_ = false;
+            if (clear_work_frame_) {
+                work_raw_.clear();
+                last_work_frame = {};
+                has_work_frame = false;
+                clear_work_frame_ = false;
+            }
+            if (has_pending_raw_) {
+                work_raw_.swap(pending_raw_);
+                last_work_frame = pending_frame_;
+                has_work_frame = !work_raw_.empty();
+                work_frame = last_work_frame;
+                work_cfg = pending_cfg_;
+                has_pending_raw_ = false;
+                has_rescale_request_ = false;
+                do_render = has_work_frame;
+            } else if (has_rescale_request_) {
+                has_rescale_request_ = false;
+                if (has_work_frame) {
+                    work_frame = last_work_frame;
+                    work_cfg = rescale_cfg_;
+                    do_render = true;
+                }
+            }
+        }
+        if (!do_render) {
+            continue;
         }
         work_frame.data = work_raw_.data();
         scaler_.render(work_frame, work_cfg, work_fb_.data());
         {
             std::lock_guard<std::mutex> lock(scale_mtx_);
-            ready_fb_.swap(work_fb_);
-            ++ready_seq_;
+            if (!clear_work_frame_) {
+                ready_fb_.swap(work_fb_);
+                ++ready_seq_;
+            }
         }
     }
 }
@@ -1022,6 +1195,139 @@ void EmulatorApp::update_window_title() {
     }
 }
 
+void EmulatorApp::update_native_from_frame(const czx_frame_t& frame) {
+    if (!frame.data || frame.width == 0 || frame.height == 0) {
+        return;
+    }
+    int ax = 0;
+    int ay = 0;
+    int aw = frame.width;
+    int ah = frame.height;
+    if (!scaler_cfg_.show_borders && frame.crop_w > 0 && frame.crop_h > 0 &&
+        static_cast<int>(frame.crop_x) + static_cast<int>(frame.crop_w) <= static_cast<int>(frame.width) &&
+        static_cast<int>(frame.crop_y) + static_cast<int>(frame.crop_h) <= static_cast<int>(frame.height)) {
+        ax = frame.crop_x;
+        ay = frame.crop_y;
+        aw = frame.crop_w;
+        ah = frame.crop_h;
+    }
+
+    uint32_t margin_xrgb = 0;
+    const auto* base = static_cast<const uint8_t*>(frame.data);
+    if (scaler_cfg_.margin_fill == czx::video::MarginFill::Auto && aw > 0 && ah > 0) {
+        const bool sample_outer =
+            (frame.flags & CZX_FRAME_HAS_BORDER) != 0 &&
+            frame.crop_w > 0 && frame.crop_h > 0 &&
+            (frame.crop_w < frame.width || frame.crop_h < frame.height);
+        const uint32_t x0 = sample_outer ? 0u : static_cast<uint32_t>(ax);
+        const uint32_t x1 = sample_outer ? (frame.width - 1u) : static_cast<uint32_t>(ax + aw - 1);
+        const uint32_t y0 = sample_outer ? 0u : static_cast<uint32_t>(ay);
+        const uint32_t y1 = sample_outer ? (frame.height - 1u) : static_cast<uint32_t>(ay + ah - 1);
+        const uint8_t* r0 = base + static_cast<size_t>(y0) * frame.pitch_bytes;
+        const uint8_t* r1 = base + static_cast<size_t>(y1) * frame.pitch_bytes;
+        const uint8_t* rows[4] = {r0, r0, r1, r1};
+        const uint32_t cols[4] = {x0, x1, x0, x1};
+        uint32_t sr = 0, sg = 0, sb = 0;
+        for (int i = 0; i < 4; ++i) {
+            uint8_t r = 0, g = 0, b = 0;
+            czx::video::read_pixel_rgb888(rows[i], cols[i], frame.format, r, g, b);
+            sr += r;
+            sg += g;
+            sb += b;
+        }
+        margin_xrgb = (((sr + 2u) / 4u) << 16) | (((sg + 2u) / 4u) << 8) | ((sb + 2u) / 4u);
+    }
+
+    native_xrgb_.resize(static_cast<size_t>(aw) * static_cast<size_t>(ah));
+    switch (frame.format) {
+        case CZX_PIXEL_RGB565:
+            for (int y = 0; y < ah; ++y) {
+                const auto* src16 = reinterpret_cast<const uint16_t*>(
+                    base + static_cast<size_t>(ay + y) * frame.pitch_bytes) + ax;
+                uint32_t* dst = native_xrgb_.data() + static_cast<size_t>(y) * static_cast<size_t>(aw);
+                for (int x = 0; x < aw; ++x) {
+                    uint8_t r = 0, g = 0, b = 0;
+                    czx::video::unpack_rgb565(src16[x], r, g, b);
+                    dst[x] = (static_cast<uint32_t>(r) << 16) |
+                             (static_cast<uint32_t>(g) << 8) |
+                             static_cast<uint32_t>(b);
+                }
+            }
+            break;
+        case CZX_PIXEL_XRGB8888:
+            for (int y = 0; y < ah; ++y) {
+                const auto* src32 = reinterpret_cast<const uint32_t*>(
+                    base + static_cast<size_t>(ay + y) * frame.pitch_bytes) + ax;
+                uint32_t* dst = native_xrgb_.data() + static_cast<size_t>(y) * static_cast<size_t>(aw);
+                std::copy_n(src32, aw, dst);
+            }
+            break;
+        case CZX_PIXEL_ABGR8888:
+            for (int y = 0; y < ah; ++y) {
+                const auto* src32 = reinterpret_cast<const uint32_t*>(
+                    base + static_cast<size_t>(ay + y) * frame.pitch_bytes) + ax;
+                uint32_t* dst = native_xrgb_.data() + static_cast<size_t>(y) * static_cast<size_t>(aw);
+                for (int x = 0; x < aw; ++x) {
+                    const uint32_t p = src32[x];
+                    dst[x] = ((p & 0x000000FFu) << 16) |
+                             (p & 0x0000FF00u) |
+                             ((p >> 16) & 0x000000FFu);
+                }
+            }
+            break;
+    }
+
+    native_w_ = aw;
+    native_h_ = ah;
+    native_par_num_ = frame.par_num ? frame.par_num : 1;
+    native_par_den_ = frame.par_den ? frame.par_den : 1;
+    native_margin_xrgb_ = margin_xrgb;
+    ++native_seq_;
+}
+
+void EmulatorApp::refresh_paused_preview() {
+    force_present_ = true;
+    if (!core_inst_ || cfg_.headless_frames > 0) {
+        return;
+    }
+    if (desktop_native_mode_) {
+        if (desktop_has_last_raw_ && !desktop_last_raw_bytes_.empty()) {
+            czx_frame_t f = desktop_last_raw_frame_;
+            f.data = desktop_last_raw_bytes_.data();
+            update_native_from_frame(f);
+            sync_desktop_window_size(false);
+        }
+        return;
+    }
+
+    if (has_last_frame_meta_) {
+        last_layout_ = czx::video::Scaler::compute_layout(last_frame_meta_, scaler_cfg_);
+        scaler_cfg_.pan_x = last_layout_.pan_x;
+        scaler_cfg_.pan_y = last_layout_.pan_y;
+    }
+    if (!scale_thread_running_) {
+        return;
+    }
+    if (desktop_has_last_raw_ && !desktop_last_raw_bytes_.empty()) {
+        std::vector<uint8_t> raw_copy = desktop_last_raw_bytes_;
+        {
+            std::lock_guard<std::mutex> lock(scale_mtx_);
+            pending_raw_.swap(raw_copy);
+            pending_frame_ = desktop_last_raw_frame_;
+            pending_cfg_ = scaler_cfg_;
+            has_pending_raw_ = true;
+        }
+        scale_cv_.notify_one();
+    } else {
+        {
+            std::lock_guard<std::mutex> lock(scale_mtx_);
+            rescale_cfg_ = scaler_cfg_;
+            has_rescale_request_ = true;
+        }
+        scale_cv_.notify_one();
+    }
+}
+
 void EmulatorApp::cb_video_frame(void* user_data, const czx_frame_t* frame) {
     auto* self = static_cast<EmulatorApp*>(user_data);
     if (!self || !frame) return;
@@ -1031,94 +1337,34 @@ void EmulatorApp::cb_video_frame(void* user_data, const czx_frame_t* frame) {
     self->scaler_cfg_.pan_x = self->last_layout_.pan_x;
     self->scaler_cfg_.pan_y = self->last_layout_.pan_y;
 
-    if (self->desktop_native_mode_ && self->cfg_.headless_frames == 0) {
-        if (!frame->data || frame->width == 0 || frame->height == 0) {
-            return;
-        }
-        int ax = 0;
-        int ay = 0;
-        int aw = frame->width;
-        int ah = frame->height;
-        if (!self->scaler_cfg_.show_borders && frame->crop_w > 0 && frame->crop_h > 0 &&
-            static_cast<int>(frame->crop_x) + static_cast<int>(frame->crop_w) <= static_cast<int>(frame->width) &&
-            static_cast<int>(frame->crop_y) + static_cast<int>(frame->crop_h) <= static_cast<int>(frame->height)) {
-            ax = frame->crop_x;
-            ay = frame->crop_y;
-            aw = frame->crop_w;
-            ah = frame->crop_h;
-        }
+    self->last_frame_meta_ = *frame;
+    self->last_frame_meta_.data = nullptr;
+    self->has_last_frame_meta_ = (frame->data != nullptr && frame->width > 0 && frame->height > 0);
 
-        uint32_t margin_xrgb = 0;
-        const auto* base = static_cast<const uint8_t*>(frame->data);
-        if (self->scaler_cfg_.margin_fill == czx::video::MarginFill::Auto && aw > 0 && ah > 0) {
-            const bool sample_outer =
-                (frame->flags & CZX_FRAME_HAS_BORDER) != 0 &&
-                frame->crop_w > 0 && frame->crop_h > 0 &&
-                (frame->crop_w < frame->width || frame->crop_h < frame->height);
-            const uint32_t x0 = sample_outer ? 0u : static_cast<uint32_t>(ax);
-            const uint32_t x1 = sample_outer ? (frame->width - 1u) : static_cast<uint32_t>(ax + aw - 1);
-            const uint32_t y0 = sample_outer ? 0u : static_cast<uint32_t>(ay);
-            const uint32_t y1 = sample_outer ? (frame->height - 1u) : static_cast<uint32_t>(ay + ah - 1);
-            const uint8_t* r0 = base + static_cast<size_t>(y0) * frame->pitch_bytes;
-            const uint8_t* r1 = base + static_cast<size_t>(y1) * frame->pitch_bytes;
-            const uint8_t* rows[4] = {r0, r0, r1, r1};
-            const uint32_t cols[4] = {x0, x1, x0, x1};
-            uint32_t sr = 0, sg = 0, sb = 0;
-            for (int i = 0; i < 4; ++i) {
-                uint8_t r = 0, g = 0, b = 0;
-                czx::video::read_pixel_rgb888(rows[i], cols[i], frame->format, r, g, b);
-                sr += r;
-                sg += g;
-                sb += b;
+    if (self->has_last_frame_meta_ && self->cfg_.headless_frames == 0 &&
+        self->platform_.display && self->platform_.display->supports_native_present()) {
+        const size_t bpp = (frame->format == CZX_PIXEL_RGB565) ? 2u : 4u;
+        const size_t row_bytes = static_cast<size_t>(frame->width) * bpp;
+        const size_t total_bytes = row_bytes * static_cast<size_t>(frame->height);
+        self->desktop_last_raw_bytes_.resize(total_bytes);
+        if (frame->pitch_bytes == row_bytes) {
+            std::memcpy(self->desktop_last_raw_bytes_.data(), frame->data, total_bytes);
+        } else {
+            const auto* src = static_cast<const uint8_t*>(frame->data);
+            for (uint16_t y = 0; y < frame->height; ++y) {
+                std::memcpy(self->desktop_last_raw_bytes_.data() + static_cast<size_t>(y) * row_bytes,
+                            src + static_cast<size_t>(y) * frame->pitch_bytes,
+                            row_bytes);
             }
-            margin_xrgb = (((sr + 2u) / 4u) << 16) | (((sg + 2u) / 4u) << 8) | ((sb + 2u) / 4u);
         }
+        self->desktop_last_raw_frame_ = *frame;
+        self->desktop_last_raw_frame_.data = nullptr;
+        self->desktop_last_raw_frame_.pitch_bytes = static_cast<uint32_t>(row_bytes);
+        self->desktop_has_last_raw_ = true;
+    }
 
-        self->native_xrgb_.resize(static_cast<size_t>(aw) * static_cast<size_t>(ah));
-        switch (frame->format) {
-            case CZX_PIXEL_RGB565:
-                for (int y = 0; y < ah; ++y) {
-                    const auto* src16 = reinterpret_cast<const uint16_t*>(
-                        base + static_cast<size_t>(ay + y) * frame->pitch_bytes) + ax;
-                    uint32_t* dst = self->native_xrgb_.data() + static_cast<size_t>(y) * static_cast<size_t>(aw);
-                    for (int x = 0; x < aw; ++x) {
-                        uint8_t r = 0, g = 0, b = 0;
-                        czx::video::unpack_rgb565(src16[x], r, g, b);
-                        dst[x] = (static_cast<uint32_t>(r) << 16) |
-                                 (static_cast<uint32_t>(g) << 8) |
-                                 static_cast<uint32_t>(b);
-                    }
-                }
-                break;
-            case CZX_PIXEL_XRGB8888:
-                for (int y = 0; y < ah; ++y) {
-                    const auto* src32 = reinterpret_cast<const uint32_t*>(
-                        base + static_cast<size_t>(ay + y) * frame->pitch_bytes) + ax;
-                    uint32_t* dst = self->native_xrgb_.data() + static_cast<size_t>(y) * static_cast<size_t>(aw);
-                    std::copy_n(src32, aw, dst);
-                }
-                break;
-            case CZX_PIXEL_ABGR8888:
-                for (int y = 0; y < ah; ++y) {
-                    const auto* src32 = reinterpret_cast<const uint32_t*>(
-                        base + static_cast<size_t>(ay + y) * frame->pitch_bytes) + ax;
-                    uint32_t* dst = self->native_xrgb_.data() + static_cast<size_t>(y) * static_cast<size_t>(aw);
-                    for (int x = 0; x < aw; ++x) {
-                        const uint32_t p = src32[x];
-                        dst[x] = ((p & 0x000000FFu) << 16) |
-                                 (p & 0x0000FF00u) |
-                                 ((p >> 16) & 0x000000FFu);
-                    }
-                }
-                break;
-        }
-
-        self->native_w_ = aw;
-        self->native_h_ = ah;
-        self->native_par_num_ = frame->par_num ? frame->par_num : 1;
-        self->native_par_den_ = frame->par_den ? frame->par_den : 1;
-        self->native_margin_xrgb_ = margin_xrgb;
-        ++self->native_seq_;
+    if (self->desktop_native_mode_ && self->cfg_.headless_frames == 0) {
+        self->update_native_from_frame(*frame);
         return;
     }
 
@@ -1256,7 +1502,10 @@ int EmulatorApp::run() {
         start_scale_worker();
     }
 
-    if (!activate_core(initial_idx, cfg_.media_path, cfg_.media2_path)) {
+    const bool activated = (cfg_.headless_frames == 0)
+                               ? activate_core_with_loading(initial_idx, cfg_.media_path, cfg_.media2_path)
+                               : activate_core(initial_idx, cfg_.media_path, cfg_.media2_path);
+    if (!activated) {
         if (cfg_.headless_frames > 0) {
             return 1;
         }
@@ -1292,6 +1541,8 @@ int EmulatorApp::run() {
     auto fps_window_start = last_tick;
     int fps_window_frames = 0;
     bool fps_initialized = false;
+    bool was_paused = false;
+    uint64_t seen_core_epoch = core_epoch_;
     std::vector<czx::input::RawKeyEvent> raw_events;
     std::vector<czx::platform::RawMouseEvent> raw_mouse;
     int frames_done = 0;
@@ -1331,6 +1582,18 @@ int EmulatorApp::run() {
         }
         router_.tick(dt_sec);
 
+        const bool menu_paused = (cfg_.headless_frames == 0) && (browser_.is_open() || menu_.is_open());
+        if ((was_paused && !menu_paused) || (seen_core_epoch != core_epoch_)) {
+            seen_core_epoch = core_epoch_;
+            const auto reset_now = std::chrono::steady_clock::now();
+            last_tick = reset_now;
+            next_frame = reset_now + get_frame_period();
+            fps_window_start = reset_now;
+            fps_window_frames = 0;
+            fps_initialized = false;
+        }
+        was_paused = menu_paused;
+
         if (hud_.pan_hint_frames > 0) --hud_.pan_hint_frames;
         if (hud_.toast_frames > 0) --hud_.toast_frames;
         hud_.alt_held = router_.alt_held();
@@ -1341,7 +1604,15 @@ int EmulatorApp::run() {
         const bool interactive_overlay = browser_.is_open() || menu_.is_open() || hud_.alt_held;
         const bool do_warp = (cfg_.headless_frames == 0) && tape_warp_enabled_ && core_inst_ &&
                              live_warp_requested_ && !interactive_overlay;
-        if (!do_warp) {
+        if (menu_paused) {
+            if (core_inst_ && core_api_->set_fast_forward) {
+                core_api_->set_fast_forward(core_inst_, false, false);
+            }
+            if (platform_.audio) {
+                static constexpr int16_t kSilence[735 * 2] = {};
+                platform_.audio->write_samples(kSilence, 735);
+            }
+        } else if (!do_warp) {
             if (core_inst_ && core_api_->set_fast_forward) {
                 core_api_->set_fast_forward(core_inst_, false, false);
             }
@@ -1485,7 +1756,9 @@ int EmulatorApp::run() {
         }
 
         ++frames_done;
-        ++fps_window_frames;
+        if (!menu_paused) {
+            ++fps_window_frames;
+        }
         if (cfg_.headless_frames > 0 && frames_done >= cfg_.headless_frames) {
             break;
         }

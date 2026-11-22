@@ -22,6 +22,8 @@ public:
     const std::string& id() const noexcept { return id_; }
     const std::string& path() const noexcept { return so_path_; }
     const std::string& extensions() const noexcept { return extensions_; }
+    uint32_t drive_count() const noexcept;
+    const char* drive_name(uint32_t drive) const noexcept;
 
     struct Symbols;
     const Symbols& symbols() const noexcept { return *syms_; }

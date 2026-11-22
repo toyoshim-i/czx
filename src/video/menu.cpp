@@ -37,7 +37,13 @@ MenuAction OverlayMenu::handle_key(const czx_key_event_t& ev, const MenuViewMode
 
     switch (cursor_) {
         case 0:
-            return left ? MenuAction::CycleCorePrev : MenuAction::CycleCoreNext;
+            if (left) return MenuAction::CycleCorePrev;
+            if (right) return MenuAction::CycleCoreNext;
+            if (ok && vm.core_pending) {
+                open_ = false;
+                return MenuAction::ApplyCore;
+            }
+            return MenuAction::None;
         case 1:
             if (vm.drive_count >= 2u && vm.has_media_browser) {
                 if (left) return MenuAction::EjectDrive1;
@@ -103,7 +109,8 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
     std::snprintf(header, sizeof(header), "CZX SYSTEM MENU  %dx%d", vm.src_width, vm.src_height);
     canvas.draw_text(kBoxX + 8, kBoxY + 4, header, pack_rgb565(255, 255, 255));
 
-    const std::string core_val = truncate_tail_px(vm.core_name, 178, 1);
+    const std::string raw_core_name = vm.core_pending ? ("* " + vm.core_name) : vm.core_name;
+    const std::string core_val = truncate_tail_px(raw_core_name, 178, 1);
     const std::string media_val = truncate_tail_px(vm.preset_or_media_label, 178, 1);
     const std::string d1_val = truncate_tail_px(vm.drive1_label, 178, 1);
     const std::string d2_val = truncate_tail_px(vm.drive2_label, 178, 1);
@@ -148,7 +155,10 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
         }
 
         const uint16_t label_col = selected ? pack_rgb565(255, 240, 140) : pack_rgb565(195, 205, 220);
-        const uint16_t val_col = selected ? pack_rgb565(255, 255, 255) : pack_rgb565(130, 210, 245);
+        uint16_t val_col = selected ? pack_rgb565(255, 255, 255) : pack_rgb565(130, 210, 245);
+        if (i == 0 && vm.core_pending) {
+            val_col = selected ? pack_rgb565(255, 230, 120) : pack_rgb565(255, 200, 90);
+        }
 
         canvas.draw_char(kBoxX + 10, ry + 1, selected ? '>' : ' ', label_col);
         canvas.draw_text(kBoxX + 20, ry + 1, rows[static_cast<size_t>(i)].label, label_col);
@@ -159,9 +169,15 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
     }
 
     canvas.draw_hline(kBoxX + 6, kBoxY + kBoxH - 14, kBoxW - 12, pack_rgb565(56, 74, 98));
-    const char* footer = (dual && (cursor_ == 1 || cursor_ == 2))
-                             ? "F/X:Move  Z:Eject  OK:Load  ESC:Back"
-                             : "F/X:Move  Z/C:Change  OK:Go  ESC:Back";
+    const char* footer = nullptr;
+    if (dual && (cursor_ == 1 || cursor_ == 2)) {
+        footer = vm.core_pending ? "F/X:Move  OK:Load+Boot  ESC:Launch"
+                                 : "F/X:Move  Z:Eject  OK:Load  ESC:Back";
+    } else if (vm.core_pending) {
+        footer = "F/X:Move  Z/C:Change  OK/ESC:Launch";
+    } else {
+        footer = "F/X:Move  Z/C:Change  OK:Go  ESC:Back";
+    }
     canvas.draw_text(kBoxX + 12, kBoxY + kBoxH - 10, footer, pack_rgb565(150, 170, 195));
 }
 

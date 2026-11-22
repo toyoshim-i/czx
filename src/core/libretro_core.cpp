@@ -918,14 +918,11 @@ public:
     }
 
     uint32_t get_drive_count() const noexcept {
-        return (is_quasi88_ || is_np2kai_ || is_applewin_ || is_msx68k_) ? 2u : 1u;
+        return loader_->drive_count();
     }
 
     const char* get_drive_name(uint32_t drive) const noexcept {
-        if (get_drive_count() < 2u) return "Media";
-        if (is_np2kai_) return (drive == 0u) ? "FDD 1" : "FDD 2";
-        if (is_msx68k_) return (drive == 0u) ? "FDD 0" : "FDD 1";
-        return (drive == 0u) ? "Drive 1" : "Drive 2";
+        return loader_->drive_name(drive);
     }
 
     const char* get_drive_media_label(uint32_t drive) const noexcept {
@@ -2442,8 +2439,9 @@ bool lr_set_option(czx_core_instance_t* inst, const char* key, const char* value
     return inst && reinterpret_cast<LibretroCoreInstance*>(inst)->set_option(key, value);
 }
 
-const char* lr_get_extensions(const czx_core_instance_t* inst) {
-    return inst ? reinterpret_cast<const LibretroCoreInstance*>(inst)->get_extensions() : nullptr;
+const char* lr_get_extensions(const czx_core_api_t* api) {
+    const auto* loader = static_cast<const LibretroCoreLoader*>(api ? api->api_data : nullptr);
+    return (loader && !loader->extensions().empty()) ? loader->extensions().c_str() : nullptr;
 }
 
 const char* lr_get_media_label(const czx_core_instance_t* inst) {
@@ -2459,12 +2457,14 @@ const char* lr_get_last_error(const czx_core_api_t* api) {
     return loader ? loader->last_error() : nullptr;
 }
 
-uint32_t lr_get_drive_count(const czx_core_instance_t* inst) {
-    return inst ? reinterpret_cast<const LibretroCoreInstance*>(inst)->get_drive_count() : 1u;
+uint32_t lr_get_drive_count(const czx_core_api_t* api) {
+    const auto* loader = static_cast<const LibretroCoreLoader*>(api ? api->api_data : nullptr);
+    return loader ? loader->drive_count() : 1u;
 }
 
-const char* lr_get_drive_name(const czx_core_instance_t* inst, uint32_t drive) {
-    return inst ? reinterpret_cast<const LibretroCoreInstance*>(inst)->get_drive_name(drive) : "Media";
+const char* lr_get_drive_name(const czx_core_api_t* api, uint32_t drive) {
+    const auto* loader = static_cast<const LibretroCoreLoader*>(api ? api->api_data : nullptr);
+    return loader ? loader->drive_name(drive) : "Media";
 }
 
 const char* lr_get_drive_media_label(const czx_core_instance_t* inst, uint32_t drive) {
@@ -2565,6 +2565,21 @@ void LibretroCoreLoader::update_av_timing(double fps, double) {
         desc_.fps_den = 1000u;
     }
     desc_.audio_sample_rate = kTargetAudioSampleRate;
+}
+
+uint32_t LibretroCoreLoader::drive_count() const noexcept {
+    const bool dual = (id_.find("quasi88") != std::string::npos) ||
+                      (id_.find("np2kai") != std::string::npos) ||
+                      (id_.find("applewin") != std::string::npos) ||
+                      (id_.find("msx68k") != std::string::npos);
+    return dual ? 2u : 1u;
+}
+
+const char* LibretroCoreLoader::drive_name(uint32_t drive) const noexcept {
+    if (drive_count() < 2u) return "Media";
+    if (id_.find("np2kai") != std::string::npos) return (drive == 0u) ? "FDD 1" : "FDD 2";
+    if (id_.find("msx68k") != std::string::npos) return (drive == 0u) ? "FDD 0" : "FDD 1";
+    return (drive == 0u) ? "Drive 1" : "Drive 2";
 }
 
 bool LibretroCoreLoader::load(const std::string& so_path) {

@@ -13,6 +13,7 @@ enum class MenuAction {
     Close,
     CycleCorePrev,
     CycleCoreNext,
+    ApplyCore,
     OpenMediaBrowser,
     OpenDrive1Browser,
     OpenDrive2Browser,
@@ -35,6 +36,7 @@ enum class MenuAction {
 
 struct MenuViewModel {
     std::string core_name;
+    bool core_pending = false;
     std::string preset_or_media_label;
     bool has_media_browser = false;
     bool can_eject = false;

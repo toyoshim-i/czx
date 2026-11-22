@@ -146,13 +146,28 @@ void test_overlay_menu() {
 
     // Wrap around from last item (11) back to Core (0).
     CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), vm) == czx::video::MenuAction::None);
+    CHECK(menu.handle_key(key_press(CZX_KEY_LEFT), vm) == czx::video::MenuAction::CycleCorePrev);
     CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), vm) == czx::video::MenuAction::CycleCoreNext);
+    CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), vm) == czx::video::MenuAction::None);
+    CHECK(menu.is_open());
 
+    vm.core_pending = true;
+    CHECK(menu.handle_key(key_press(CZX_KEY_LEFT), vm) == czx::video::MenuAction::CycleCorePrev);
+    CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), vm) == czx::video::MenuAction::CycleCoreNext);
+    CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), vm) == czx::video::MenuAction::ApplyCore);
+    CHECK(!menu.is_open());
+
+    menu.set_open(true);
+    CHECK(menu.handle_key(key_press(CZX_KEY_ESC), vm) == czx::video::MenuAction::Close);
+    CHECK(!menu.is_open());
+
+    menu.set_open(true);
     std::vector<uint16_t> fb(static_cast<size_t>(czx::video::kLcdWidth * czx::video::kLcdHeight), 0);
     menu.render(fb.data(), vm);
     CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
 
     std::fill(fb.begin(), fb.end(), 0);
+    vm.core_pending = false;
     vm.desktop_native_active = true;
     vm.desktop_scale = 3;
     menu.render(fb.data(), vm);

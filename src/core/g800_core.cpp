@@ -634,7 +634,7 @@ bool g800_select_preset(czx_core_instance_t* inst, uint32_t index) {
     return inst && reinterpret_cast<G800CoreInstance*>(inst)->select_preset(index);
 }
 
-const char* g800_get_extensions(const czx_core_instance_t*) {
+const char* g800_get_extensions(const czx_core_api_t*) {
     return "ihx|hex|bas|txt";
 }
 

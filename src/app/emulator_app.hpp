@@ -53,6 +53,8 @@ private:
     AppConfig cfg_;
     czx::core::CoreRegistry registry_;
     int core_index_ = 0;
+    int pending_core_index_ = 0;
+    uint64_t core_epoch_ = 0;
     const czx_core_api_t* core_api_ = nullptr;
     czx_core_instance_t* core_inst_ = nullptr;
     czx::platform::PlatformBundle platform_;
@@ -85,6 +87,14 @@ private:
     czx_frame_t pending_frame_{};
     czx::video::ScalerConfig pending_cfg_{};
     bool has_pending_raw_ = false;
+    bool has_rescale_request_ = false;
+    bool clear_work_frame_ = false;
+    czx::video::ScalerConfig rescale_cfg_{};
+    czx_frame_t last_frame_meta_{};
+    bool has_last_frame_meta_ = false;
+    std::vector<uint8_t> desktop_last_raw_bytes_;
+    czx_frame_t desktop_last_raw_frame_{};
+    bool desktop_has_last_raw_ = false;
     std::vector<uint8_t> work_raw_;
     std::vector<uint16_t> work_fb_;
     std::vector<uint16_t> ready_fb_;
@@ -130,7 +140,17 @@ private:
     void sync_core_gpu_scale_option();
     void clear_activity_state() noexcept;
     void poll_core_activity();
-    std::string default_media_dir_for_core() const;
+    const czx_core_api_t* displayed_menu_core_api() const noexcept;
+    bool has_pending_core_change() const noexcept;
+    std::string default_media_dir_for_core(const czx_core_api_t* api = nullptr) const;
+    void present_loading_screen(const char* core_name, const std::string& media_label = {});
+    bool activate_core_with_loading(int index,
+                                    const std::string& initial_media = {},
+                                    const std::string& initial_media2 = {},
+                                    const std::string& display_media_label = {});
+    void commit_pending_core(bool force_reload = false);
+    void update_native_from_frame(const czx_frame_t& frame);
+    void refresh_paused_preview();
     bool activate_core(int index, const std::string& initial_media = {}, const std::string& initial_media2 = {});
     void destroy_active_core();
     void render_core_error_screen();

@@ -18,7 +18,7 @@ void print_usage(const char* prog) {
     std::printf(
         "Usage: %s [options] [media_file] [media_file2]\n"
         "  --core <id|path.so>           Initial core (auto-detected from media if omitted;\n"
-        "                                e.g. applewin, vice_x64, quasi88, np2kai, bluemsx, emuz700, g800, test_pattern)\n"
+        "                                e.g. applewin, vice_x64, quasi88, np2kai, bluemsx, emuz700, msx68k, g800, test_pattern)\n"
         "  --media <path>                Disk, tape, PRG, or cart image to load (Drive 1 / FDD 0)\n"
         "  --media2 <path>               Second disk image to load (Drive 2 / FDD 1 / HDD)\n"
         "  --core-dir <dir>              Additional directory to scan for *_libretro.so cores\n"

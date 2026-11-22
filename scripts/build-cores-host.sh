@@ -79,5 +79,14 @@ make -f "$ROOT_DIR/cmake/emuz700_czx/Makefile.czx" -j"$(nproc)" \
     OUT_SO="$OUT_DIR/emuz700_libretro.so" \
     OPT_FLAGS="-O3"
 
+if command -v cargo >/dev/null 2>&1; then
+    echo "Building msx68k (experimental libretro, host)..."
+    cargo build --release --manifest-path "$ROOT_DIR/cmake/msx68k_czx/Cargo.toml" \
+        --target-dir "$ROOT_DIR/build/cores-msx68k"
+    cp -f "$ROOT_DIR/build/cores-msx68k/release/libmsx68k_libretro.so" "$OUT_DIR/msx68k_libretro.so"
+else
+    echo "cargo not found; skipping experimental msx68k core."
+fi
+
 echo "Built host cores in $OUT_DIR:"
 ls -lh "$OUT_DIR"

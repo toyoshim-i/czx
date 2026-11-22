@@ -127,6 +127,7 @@ private:
     void load_app_config();
     void save_app_config() const;
     void sync_core_warp_option();
+    void sync_core_gpu_scale_option();
     void clear_activity_state() noexcept;
     void poll_core_activity();
     std::string default_media_dir_for_core() const;

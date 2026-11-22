@@ -107,6 +107,7 @@ std::string derive_display_name(const std::string& id, const char* lib_name) {
     if (id == "np2kai") return "PC-9801 (NP2kai)";
     if (id == "bluemsx") return "MSX (blueMSX)";
     if (id == "emuz700") return "MZ-700 (EmuZ-700)";
+    if (id == "msx68k") return "X68000 (msx68k)";
     if (lib_name && lib_name[0] != '\0') return lib_name;
     return id;
 }
@@ -161,7 +162,8 @@ bool is_floppy_disk_ext(const std::string& path) {
            ext == ".d81" || ext == ".d82" ||
            ext == ".d88" || ext == ".88d" || ext == ".d98" || ext == ".98d" ||
            ext == ".fdi" || ext == ".xdf" || ext == ".hdm" || ext == ".dup" ||
-           ext == ".2hd" || ext == ".tfd" || ext == ".nfd" || ext == ".fdd";
+           ext == ".2hd" || ext == ".tfd" || ext == ".nfd" || ext == ".fdd" ||
+           ext == ".dim" || ext == ".2dd";
 }
 
 bool is_tape_ext(const std::string& path) {
@@ -183,6 +185,11 @@ bool is_pc98_hdd_ext(const std::string& path) {
     const std::string ext = to_lower_copy(fs::path(path).extension().string());
     return ext == ".hdi" || ext == ".nhd" || ext == ".thd" || ext == ".vhd" ||
            ext == ".hdd" || ext == ".hdn" || ext == ".slh";
+}
+
+bool is_x68k_hdd_ext(const std::string& path) {
+    const std::string ext = to_lower_copy(fs::path(path).extension().string());
+    return ext == ".hds" || ext == ".hdf" || ext == ".img";
 }
 
 bool write_text_file(const fs::path& path, const std::string& content) {
@@ -542,6 +549,7 @@ public:
         is_np2kai_ = (loader_->id().find("np2kai") != std::string::npos);
         is_bluemsx_ = (loader_->id().find("bluemsx") != std::string::npos);
         is_emuz700_ = (loader_->id().find("emuz700") != std::string::npos);
+        is_msx68k_ = (loader_->id().find("msx68k") != std::string::npos);
         if (const char* dd = std::getenv("CZX_DATA_DIR"); dd && dd[0] != '\0') {
             set_data_dir(dd);
         } else if (const char* home = std::getenv("HOME"); home && home[0] != '\0') {
@@ -566,7 +574,22 @@ public:
             const std::string p1 = host_.initial_media2;
             const std::string lbl0 = fs::path(p0).filename().string();
             const std::string lbl1 = fs::path(p1).filename().string();
-            if (is_np2kai_) {
+            if (is_msx68k_) {
+                if (is_x68k_hdd_ext(p0) && !is_x68k_hdd_ext(p1)) {
+                    hdd_path_ = p0;
+                    drive_paths_[0] = p1;
+                    drive_labels_[0] = lbl1;
+                    const std::string target = build_dual_boot_file();
+                    return !target.empty() && start_core(target.c_str());
+                }
+                if (is_x68k_hdd_ext(p1) && !is_x68k_hdd_ext(p0)) {
+                    drive_paths_[0] = p0;
+                    drive_labels_[0] = lbl0;
+                    hdd_path_ = p1;
+                    const std::string target = build_dual_boot_file();
+                    return !target.empty() && start_core(target.c_str());
+                }
+            } else if (is_np2kai_) {
                 if (is_pc98_hdd_ext(p0) && !is_pc98_hdd_ext(p1)) {
                     hdd_path_ = p0;
                     drive_paths_[0] = p1;
@@ -602,7 +625,8 @@ public:
                 return false;
             }
             const std::string lbl = fs::path(init_path).filename().string();
-            if (is_np2kai_ && is_pc98_hdd_ext(init_path)) {
+            if ((is_np2kai_ && is_pc98_hdd_ext(init_path)) ||
+                (is_msx68k_ && is_x68k_hdd_ext(init_path))) {
                 hdd_path_ = init_path;
                 drive_labels_[0] = lbl;
             } else {
@@ -647,6 +671,9 @@ public:
             seed_bluemsx_open_data(fs::path(system_dir_));
         } else if (is_emuz700_) {
             system_dir_ = (fs::path(data_dir_) / "roms" / "mz700").string();
+            fs::create_directories(system_dir_, ec);
+        } else if (is_msx68k_) {
+            system_dir_ = (fs::path(data_dir_) / "roms" / "x68000").string();
             fs::create_directories(system_dir_, ec);
         } else {
             system_dir_ = (fs::path(data_dir_) / "roms").string();
@@ -700,7 +727,7 @@ public:
             return false;
         }
 
-        if (is_vice_ || is_quasi88_ || is_np2kai_ || is_bluemsx_ || is_emuz700_) {
+        if (is_vice_ || is_quasi88_ || is_np2kai_ || is_bluemsx_ || is_emuz700_ || is_msx68k_) {
             std::error_code ec;
             if (!fs::is_regular_file(path, ec)) {
                 return false;
@@ -891,12 +918,13 @@ public:
     }
 
     uint32_t get_drive_count() const noexcept {
-        return (is_quasi88_ || is_np2kai_ || is_applewin_) ? 2u : 1u;
+        return (is_quasi88_ || is_np2kai_ || is_applewin_ || is_msx68k_) ? 2u : 1u;
     }
 
     const char* get_drive_name(uint32_t drive) const noexcept {
         if (get_drive_count() < 2u) return "Media";
         if (is_np2kai_) return (drive == 0u) ? "FDD 1" : "FDD 2";
+        if (is_msx68k_) return (drive == 0u) ? "FDD 0" : "FDD 1";
         return (drive == 0u) ? "Drive 1" : "Drive 2";
     }
 
@@ -1033,6 +1061,42 @@ public:
             return true;
         }
 
+        if (is_msx68k_) {
+            if (ext == ".m3u") {
+                drive_paths_[1].clear();
+                drive_labels_[1] = "Empty";
+                hdd_path_.clear();
+                drive_paths_[0] = path;
+                drive_labels_[0] = lbl;
+                return reload_core_with_media(path);
+            }
+            if (is_x68k_hdd_ext(path)) {
+                hdd_path_ = path;
+                if (drive_paths_[0].empty()) {
+                    drive_labels_[0] = lbl;
+                }
+                const std::string target = build_dual_boot_file();
+                return !target.empty() && reload_core_with_media(target);
+            }
+            drive_paths_[drive] = path;
+            drive_labels_[drive] = lbl;
+            if (game_loaded_ && has_disk_control()) {
+                options_["msx68k_drive"] = (drive == 0u) ? "FDD0" : "FDD1";
+                option_dirty_ = true;
+                if (hot_swap_disk(path)) {
+                    has_media_ = true;
+                    ejected_ = false;
+                    if (drive == 0u) {
+                        media_path_ = path;
+                        media_label_ = lbl;
+                    }
+                    return true;
+                }
+            }
+            const std::string target = build_dual_boot_file();
+            return !target.empty() && reload_core_with_media(target);
+        }
+
         return false;
     }
 
@@ -1043,11 +1107,34 @@ public:
         }
         if (drive >= 2u) return false;
 
+        if (drive == 0u && is_msx68k_ && drive_paths_[0].empty() && !hdd_path_.empty()) {
+            hdd_path_.clear();
+            drive_labels_[0] = "Empty";
+            if (!drive_paths_[1].empty()) {
+                const std::string target = build_dual_boot_file();
+                return !target.empty() && reload_core_with_media(target);
+            }
+            return !has_media_ || reload_core_with_media("");
+        }
+
         if (drive == 0u && is_np2kai_ && drive_paths_[0].empty() && !hdd_path_.empty()) {
             hdd_path_.clear();
         }
         drive_paths_[drive].clear();
         drive_labels_[drive] = "Empty";
+
+        if (is_msx68k_) {
+            if (game_loaded_ && has_disk_control()) {
+                options_["msx68k_drive"] = (drive == 0u) ? "FDD0" : "FDD1";
+                option_dirty_ = true;
+                return disk_set_eject_(true);
+            }
+            if (!drive_paths_[0].empty() || !drive_paths_[1].empty() || !hdd_path_.empty()) {
+                const std::string target = build_dual_boot_file();
+                return !target.empty() && reload_core_with_media(target);
+            }
+            return !has_media_ || reload_core_with_media("");
+        }
 
         if (is_np2kai_) {
             if (!drive_paths_[0].empty() || !hdd_path_.empty()) {
@@ -1086,7 +1173,7 @@ public:
         }
         if (led_fdd_ != 0) {
             out->flags |= CZX_ACTIVITY_DISK;
-            if (is_emuz700_) {
+            if (is_emuz700_ || is_msx68k_) {
                 out->drive_mask = static_cast<uint8_t>(led_fdd_ & 0x0F);
             }
         }
@@ -1119,6 +1206,7 @@ private:
     bool is_np2kai_ = false;
     bool is_bluemsx_ = false;
     bool is_emuz700_ = false;
+    bool is_msx68k_ = false;
 
     std::string data_dir_;
     std::string system_dir_;
@@ -1159,6 +1247,14 @@ private:
     std::string build_dual_boot_file() const {
         if (is_np2kai_) {
             return build_np2kai_boot_file();
+        }
+        if (is_msx68k_) {
+            const fs::path p = fs::path(save_dir_) / "czx_msx68k.m3u";
+            std::string body;
+            if (!drive_paths_[0].empty()) body += drive_paths_[0] + "\n";
+            if (!drive_paths_[1].empty()) body += drive_paths_[1] + "\n";
+            if (!hdd_path_.empty()) body += hdd_path_ + "\n";
+            return write_text_file(p, body) ? p.string() : std::string{};
         }
         const std::string fname = is_applewin_ ? "czx_applewin (MD).m3u" : "czx_quasi88.m3u";
         const fs::path p = fs::path(save_dir_) / fname;
@@ -1399,6 +1495,21 @@ private:
                 }
                 return false;
             }
+        } else if (is_msx68k_) {
+            const fs::path x68_dir(system_dir_);
+            const bool has_cg = rom_file_exists(x68_dir, "CGROM.DAT", true);
+            const bool has_ipl = rom_file_exists(x68_dir, "IPLROM.DAT", true) ||
+                                 rom_file_exists(x68_dir, "IPLROM30.DAT", true);
+            if (!has_cg || !has_ipl) {
+                err_out = "Place X68000 ROMs in:\n" + system_dir_ + "/\nMissing:";
+                if (!has_ipl) {
+                    err_out += "\n  IPLROM.DAT (or IPLROM30.DAT)";
+                }
+                if (!has_cg) {
+                    err_out += "\n  CGROM.DAT";
+                }
+                return false;
+            }
         }
         return true;
     }
@@ -1626,6 +1737,14 @@ private:
             options_["emuz700_joystick"] = "JOY-700";
             options_["emuz700_tape_sound"] = "disabled";
             options_["emuz700_tape_turbo"] = host_.disable_tape_warp ? "disabled" : "enabled";
+        } else if (is_msx68k_) {
+            options_["msx68k_speed"] = "10";
+            options_["msx68k_cpu"] = "68000";
+            options_["msx68k_ram_mb"] = "4";
+            options_["msx68k_mode"] = "compat";
+            options_["msx68k_drive"] = "FDD0";
+            options_["msx68k_renderer"] = "auto";
+            options_["msx68k_gpu_scale"] = "off";
         }
     }
 
@@ -1961,7 +2080,7 @@ private:
             if (port >= joy_state_.size()) return 0;
             const uint32_t b = joy_state_[port];
             uint16_t mask = 0;
-            if (is_applewin_ || is_quasi88_ || is_bluemsx_ || is_emuz700_) {
+            if (is_applewin_ || is_quasi88_ || is_bluemsx_ || is_emuz700_ || is_msx68k_) {
                 if (b & CZX_JOY_FIRE1) mask |= (1u << RETRO_DEVICE_ID_JOYPAD_A);
                 if (b & CZX_JOY_FIRE2) mask |= (1u << RETRO_DEVICE_ID_JOYPAD_B);
             } else if (is_np2kai_) {

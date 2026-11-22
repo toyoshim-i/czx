@@ -100,6 +100,7 @@ void EmulatorApp::ensure_data_dirs() {
     fs::create_directories(root / "roms" / "bluemsx" / "Databases", ec);
     fs::create_directories(root / "roms" / "g800", ec);
     fs::create_directories(root / "roms" / "mz700", ec);
+    fs::create_directories(root / "roms" / "x68000", ec);
     fs::create_directories(root / "media" / "apple2", ec);
     fs::create_directories(root / "media" / "c64", ec);
     fs::create_directories(root / "media" / "pc88", ec);
@@ -107,6 +108,7 @@ void EmulatorApp::ensure_data_dirs() {
     fs::create_directories(root / "media" / "msx", ec);
     fs::create_directories(root / "media" / "g800", ec);
     fs::create_directories(root / "media" / "mz700", ec);
+    fs::create_directories(root / "media" / "x68000", ec);
     fs::create_directories(root / "saves", ec);
     fs::create_directories(root / "config", ec);
 }
@@ -208,6 +210,23 @@ void EmulatorApp::sync_core_warp_option() {
     }
 }
 
+void EmulatorApp::sync_core_gpu_scale_option() {
+    if (!core_api_ || !core_inst_ || !core_api_->set_option || !core_api_->get_desc) return;
+    const czx_core_desc_t* desc = core_api_->get_desc(core_api_);
+    const std::string id = (desc && desc->id) ? desc->id : "";
+    if (id != "msx68k") return;
+
+    const char* val = "off";
+    if (!desktop_native_mode_ && scaler_cfg_.mode != czx::video::DisplayMode::NativePan) {
+        if (scaler_cfg_.mode == czx::video::DisplayMode::OverflowFit) {
+            val = "axis";
+        } else {
+            val = (scaler_cfg_.aspect_policy == czx::video::AspectPolicy::Crt4x3) ? "fit_4x3" : "fit_par";
+        }
+    }
+    core_api_->set_option(core_inst_, "msx68k_gpu_scale", val);
+}
+
 void EmulatorApp::clear_activity_state() noexcept {
     live_warp_requested_ = false;
     activity_flags_ = 0u;
@@ -283,6 +302,9 @@ std::string EmulatorApp::default_media_dir_for_core() const {
     if (id.find("emuz700") != std::string::npos && fs::is_directory(media_root / "mz700", ec)) {
         return (media_root / "mz700").string();
     }
+    if (id.find("msx68k") != std::string::npos && fs::is_directory(media_root / "x68000", ec)) {
+        return (media_root / "x68000").string();
+    }
     return media_root.string();
 }
 
@@ -344,6 +366,7 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media, con
         core_api_->set_data_dir(core_inst_, cfg_.data_dir.c_str());
     }
     sync_core_warp_option();
+    sync_core_gpu_scale_option();
 
     if (core_api_->select_preset && core_api_->get_preset_count) {
         const uint32_t count = core_api_->get_preset_count(core_inst_);
@@ -435,6 +458,7 @@ void EmulatorApp::set_display_mode(czx::video::DisplayMode mode) {
     scaler_cfg_.mode = mode;
     hud_.display_mode = mode;
     router_.set_native_pan_enabled(mode == czx::video::DisplayMode::NativePan);
+    sync_core_gpu_scale_option();
     switch (mode) {
         case czx::video::DisplayMode::NativePan:
             show_toast("MODE: 1:1 PAN");
@@ -455,6 +479,7 @@ void EmulatorApp::set_desktop_scale(int scale) {
     hud_.desktop_native = true;
     hud_.desktop_scale = desktop_scale_;
     router_.set_native_pan_enabled(false);
+    sync_core_gpu_scale_option();
     sync_desktop_window_size(true);
     force_present_ = true;
     char msg[32];
@@ -796,6 +821,7 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
                 (scaler_cfg_.aspect_policy == czx::video::AspectPolicy::ParAware)
                     ? czx::video::AspectPolicy::Crt4x3
                     : czx::video::AspectPolicy::ParAware;
+            sync_core_gpu_scale_option();
             if (desktop_native_mode_) {
                 sync_desktop_window_size(false);
             }

@@ -6,7 +6,7 @@ DIST_DIR="$ROOT_DIR/dist-arm64"
 IMAGE_NAME="czx-arm64-builder"
 
 "$ROOT_DIR/scripts/prepare-cores-src.sh"
-mkdir -p "$DIST_DIR/cores"
+mkdir -p "$DIST_DIR/cores" "$ROOT_DIR/.cache/cargo-arm64"
 
 echo "Building ARM64 cross-compile Docker image ($IMAGE_NAME)..."
 docker build -f "$ROOT_DIR/Dockerfile.arm64" -t "$IMAGE_NAME" "$ROOT_DIR"
@@ -15,11 +15,13 @@ echo "Cross-compiling czx and libretro cores for ARM64..."
 NP2KAI_HASH="$(git -C "$ROOT_DIR/third_party/NP2kai" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 docker run --rm \
     --user "$(id -u):$(id -g)" \
+    -e CARGO_HOME=/workspace/.cache/cargo-arm64 \
     -e NP2KAI_HASH="$NP2KAI_HASH" \
     -v "$ROOT_DIR:/workspace" \
     "$IMAGE_NAME" \
     bash -lc '
         set -euo pipefail
+        export PATH="/usr/local/cargo/bin:$PATH"
         NPROC="$(nproc)"
 
         cmake -S /workspace -B /workspace/build-arm64 -G Ninja \
@@ -97,6 +99,14 @@ docker run --rm \
             CXX=aarch64-linux-gnu-g++ \
             OPT_FLAGS="-O3 -mcpu=cortex-a53" \
             LDFLAGS="-static-libgcc -static-libstdc++"
+
+        CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+        RUSTFLAGS="-C target-cpu=cortex-a53 -C link-arg=-static-libgcc" \
+        cargo build --release --target aarch64-unknown-linux-gnu \
+            --manifest-path /workspace/cmake/msx68k_czx/Cargo.toml \
+            --target-dir /workspace/build-arm64-msx68k
+        cp -f /workspace/build-arm64-msx68k/aarch64-unknown-linux-gnu/release/libmsx68k_libretro.so \
+            /workspace/dist-arm64/cores/msx68k_libretro.so
     '
 
 "$ROOT_DIR/scripts/stage-bluemsx-data.sh" \

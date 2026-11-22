@@ -204,4 +204,8 @@ if(CZX_BUILD_TESTS)
     add_executable(test_hud_menu tests/test_hud_menu.cpp)
     target_link_libraries(test_hud_menu PRIVATE czx_runtime)
     add_test(NAME test_hud_menu COMMAND test_hud_menu)
+
+    add_executable(test_core_detect tests/test_core_detect.cpp)
+    target_link_libraries(test_core_detect PRIVATE czx_runtime)
+    add_test(NAME test_core_detect COMMAND test_core_detect)
 endif()

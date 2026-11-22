@@ -19,8 +19,9 @@
 namespace czx::app {
 
 struct AppConfig {
-    std::string core_spec;  // Empty = default (first loaded real core, else test_pattern)
+    std::string core_spec;  // Empty = auto-detect from media, else default core
     std::string media_path;
+    std::string media2_path;
     std::string core_dir;
     std::string data_dir;
     uint32_t preset_index = 0;
@@ -129,7 +130,7 @@ private:
     void clear_activity_state() noexcept;
     void poll_core_activity();
     std::string default_media_dir_for_core() const;
-    bool activate_core(int index, const std::string& initial_media = {});
+    bool activate_core(int index, const std::string& initial_media = {}, const std::string& initial_media2 = {});
     void destroy_active_core();
     void render_core_error_screen();
     czx::video::MenuViewModel build_menu_vm() const;

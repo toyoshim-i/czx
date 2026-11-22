@@ -16,9 +16,11 @@ int parse_desktop_scale(const char* s) noexcept {
 
 void print_usage(const char* prog) {
     std::printf(
-        "Usage: %s [options] [media_file]\n"
-        "  --core <id|path.so>           Initial core (e.g. applewin, vice_x64sc, vice_x64, test_pattern)\n"
-        "  --media <path>                Disk, tape, PRG, or cart image to load\n"
+        "Usage: %s [options] [media_file] [media_file2]\n"
+        "  --core <id|path.so>           Initial core (auto-detected from media if omitted;\n"
+        "                                e.g. applewin, vice_x64, quasi88, np2kai, bluemsx, emuz700, g800, test_pattern)\n"
+        "  --media <path>                Disk, tape, PRG, or cart image to load (Drive 1 / FDD 0)\n"
+        "  --media2 <path>               Second disk image to load (Drive 2 / FDD 1 / HDD)\n"
         "  --core-dir <dir>              Additional directory to scan for *_libretro.so cores\n"
         "  --data-dir <dir>              Override CZX data directory (default: $CZX_DATA_DIR or ~/czx)\n"
         "  --desktop                     Use integer-scaled desktop window mode (default on PC, 2x)\n"
@@ -55,6 +57,8 @@ int main(int argc, char** argv) {
             cfg.core_spec = argv[++i];
         } else if (std::strcmp(arg, "--media") == 0 && i + 1 < argc) {
             cfg.media_path = argv[++i];
+        } else if (std::strcmp(arg, "--media2") == 0 && i + 1 < argc) {
+            cfg.media2_path = argv[++i];
         } else if (std::strcmp(arg, "--core-dir") == 0 && i + 1 < argc) {
             cfg.core_dir = argv[++i];
         } else if (std::strcmp(arg, "--data-dir") == 0 && i + 1 < argc) {
@@ -142,6 +146,8 @@ int main(int argc, char** argv) {
             cfg.verify_nonblank = true;
         } else if (arg[0] != '-' && cfg.media_path.empty()) {
             cfg.media_path = arg;
+        } else if (arg[0] != '-' && cfg.media2_path.empty()) {
+            cfg.media2_path = arg;
         } else {
             std::fprintf(stderr, "Unknown argument: %s\n", arg);
             print_usage(argv[0]);

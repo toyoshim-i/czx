@@ -26,6 +26,14 @@ void on_signal(int) {
     g_signal_quit = 1;
 }
 
+std::string normalize_abs_path(const std::string& path) {
+    if (path.empty()) return {};
+    std::error_code ec;
+    const fs::path abs = fs::absolute(fs::path(path), ec);
+    if (ec) return path;
+    return abs.lexically_normal().string();
+}
+
 std::string resolve_data_dir(const std::string& explicit_dir) {
     if (!explicit_dir.empty()) return explicit_dir;
     if (const char* env = std::getenv("CZX_DATA_DIR"); env && env[0] != '\0') return env;
@@ -53,7 +61,10 @@ EmulatorApp::EmulatorApp(AppConfig cfg)
       lcd_fb_(static_cast<size_t>(czx::video::kLcdWidth * czx::video::kLcdHeight), 0),
       work_fb_(static_cast<size_t>(czx::video::kLcdWidth * czx::video::kLcdHeight), 0),
       ready_fb_(static_cast<size_t>(czx::video::kLcdWidth * czx::video::kLcdHeight), 0) {
-    cfg_.data_dir = resolve_data_dir(cfg_.data_dir);
+    cfg_.data_dir = normalize_abs_path(resolve_data_dir(cfg_.data_dir));
+    if (!cfg_.core_dir.empty()) cfg_.core_dir = normalize_abs_path(cfg_.core_dir);
+    if (!cfg_.media_path.empty()) cfg_.media_path = normalize_abs_path(cfg_.media_path);
+    if (!cfg_.media2_path.empty()) cfg_.media2_path = normalize_abs_path(cfg_.media2_path);
     setenv("CZX_DATA_DIR", cfg_.data_dir.c_str(), 1);
     ensure_data_dirs();
 
@@ -282,7 +293,7 @@ void EmulatorApp::destroy_active_core() {
     core_inst_ = nullptr;
 }
 
-bool EmulatorApp::activate_core(int index, const std::string& initial_media) {
+bool EmulatorApp::activate_core(int index, const std::string& initial_media, const std::string& initial_media2) {
     if (registry_.count() == 0) return false;
     const int wrapped = (index % static_cast<int>(registry_.count()) + static_cast<int>(registry_.count())) %
                         static_cast<int>(registry_.count());
@@ -319,6 +330,7 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media) {
     host.log = cb_log;
     host.initial_media = initial_media.empty() ? nullptr : initial_media.c_str();
     host.disable_tape_warp = !tape_warp_enabled_;
+    host.initial_media2 = initial_media2.empty() ? nullptr : initial_media2.c_str();
 
     core_inst_ = core_api_->create(core_api_, &host);
     if (!core_inst_) {
@@ -1191,6 +1203,16 @@ int EmulatorApp::run() {
             return 2;
         }
         initial_idx = registry_.index_of(found);
+    } else if (!cfg_.media_path.empty()) {
+        const czx_core_api_t* detected = registry_.find_for_media(cfg_.media_path);
+        if (detected) {
+            initial_idx = registry_.index_of(detected);
+            const czx_core_desc_t* d = detected->get_desc(detected);
+            if (d && d->id) {
+                std::fprintf(stderr, "czx: auto-selected core '%s' for '%s'\n",
+                             d->id, cfg_.media_path.c_str());
+            }
+        }
     }
 
     cfg_.platform.headless = (cfg_.headless_frames > 0);
@@ -1208,7 +1230,7 @@ int EmulatorApp::run() {
         start_scale_worker();
     }
 
-    if (!activate_core(initial_idx, cfg_.media_path)) {
+    if (!activate_core(initial_idx, cfg_.media_path, cfg_.media2_path)) {
         if (cfg_.headless_frames > 0) {
             return 1;
         }

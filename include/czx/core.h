@@ -143,6 +143,7 @@ typedef struct czx_host {
     void (*log)(void* user_data, int level, const char* msg);
     const char* initial_media;
     bool disable_tape_warp;
+    const char* initial_media2;
 } czx_host_t;
 
 typedef struct czx_core_desc {

@@ -559,7 +559,32 @@ public:
     }
 
     bool init() {
-        if (host_.initial_media && host_.initial_media[0] != '\0') {
+        const bool has_m1 = (host_.initial_media && host_.initial_media[0] != '\0');
+        const bool has_m2 = (host_.initial_media2 && host_.initial_media2[0] != '\0');
+        if (has_m1 && has_m2 && get_drive_count() >= 2u) {
+            const std::string p0 = host_.initial_media;
+            const std::string p1 = host_.initial_media2;
+            const std::string lbl0 = fs::path(p0).filename().string();
+            const std::string lbl1 = fs::path(p1).filename().string();
+            if (is_np2kai_) {
+                if (is_pc98_hdd_ext(p0) && !is_pc98_hdd_ext(p1)) {
+                    hdd_path_ = p0;
+                    drive_paths_[0] = p1;
+                    drive_labels_[0] = lbl1;
+                    const std::string target = build_np2kai_boot_file();
+                    return !target.empty() && start_core(target.c_str());
+                }
+                if (is_pc98_hdd_ext(p1) && !is_pc98_hdd_ext(p0)) {
+                    drive_paths_[0] = p0;
+                    drive_labels_[0] = lbl0;
+                    hdd_path_ = p1;
+                    const std::string target = build_np2kai_boot_file();
+                    return !target.empty() && start_core(target.c_str());
+                }
+            }
+            return load_dual_media(p0.c_str(), lbl0.c_str(), p1.c_str(), lbl1.c_str());
+        }
+        if (has_m1) {
             const std::string init_path = host_.initial_media;
             if (get_drive_count() >= 2u && (is_quasi88_ || is_np2kai_) && is_d88_ext(init_path)) {
                 std::vector<D88SubDisk> disks;
@@ -585,6 +610,15 @@ public:
                 drive_labels_[0] = lbl;
             }
             return true;
+        }
+        if (has_m2) {
+            if (!start_core(nullptr)) {
+                return false;
+            }
+            if (get_drive_count() >= 2u) {
+                return load_media_in_drive(1u, host_.initial_media2, nullptr);
+            }
+            return load_media(host_.initial_media2);
         }
         return start_core(nullptr);
     }

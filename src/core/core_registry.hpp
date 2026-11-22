@@ -9,6 +9,8 @@
 
 namespace czx::core {
 
+std::vector<std::string> candidate_core_ids_for_media(const std::string& media_path);
+
 class CoreRegistry {
 public:
     static CoreRegistry create_default(const std::string& explicit_core_dir = {},
@@ -20,6 +22,7 @@ public:
     size_t count() const noexcept { return cores_.size(); }
     const czx_core_api_t* get(size_t index) const noexcept;
     const czx_core_api_t* find_by_id(const std::string& id) const noexcept;
+    const czx_core_api_t* find_for_media(const std::string& media_path) const noexcept;
     int index_of(const czx_core_api_t* api) const noexcept;
 
 private:

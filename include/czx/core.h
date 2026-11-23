@@ -18,6 +18,8 @@ typedef enum czx_pixel_format {
 
 enum {
     CZX_FRAME_HAS_BORDER = 1u << 0,
+    CZX_FRAME_HW_RENDER = 1u << 1,
+    CZX_FRAME_BOTTOM_LEFT = 1u << 2,
 };
 
 typedef struct czx_frame {
@@ -148,6 +150,11 @@ typedef struct czx_host {
     bool disable_tape_warp;
     const char* initial_media2;
     const char* initial_region;
+    bool (*hw_gles2_enable)(void* user_data, bool depth, bool stencil, bool bottom_left_origin);
+    bool (*hw_make_current)(void* user_data);
+    void* (*hw_get_proc_address)(void* user_data, const char* sym);
+    bool (*hw_ensure_fbo)(void* user_data, uint32_t width, uint32_t height, bool depth, bool stencil);
+    uintptr_t (*hw_get_current_framebuffer)(void* user_data);
 } czx_host_t;
 
 typedef struct czx_core_desc {

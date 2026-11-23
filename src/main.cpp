@@ -25,6 +25,8 @@ void print_usage(const char* prog) {
         "  --data-dir <dir>              Override CZX data directory (default: $CZX_DATA_DIR or ~/czx)\n"
         "  --desktop                     Use integer-scaled desktop window mode (default on PC, 2x)\n"
         "  --scale <1|2|3>               Desktop window scale factor (implies --desktop, default: 2)\n"
+        "  --hdmi                        Prefer HDMI fullscreen GLES2 output on device\n"
+        "  --fullscreen                  Start desktop GLES2 display in fullscreen mode\n"
         "  --lcd, --sim                  Use 320x170 Cardputer Zero LCD simulator display mode\n"
         "  --mode <pan|overflow|aspect>  Initial LCD scaling mode (implies --lcd, default: overflow)\n"
         "  --preset <0..4>               Initial test pattern preset (default: 0)\n"
@@ -67,6 +69,13 @@ int main(int argc, char** argv) {
         } else if (std::strcmp(arg, "--desktop") == 0) {
             cfg.force_desktop = true;
             cfg.force_lcd_sim = false;
+        } else if (std::strcmp(arg, "--hdmi") == 0) {
+            cfg.platform.prefer_hdmi = true;
+            cfg.platform.force_lcd = false;
+            cfg.force_desktop = true;
+            cfg.force_lcd_sim = false;
+        } else if (std::strcmp(arg, "--fullscreen") == 0) {
+            cfg.platform.fullscreen = true;
         } else if (std::strcmp(arg, "--scale") == 0 && i + 1 < argc) {
             const char* sc = argv[++i];
             const int parsed = parse_desktop_scale(sc);
@@ -80,9 +89,11 @@ int main(int argc, char** argv) {
         } else if (std::strcmp(arg, "--lcd") == 0 || std::strcmp(arg, "--sim") == 0) {
             cfg.force_lcd_sim = true;
             cfg.force_desktop = false;
+            cfg.platform.force_lcd = true;
         } else if (std::strcmp(arg, "--mode") == 0 && i + 1 < argc) {
             const char* m = argv[++i];
             cfg.display_mode_explicit = true;
+            cfg.platform.force_lcd = true;
             if (std::strcmp(m, "pan") == 0) {
                 cfg.display_mode = czx::video::DisplayMode::NativePan;
             } else if (std::strcmp(m, "overflow") == 0) {
@@ -147,10 +158,13 @@ int main(int argc, char** argv) {
             }
         } else if (std::strcmp(arg, "--drm") == 0 && i + 1 < argc) {
             cfg.platform.drm_device = argv[++i];
+            cfg.platform.force_lcd = true;
         } else if (std::strcmp(arg, "--fb") == 0 && i + 1 < argc) {
             cfg.platform.fb_device = argv[++i];
+            cfg.platform.force_lcd = true;
         } else if (std::strcmp(arg, "--fbdev") == 0) {
             cfg.platform.prefer_fbdev = true;
+            cfg.platform.force_lcd = true;
         } else if (std::strcmp(arg, "--input") == 0 && i + 1 < argc) {
             cfg.platform.input_device = argv[++i];
         } else if (std::strcmp(arg, "--headless-frames") == 0 && i + 1 < argc) {

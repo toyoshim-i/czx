@@ -14,4 +14,29 @@ if [ -z "${CZX_CORES_DIR:-}" ] && [ -d /usr/share/APPLaunch/share/czx/cores ]; t
     export CZX_CORES_DIR="/usr/share/APPLaunch/share/czx/cores"
 fi
 
+if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ]; then
+    uid="$(id -u)"
+    rt_dir="${XDG_RUNTIME_DIR:-/run/user/$uid}"
+    if [ -S "$rt_dir/wayland-0" ]; then
+        export XDG_RUNTIME_DIR="$rt_dir"
+        export WAYLAND_DISPLAY="wayland-0"
+    elif [ -S "$rt_dir/wayland-1" ]; then
+        export XDG_RUNTIME_DIR="$rt_dir"
+        export WAYLAND_DISPLAY="wayland-1"
+    else
+        if [ "$uid" -eq 0 ]; then
+            for sock in /run/user/*/wayland-0 /run/user/*/wayland-1; do
+                if [ -S "$sock" ]; then
+                    export XDG_RUNTIME_DIR="$(dirname "$sock")"
+                    export WAYLAND_DISPLAY="$(basename "$sock")"
+                    break
+                fi
+            done
+        fi
+        if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -S /tmp/.X11-unix/X0 ]; then
+            export DISPLAY=":0"
+        fi
+    fi
+fi
+
 exec "$SCRIPT_DIR/czx" "$@"

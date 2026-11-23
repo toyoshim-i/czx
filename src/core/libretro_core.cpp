@@ -854,7 +854,12 @@ public:
             emit_retro_key(true, pulsed_retrok_, 0, RETROKMOD_NONE);
             pulsed_emitted_ = true;
         }
-        loader_->symbols().retro_run();
+        if (loader_->symbols().retro_run) {
+            if (hw_render_active_ && host_.hw_make_current) {
+                (void)host_.hw_make_current(host_.user_data);
+            }
+            loader_->symbols().retro_run();
+        }
         if (pulsed_frames_ > 0) {
             --pulsed_frames_;
             if (pulsed_frames_ == 0) {
@@ -1413,6 +1418,9 @@ private:
     bool option_dirty_ = false;
 
     retro_pixel_format pixel_format_ = RETRO_PIXEL_FORMAT_0RGB1555;
+    retro_hw_render_callback hw_render_{};
+    bool hw_render_active_ = false;
+    bool hw_context_ready_ = false;
     retro_keyboard_event_t keyboard_cb_ = nullptr;
     retro_disk_control_callback disk_ctrl_{};
     retro_disk_control_ext_callback disk_ctrl_ext_{};
@@ -1697,6 +1705,14 @@ private:
         g_active_instance = this;
         clear_held_inputs();
         clear_leds();
+        if (hw_render_active_ && hw_context_ready_) {
+            if (host_.hw_make_current) {
+                (void)host_.hw_make_current(host_.user_data);
+            }
+            if (hw_render_.context_destroy) {
+                hw_render_.context_destroy();
+            }
+        }
         if (loader_->is_library_open()) {
             const auto& syms = loader_->symbols();
             if (game_loaded_ && syms.retro_unload_game) {
@@ -1714,6 +1730,9 @@ private:
         has_disk_ctrl_ext_ = false;
         disk_ctrl_ = {};
         disk_ctrl_ext_ = {};
+        hw_render_ = {};
+        hw_render_active_ = false;
+        hw_context_ready_ = false;
         keyboard_cb_ = nullptr;
         option_dirty_ = false;
         pixel_format_ = RETRO_PIXEL_FORMAT_0RGB1555;
@@ -1964,6 +1983,29 @@ private:
         }
     }
 
+    void ensure_hw_fbo_for_av_info() {
+        if (!hw_render_active_ || !host_.hw_make_current || !host_.hw_ensure_fbo) return;
+        const uint32_t w = std::clamp<uint32_t>(
+            std::max(av_info_.geometry.max_width, av_info_.geometry.base_width), 256u, 2048u);
+        const uint32_t h = std::clamp<uint32_t>(
+            std::max(av_info_.geometry.max_height, av_info_.geometry.base_height), 256u, 2048u);
+        if (host_.hw_make_current(host_.user_data)) {
+            (void)host_.hw_ensure_fbo(host_.user_data, w, h, hw_render_.depth, hw_render_.stencil);
+        }
+    }
+
+    void init_hw_context_if_needed() {
+        if (!hw_render_active_ || hw_context_ready_) return;
+        ensure_hw_fbo_for_av_info();
+        if (host_.hw_make_current) {
+            (void)host_.hw_make_current(host_.user_data);
+        }
+        if (hw_render_.context_reset) {
+            hw_render_.context_reset();
+        }
+        hw_context_ready_ = true;
+    }
+
     void refresh_av_info() {
         if (loader_->symbols().retro_get_system_av_info) {
             loader_->symbols().retro_get_system_av_info(&av_info_);
@@ -1973,6 +2015,7 @@ private:
             loader_->symbols().retro_set_controller_port_device(0, RETRO_DEVICE_JOYPAD);
             loader_->symbols().retro_set_controller_port_device(1, RETRO_DEVICE_JOYPAD);
         }
+        init_hw_context_if_needed();
     }
 
     bool has_disk_control() const noexcept {
@@ -2091,6 +2134,27 @@ private:
 
     void handle_video(const void* data, unsigned width, unsigned height, size_t pitch) {
         if (!host_.video_frame || host_skip_video_) return;
+
+        if (hw_render_active_ && data == RETRO_HW_FRAME_BUFFER_VALID && width > 0 && height > 0) {
+            czx_frame_t frame{};
+            frame.data = nullptr;
+            frame.width = static_cast<uint16_t>(width);
+            frame.height = static_cast<uint16_t>(height);
+            frame.format = CZX_PIXEL_ABGR8888;
+            frame.flags = static_cast<uint32_t>(CZX_FRAME_HW_RENDER) |
+                          (hw_render_.bottom_left_origin ? static_cast<uint32_t>(CZX_FRAME_BOTTOM_LEFT) : 0u);
+            if (av_info_.geometry.aspect_ratio > 0.0f && frame.height > 0) {
+                const double par = static_cast<double>(av_info_.geometry.aspect_ratio) *
+                                   static_cast<double>(frame.height) / static_cast<double>(frame.width);
+                frame.par_num = static_cast<uint16_t>(std::max(1L, std::lround(par * 1000.0)));
+                frame.par_den = 1000;
+            } else {
+                frame.par_num = 1;
+                frame.par_den = 1;
+            }
+            host_.video_frame(host_.user_data, &frame);
+            return;
+        }
 
         if (data != nullptr && width > 0 && height > 0) {
             cached_w_ = static_cast<uint16_t>(width);
@@ -2492,14 +2556,36 @@ private:
                 if (data) {
                     av_info_ = *static_cast<const retro_system_av_info*>(data);
                     loader_->update_av_timing(av_info_.timing.fps, av_info_.timing.sample_rate);
+                    ensure_hw_fbo_for_av_info();
                 }
                 return true;
 
             case RETRO_ENVIRONMENT_SET_GEOMETRY:
                 if (data) {
                     av_info_.geometry = *static_cast<const retro_game_geometry*>(data);
+                    ensure_hw_fbo_for_av_info();
                 }
                 return true;
+
+            case RETRO_ENVIRONMENT_SET_HW_RENDER: {
+                auto* cb = static_cast<retro_hw_render_callback*>(data);
+                if (!cb || cb->context_type != RETRO_HW_CONTEXT_OPENGLES2 ||
+                    !host_.hw_gles2_enable || !host_.hw_make_current ||
+                    !host_.hw_get_proc_address || !host_.hw_ensure_fbo ||
+                    !host_.hw_get_current_framebuffer) {
+                    return false;
+                }
+                if (!host_.hw_gles2_enable(host_.user_data, cb->depth, cb->stencil,
+                                           cb->bottom_left_origin)) {
+                    return false;
+                }
+                cb->get_current_framebuffer = cb_hw_get_current_framebuffer;
+                cb->get_proc_address = cb_hw_get_proc_address;
+                hw_render_ = *cb;
+                hw_render_active_ = true;
+                hw_context_ready_ = false;
+                return true;
+            }
 
             case RETRO_ENVIRONMENT_GET_LANGUAGE:
                 if (data) *static_cast<unsigned*>(data) = RETRO_LANGUAGE_ENGLISH;
@@ -2590,6 +2676,22 @@ private:
     }
     static void RETRO_CALLCONV cb_led_state(int led, int state) {
         if (g_active_instance) g_active_instance->handle_led_state(led, state);
+    }
+    static uintptr_t RETRO_CALLCONV cb_hw_get_current_framebuffer() {
+        if (!g_active_instance || !g_active_instance->host_.hw_get_current_framebuffer) {
+            return 0;
+        }
+        return g_active_instance->host_.hw_get_current_framebuffer(g_active_instance->host_.user_data);
+    }
+    static retro_proc_address_t RETRO_CALLCONV cb_hw_get_proc_address(const char* sym) {
+        if (!g_active_instance || !g_active_instance->host_.hw_get_proc_address) {
+            return nullptr;
+        }
+        void* addr = g_active_instance->host_.hw_get_proc_address(g_active_instance->host_.user_data, sym);
+        retro_proc_address_t fn = nullptr;
+        static_assert(sizeof(fn) == sizeof(addr));
+        std::memcpy(&fn, &addr, sizeof(fn));
+        return fn;
     }
 };
 

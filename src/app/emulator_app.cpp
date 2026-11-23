@@ -366,7 +366,7 @@ void EmulatorApp::sync_core_gpu_scale_option() {
     if (id != "msx68k") return;
 
     const char* val = "off";
-    if (!desktop_native_mode_ && scaler_cfg_.mode != czx::video::DisplayMode::NativePan) {
+    if (!hw_render_active_ && !desktop_native_mode_ && scaler_cfg_.mode != czx::video::DisplayMode::NativePan) {
         if (scaler_cfg_.mode == czx::video::DisplayMode::OverflowFit) {
             val = "axis";
         } else {
@@ -1014,6 +1014,8 @@ void EmulatorApp::destroy_active_core() {
         core_api_->destroy(core_inst_);
     }
     core_inst_ = nullptr;
+    hw_render_active_ = false;
+    hw_bottom_left_ = false;
 }
 
 bool EmulatorApp::activate_core(int index, const std::string& initial_media, const std::string& initial_media2) {
@@ -1049,6 +1051,8 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media, con
     native_par_num_ = 1;
     native_par_den_ = 1;
     native_margin_xrgb_ = 0;
+    hw_render_active_ = false;
+    hw_bottom_left_ = false;
     last_win_req_w_ = 0;
     last_win_req_h_ = 0;
     ++native_seq_;
@@ -1069,6 +1073,14 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media, con
     host.disable_tape_warp = !tape_warp_enabled_;
     host.initial_media2 = initial_media2.empty() ? nullptr : initial_media2.c_str();
     host.initial_region = (pre_id.rfind("vice", 0) == 0) ? c64_region_.c_str() : nullptr;
+    if (cfg_.headless_frames == 0 && platform_.display &&
+        platform_.display->supports_hw_gles2() && desktop_native_mode_) {
+        host.hw_gles2_enable = cb_hw_gles2_enable;
+        host.hw_make_current = cb_hw_make_current;
+        host.hw_get_proc_address = cb_hw_get_proc_address;
+        host.hw_ensure_fbo = cb_hw_ensure_fbo;
+        host.hw_get_current_framebuffer = cb_hw_get_current_framebuffer;
+    }
 
     core_inst_ = core_api_->create(core_api_, &host);
     if (!core_inst_) {
@@ -1229,7 +1241,8 @@ void EmulatorApp::set_desktop_scale(int scale) {
 }
 
 void EmulatorApp::sync_desktop_window_size(bool force) {
-    if (!platform_.display || !platform_.display->supports_native_present() || cfg_.headless_frames > 0) {
+    if (!platform_.display || !platform_.display->supports_native_present() ||
+        platform_.display->is_fullscreen() || cfg_.headless_frames > 0) {
         return;
     }
     int want_w = 0;
@@ -2390,13 +2403,25 @@ void EmulatorApp::update_window_title() {
         const char* name = (desc && desc->name) ? desc->name : "czx";
         if (!core_inst_) {
             std::snprintf(buf, sizeof(buf), "czx - %s [ROM Required]", name);
-        } else if (desktop_native_mode_) {
+        } else if (platform_.display->is_fullscreen()) {
             const int w = (native_w_ > 0) ? native_w_ : last_src_w_;
             const int h = (native_h_ > 0) ? native_h_ : last_src_h_;
             if (w > 0 && h > 0) {
-                std::snprintf(buf, sizeof(buf), "czx - %s [%dx%d %dx]", name, w, h, desktop_scale_);
+                std::snprintf(buf, sizeof(buf), "czx - %s [HDMI %dx%d%s]", name, w, h,
+                              hw_render_active_ ? " GLES2" : "");
             } else {
-                std::snprintf(buf, sizeof(buf), "czx - %s [Desktop %dx]", name, desktop_scale_);
+                std::snprintf(buf, sizeof(buf), "czx - %s [HDMI%s]", name,
+                              hw_render_active_ ? " GLES2" : "");
+            }
+        } else if (desktop_native_mode_ || hw_render_active_) {
+            const int w = (native_w_ > 0) ? native_w_ : last_src_w_;
+            const int h = (native_h_ > 0) ? native_h_ : last_src_h_;
+            if (w > 0 && h > 0) {
+                std::snprintf(buf, sizeof(buf), "czx - %s [%dx%d %dx%s]", name, w, h, desktop_scale_,
+                              hw_render_active_ ? " GLES2" : "");
+            } else {
+                std::snprintf(buf, sizeof(buf), "czx - %s [Desktop %dx%s]", name, desktop_scale_,
+                              hw_render_active_ ? " GLES2" : "");
             }
         } else {
             std::snprintf(buf, sizeof(buf), "czx - %s [LCD 320x170]", name);
@@ -2503,6 +2528,10 @@ void EmulatorApp::refresh_paused_preview() {
     if (!core_inst_ || cfg_.headless_frames > 0) {
         return;
     }
+    if (hw_render_active_) {
+        sync_desktop_window_size(false);
+        return;
+    }
     if (desktop_native_mode_) {
         if (desktop_has_last_raw_ && !desktop_last_raw_bytes_.empty()) {
             czx_frame_t f = desktop_last_raw_frame_;
@@ -2553,6 +2582,19 @@ void EmulatorApp::cb_video_frame(void* user_data, const czx_frame_t* frame) {
     self->last_frame_meta_ = *frame;
     self->last_frame_meta_.data = nullptr;
     self->has_last_frame_meta_ = (frame->data != nullptr && frame->width > 0 && frame->height > 0);
+
+    if ((frame->flags & CZX_FRAME_HW_RENDER) != 0u) {
+        self->hw_render_active_ = true;
+        self->hw_bottom_left_ = ((frame->flags & CZX_FRAME_BOTTOM_LEFT) != 0u);
+        self->native_w_ = frame->crop_w ? frame->crop_w : frame->width;
+        self->native_h_ = frame->crop_h ? frame->crop_h : frame->height;
+        self->native_par_num_ = frame->par_num ? frame->par_num : 1;
+        self->native_par_den_ = frame->par_den ? frame->par_den : 1;
+        self->native_margin_xrgb_ = 0u;
+        self->saw_nonblank_frame_ = true;
+        ++self->native_seq_;
+        return;
+    }
 
     if (self->has_last_frame_meta_ && self->cfg_.headless_frames == 0 &&
         self->platform_.display && self->platform_.display->supports_native_present()) {
@@ -2634,6 +2676,42 @@ void EmulatorApp::cb_audio_samples(void* user_data, const int16_t* stereo_s16, s
 
 void EmulatorApp::cb_log(void*, int, const char* msg) {
     if (msg) std::fprintf(stderr, "[core] %s\n", msg);
+}
+
+bool EmulatorApp::cb_hw_gles2_enable(void* user_data, bool /*depth*/, bool /*stencil*/, bool bottom_left_origin) {
+    auto* self = static_cast<EmulatorApp*>(user_data);
+    if (!self || !self->platform_.display || !self->platform_.display->supports_hw_gles2() ||
+        !self->platform_.display->hw_make_current()) {
+        return false;
+    }
+    self->hw_render_active_ = true;
+    self->hw_bottom_left_ = bottom_left_origin;
+    return true;
+}
+
+bool EmulatorApp::cb_hw_make_current(void* user_data) {
+    auto* self = static_cast<EmulatorApp*>(user_data);
+    if (!self || !self->platform_.display) return false;
+    return self->platform_.display->hw_make_current();
+}
+
+void* EmulatorApp::cb_hw_get_proc_address(void* user_data, const char* sym) {
+    auto* self = static_cast<EmulatorApp*>(user_data);
+    if (!self || !self->platform_.display) return nullptr;
+    return self->platform_.display->hw_get_proc_address(sym);
+}
+
+bool EmulatorApp::cb_hw_ensure_fbo(void* user_data, uint32_t width, uint32_t height, bool depth, bool stencil) {
+    auto* self = static_cast<EmulatorApp*>(user_data);
+    if (!self || !self->platform_.display) return false;
+    return self->platform_.display->hw_ensure_fbo(
+        static_cast<int>(width), static_cast<int>(height), depth, stencil);
+}
+
+uintptr_t EmulatorApp::cb_hw_get_current_framebuffer(void* user_data) {
+    auto* self = static_cast<EmulatorApp*>(user_data);
+    if (!self || !self->platform_.display) return 0;
+    return self->platform_.display->hw_get_current_framebuffer();
 }
 
 void EmulatorApp::cb_host_command(void* user_data, czx::input::HostCommand cmd) {
@@ -2981,7 +3059,7 @@ int EmulatorApp::run() {
             }
         }
 
-        if (desktop_native_mode_) {
+        if (desktop_native_mode_ || (hw_render_active_ && !in_launcher_ && core_inst_)) {
             sync_desktop_window_size(false);
             const bool activity_overlay = !in_launcher_ && hud_.show_activity_indicator &&
                                           hud_.activity_flags != 0u && !browser_.is_open() &&
@@ -3010,6 +3088,24 @@ int EmulatorApp::run() {
                     czx::video::render_hud(lcd_fb_.data(), hud_, last_layout_);
                     if (platform_.display) {
                         platform_.display->present(lcd_fb_.data());
+                    }
+                } else if (hw_render_active_) {
+                    presented_native_seq_ = native_seq_;
+                    czx::platform::NativeHwFrameView view{};
+                    view.width = native_w_;
+                    view.height = native_h_;
+                    view.par_num = native_par_num_;
+                    view.par_den = native_par_den_;
+                    view.crt_4x3 = (scaler_cfg_.aspect_policy == czx::video::AspectPolicy::Crt4x3);
+                    view.bottom_left_origin = hw_bottom_left_;
+                    view.margin_xrgb = 0u;
+                    if (overlay_active) {
+                        build_overlay_argb();
+                        view.overlay_argb = overlay_argb_.data();
+                        view.dim_outside_overlay = browser_.is_open() || menu_.is_open();
+                    }
+                    if (platform_.display) {
+                        platform_.display->present_hw(view);
                     }
                 } else {
                     presented_native_seq_ = native_seq_;

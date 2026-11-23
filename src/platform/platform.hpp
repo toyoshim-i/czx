@@ -17,6 +17,9 @@ struct PlatformOptions {
     bool headless = false;
     bool desktop_native = true;
     bool vsync = true;
+    bool prefer_hdmi = false;
+    bool force_lcd = false;
+    bool fullscreen = false;
 };
 
 struct NativeFrameView {
@@ -26,6 +29,18 @@ struct NativeFrameView {
     int par_num = 1;
     int par_den = 1;
     bool crt_4x3 = false;
+    uint32_t margin_xrgb = 0;
+    const uint32_t* overlay_argb = nullptr;  // 320x170 straight ARGB8888, or nullptr
+    bool dim_outside_overlay = false;
+};
+
+struct NativeHwFrameView {
+    int width = 0;
+    int height = 0;
+    int par_num = 1;
+    int par_den = 1;
+    bool crt_4x3 = false;
+    bool bottom_left_origin = false;
     uint32_t margin_xrgb = 0;
     const uint32_t* overlay_argb = nullptr;  // 320x170 straight ARGB8888, or nullptr
     bool dim_outside_overlay = false;
@@ -56,6 +71,13 @@ public:
     virtual bool supports_vsync_toggle() const { return false; }
     virtual bool is_vsync_enabled() const { return false; }
     virtual bool set_vsync_enabled(bool /*enabled*/) { return false; }
+    virtual bool is_fullscreen() const { return false; }
+    virtual bool supports_hw_gles2() const { return false; }
+    virtual bool hw_make_current() { return false; }
+    virtual void* hw_get_proc_address(const char* /*sym*/) const { return nullptr; }
+    virtual bool hw_ensure_fbo(int /*width*/, int /*height*/, bool /*depth*/, bool /*stencil*/) { return false; }
+    virtual uintptr_t hw_get_current_framebuffer() const { return 0; }
+    virtual void present_hw(const NativeHwFrameView&) {}
     virtual const char* backend_name() const = 0;
 };
 

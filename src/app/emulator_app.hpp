@@ -148,6 +148,8 @@ private:
     bool show_activity_indicator_ = true;
     bool tape_warp_enabled_ = true;
     bool vsync_enabled_ = true;
+    bool hw_render_active_ = false;
+    bool hw_bottom_left_ = false;
     std::string c64_region_ = "auto";
     bool live_warp_requested_ = false;
     uint32_t activity_flags_ = 0;
@@ -219,6 +221,11 @@ private:
     static void cb_video_frame(void* user_data, const czx_frame_t* frame);
     static void cb_audio_samples(void* user_data, const int16_t* stereo_s16, size_t frame_count);
     static void cb_log(void* user_data, int level, const char* msg);
+    static bool cb_hw_gles2_enable(void* user_data, bool depth, bool stencil, bool bottom_left_origin);
+    static bool cb_hw_make_current(void* user_data);
+    static void* cb_hw_get_proc_address(void* user_data, const char* sym);
+    static bool cb_hw_ensure_fbo(void* user_data, uint32_t width, uint32_t height, bool depth, bool stencil);
+    static uintptr_t cb_hw_get_current_framebuffer(void* user_data);
     static void cb_host_command(void* user_data, czx::input::HostCommand cmd);
     static void cb_pan(void* user_data, int dx, int dy);
     static void cb_menu_key(void* user_data, const czx_key_event_t& ev);

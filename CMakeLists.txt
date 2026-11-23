@@ -119,6 +119,8 @@ target_link_libraries(czx_runtime PUBLIC czx_warnings Threads::Threads ${CMAKE_D
 if(UNIX AND NOT APPLE)
     if(CZX_BUILD_DEVICE_LIB_CHECK OR CZX_SELECTED_BACKEND STREQUAL "DEVICE_LINUX")
         add_library(czx_device_platform STATIC
+            src/platform/gles2_presenter.cpp
+            src/platform/sdl2_gles2.cpp
             src/platform/linux_drm.cpp
             src/platform/linux_fbdev.cpp
             src/platform/linux_evdev.cpp
@@ -144,6 +146,8 @@ elseif(CZX_SELECTED_BACKEND STREQUAL "DESKTOP_SDL2")
         pkg_check_modules(SDL2 REQUIRED sdl2)
     endif()
     add_library(czx_platform STATIC
+        src/platform/gles2_presenter.cpp
+        src/platform/sdl2_gles2.cpp
         src/platform/desktop_sdl2.cpp
         src/platform/linux_alsa.cpp
         src/platform/linux_audio.cpp
@@ -162,6 +166,8 @@ elseif(CZX_SELECTED_BACKEND STREQUAL "DESKTOP_X11")
     endif()
     pkg_check_modules(X11 REQUIRED x11)
     add_library(czx_platform STATIC
+        src/platform/gles2_presenter.cpp
+        src/platform/sdl2_gles2.cpp
         src/platform/desktop_x11.cpp
         src/platform/linux_alsa.cpp
         src/platform/linux_audio.cpp
@@ -215,4 +221,8 @@ if(CZX_BUILD_TESTS)
     add_executable(test_launcher tests/test_launcher.cpp)
     target_link_libraries(test_launcher PRIVATE czx_runtime)
     add_test(NAME test_launcher COMMAND test_launcher)
+
+    add_executable(test_platform_gles2 tests/test_platform_gles2.cpp)
+    target_link_libraries(test_platform_gles2 PRIVATE czx_platform)
+    add_test(NAME test_platform_gles2 COMMAND test_platform_gles2)
 endif()

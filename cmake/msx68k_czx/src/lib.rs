@@ -316,6 +316,8 @@ struct CoreState {
     scsi_hold: u8,
     last_led_mask: i32,
     frame_counter: u64,
+    audio_opm: Vec<(i16, i16)>,
+    audio_pcm: Vec<i16>,
     perf_log: bool,
     perf_detail: bool,
     perf_frames: u32,
@@ -438,7 +440,7 @@ fn compute_crtc_fps(crtc: &Crtc) -> f64 {
     (10_000_000.0 / (scanline_cycles * v_total_lines)).clamp(20.0, 120.0)
 }
 
-const SILENT_AUDIO_FRAME: [i16; 4800] = [0; 4800];
+const OPM_SAMPLE_RATE: f64 = msx68k_bus::opm::OPM_SAMPLE_RATE as f64;
 
 const LIB_NAME: &[u8] = b"msx68k (X68000)\0";
 const LIB_VER: &[u8] = b"0.1.0-exp\0";
@@ -1131,6 +1133,7 @@ fn load_game_inner(game: *const RetroGameInfo) -> bool {
         log_msg(RETRO_LOG_ERROR, &format!("X68000 VM reset failed: {e:?}"));
         return false;
     }
+    vm.set_audio_enabled(true);
 
     let (cur_w, cur_h) = vm.bus.crtc.active_resolution();
     let fd_accesses = [
@@ -1243,6 +1246,8 @@ fn load_game_inner(game: *const RetroGameInfo) -> bool {
         scsi_hold: 0,
         last_led_mask: -1,
         frame_counter: 0,
+        audio_opm: Vec::with_capacity(2048),
+        audio_pcm: Vec::with_capacity(4096),
         perf_log,
         perf_detail,
         perf_frames: 0,
@@ -1463,7 +1468,7 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut RetroSystemAvInfo) 
     };
     out.timing = RetroSystemTiming {
         fps,
-        sample_rate: 48000.0,
+        sample_rate: OPM_SAMPLE_RATE,
     };
 }
 
@@ -1510,6 +1515,9 @@ pub unsafe extern "C" fn retro_reset() {
                 if let Err(e) = st.vm.reset() {
                     log_msg(RETRO_LOG_ERROR, &format!("X68000 VM reset failed: {e:?}"));
                 }
+                st.vm.set_audio_enabled(true);
+                st.audio_opm.clear();
+                st.audio_pcm.clear();
                 st.pending_scaled = false;
                 st.need_full_vram_upload = true;
             }
@@ -1538,7 +1546,7 @@ fn notify_geometry_and_fps(st: &mut CoreState, w: u32, h: u32, aspect: f32, next
             },
             timing: RetroSystemTiming {
                 fps: st.cur_fps,
-                sample_rate: 48000.0,
+                sample_rate: OPM_SAMPLE_RATE,
             },
         };
         env_call(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &mut av);
@@ -1647,7 +1655,8 @@ pub unsafe extern "C" fn retro_run() {
         let t0 = st.perf_log.then(Instant::now);
         let run_fps = compute_crtc_fps(&st.vm.bus.crtc);
         if st.vm.speed_mode().is_burst() {
-            st.vm.run_burst_frame(160_000, 166_667);
+            let burst_ticks = (10_000_000.0 / run_fps).round().clamp(1.0, 500_000.0) as u32;
+            st.vm.run_burst_frame(160_000, burst_ticks);
         } else {
             let cpu_mhz = st.vm.timing_config().cpu_mhz.max(10) as f64;
             let frame_cycles = ((cpu_mhz * 1_000_000.0) / run_fps).round() as u32;
@@ -1829,11 +1838,19 @@ pub unsafe extern "C" fn retro_run() {
             }
         }
 
-        if let Some(acb) = audio_batch_cb {
-            let audio_frames = ((48000.0 / st.cur_fps).round() as usize)
-                .clamp(160, SILENT_AUDIO_FRAME.len() / 2);
-            unsafe {
-                acb(SILENT_AUDIO_FRAME.as_ptr(), audio_frames);
+        st.audio_opm.clear();
+        st.vm.take_audio_samples(&mut st.audio_opm);
+        if !st.audio_opm.is_empty() {
+            if let Some(acb) = audio_batch_cb {
+                st.audio_pcm.clear();
+                st.audio_pcm.reserve(st.audio_opm.len() * 2);
+                for &(l, r) in &st.audio_opm {
+                    st.audio_pcm.push(l);
+                    st.audio_pcm.push(r);
+                }
+                unsafe {
+                    acb(st.audio_pcm.as_ptr(), st.audio_opm.len());
+                }
             }
         }
 

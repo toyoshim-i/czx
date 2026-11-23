@@ -11,7 +11,8 @@ use std::thread;
 use std::time::Instant;
 
 use msx68k_bus::{
-    CpuModel, CpuSpeedMode, Crtc, FrameBudget, Opm, OpmRegEvent, OpmSynthMode, VmConfig, X68kVm,
+    AdpcmSampleEvent, CpuModel, CpuSpeedMode, Crtc, FrameBudget, Opm, OpmRegEvent, OpmSynthMode,
+    VmConfig, X68kVm,
 };
 use msx68k_vicon::{
     FrameTimingStats, PixelFormat, RenderedFrame565, RendererConfig, ShaderGeneration,
@@ -325,6 +326,7 @@ struct CoreState {
     audio_opm: Vec<(i16, i16)>,
     audio_pcm: Vec<i16>,
     audio_events: Vec<OpmRegEvent>,
+    adpcm_events: Vec<AdpcmSampleEvent>,
     opm_mode: OpmAudioMode,
     opm_worker: Option<OpmOffloadWorker>,
     perf_log: bool,
@@ -336,6 +338,7 @@ struct CoreState {
     perf_audio_ns: u64,
     perf_opm_bg_ns: u64,
     perf_opm_events: u64,
+    perf_adpcm_events: u64,
     perf_up_us: u64,
     perf_draw_us: u64,
     perf_rb_us: u64,
@@ -362,6 +365,7 @@ impl OpmAudioMode {
 enum OpmWorkerReq {
     Synthesize {
         events: Vec<OpmRegEvent>,
+        adpcm_events: Vec<AdpcmSampleEvent>,
         target_clock: u64,
         pcm_buf: Vec<i16>,
     },
@@ -372,8 +376,10 @@ enum OpmWorkerReq {
 struct OpmWorkerResp {
     pcm_buf: Vec<i16>,
     events_buf: Vec<OpmRegEvent>,
+    adpcm_events_buf: Vec<AdpcmSampleEvent>,
     synth_ns: u64,
     event_count: usize,
+    adpcm_event_count: usize,
 }
 
 struct OpmOffloadWorker {
@@ -395,17 +401,22 @@ impl OpmOffloadWorker {
                 synth_opm.set_audio_enabled(true);
                 let mut synth_clock: u64 = 0;
                 let mut pending_events: VecDeque<OpmRegEvent> = VecDeque::with_capacity(1024);
+                let mut pending_adpcm: VecDeque<AdpcmSampleEvent> = VecDeque::with_capacity(1024);
+                let mut adpcm_lr: (i16, i16) = (0, 0);
 
                 while let Ok(req) = req_rx.recv() {
                     match req {
                         OpmWorkerReq::Synthesize {
                             mut events,
+                            mut adpcm_events,
                             target_clock,
                             mut pcm_buf,
                         } => {
                             let t_start = Instant::now();
                             let event_count = events.len();
+                            let adpcm_event_count = adpcm_events.len();
                             pending_events.extend(events.drain(..));
+                            pending_adpcm.extend(adpcm_events.drain(..));
                             if target_clock < synth_clock {
                                 synth_clock = target_clock;
                             }
@@ -423,9 +434,17 @@ impl OpmOffloadWorker {
                                         break;
                                     }
                                 }
-                                let (l, r) = synth_opm.next_sample();
-                                pcm_buf.push(l);
-                                pcm_buf.push(r);
+                                while let Some(ev) = pending_adpcm.front() {
+                                    if ev.sample_time <= synth_clock {
+                                        adpcm_lr = (ev.left, ev.right);
+                                        pending_adpcm.pop_front();
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                let (ol, or) = synth_opm.next_sample();
+                                pcm_buf.push(ol.saturating_add(adpcm_lr.0));
+                                pcm_buf.push(or.saturating_add(adpcm_lr.1));
                                 synth_clock += 1;
                             }
                             let synth_ns = t_start.elapsed().as_nanos() as u64;
@@ -433,8 +452,10 @@ impl OpmOffloadWorker {
                                 .send(OpmWorkerResp {
                                     pcm_buf,
                                     events_buf: events,
+                                    adpcm_events_buf: adpcm_events,
                                     synth_ns,
                                     event_count,
+                                    adpcm_event_count,
                                 })
                                 .is_err()
                             {
@@ -445,12 +466,16 @@ impl OpmOffloadWorker {
                             synth_opm.reset();
                             synth_opm.set_audio_enabled(true);
                             pending_events.clear();
+                            pending_adpcm.clear();
+                            adpcm_lr = (0, 0);
                             synth_clock = 0;
                             let _ = resp_tx.send(OpmWorkerResp {
                                 pcm_buf: Vec::new(),
                                 events_buf: Vec::new(),
+                                adpcm_events_buf: Vec::new(),
                                 synth_ns: 0,
                                 event_count: 0,
+                                adpcm_event_count: 0,
                             });
                         }
                         OpmWorkerReq::Shutdown => break,
@@ -470,15 +495,24 @@ impl OpmOffloadWorker {
     fn exchange(
         &mut self,
         events: &mut Vec<OpmRegEvent>,
+        adpcm_events: &mut Vec<AdpcmSampleEvent>,
         target_clock: u64,
-    ) -> Option<(Vec<i16>, u64, usize)> {
+    ) -> Option<(Vec<i16>, u64, usize, usize)> {
         let send_events = std::mem::take(events);
+        let send_adpcm = std::mem::take(adpcm_events);
         let mut ready = None;
         if self.in_flight {
             if let Ok(resp) = self.resp_rx.recv() {
                 *events = resp.events_buf;
                 events.clear();
-                ready = Some((resp.pcm_buf, resp.synth_ns, resp.event_count));
+                *adpcm_events = resp.adpcm_events_buf;
+                adpcm_events.clear();
+                ready = Some((
+                    resp.pcm_buf,
+                    resp.synth_ns,
+                    resp.event_count,
+                    resp.adpcm_event_count,
+                ));
             }
             self.in_flight = false;
         }
@@ -487,6 +521,7 @@ impl OpmOffloadWorker {
             .req_tx
             .send(OpmWorkerReq::Synthesize {
                 events: send_events,
+                adpcm_events: send_adpcm,
                 target_clock,
                 pcm_buf,
             })
@@ -504,7 +539,7 @@ impl OpmOffloadWorker {
         }
     }
 
-    fn reset(&mut self, events: &mut Vec<OpmRegEvent>) {
+    fn reset(&mut self, events: &mut Vec<OpmRegEvent>, adpcm_events: &mut Vec<AdpcmSampleEvent>) {
         if self.in_flight {
             if let Ok(resp) = self.resp_rx.recv() {
                 self.recycle_pcm(resp.pcm_buf);
@@ -512,6 +547,10 @@ impl OpmOffloadWorker {
                     *events = resp.events_buf;
                 }
                 events.clear();
+                if resp.adpcm_events_buf.capacity() >= adpcm_events.capacity() {
+                    *adpcm_events = resp.adpcm_events_buf;
+                }
+                adpcm_events.clear();
             }
             self.in_flight = false;
         }
@@ -1360,12 +1399,14 @@ fn load_game_inner(game: *const RetroGameInfo) -> bool {
     }
 
     let mut audio_events = Vec::with_capacity(256);
+    let mut adpcm_events = Vec::with_capacity(256);
     let mut opm_worker = None;
     let opm_mode = configure_vm_opm(
         &mut vm,
         resolve_opm_audio_mode(),
         &mut opm_worker,
         &mut audio_events,
+        &mut adpcm_events,
     );
     log_msg(RETRO_LOG_INFO, &format!("YM2151 OPM synth mode: {}", opm_mode.label()));
 
@@ -1485,6 +1526,7 @@ fn load_game_inner(game: *const RetroGameInfo) -> bool {
         audio_opm: Vec::with_capacity(2048),
         audio_pcm: Vec::with_capacity(4096),
         audio_events,
+        adpcm_events,
         opm_mode,
         opm_worker,
         perf_log,
@@ -1496,6 +1538,7 @@ fn load_game_inner(game: *const RetroGameInfo) -> bool {
         perf_audio_ns: 0,
         perf_opm_bg_ns: 0,
         perf_opm_events: 0,
+        perf_adpcm_events: 0,
         perf_up_us: 0,
         perf_draw_us: 0,
         perf_rb_us: 0,
@@ -1742,6 +1785,7 @@ fn configure_vm_opm(
     requested: OpmAudioMode,
     worker_slot: &mut Option<OpmOffloadWorker>,
     events_buf: &mut Vec<OpmRegEvent>,
+    adpcm_events_buf: &mut Vec<AdpcmSampleEvent>,
 ) -> OpmAudioMode {
     match requested {
         OpmAudioMode::Offload => {
@@ -1749,7 +1793,7 @@ fn configure_vm_opm(
                 *worker_slot = OpmOffloadWorker::spawn();
             }
             if let Some(worker) = worker_slot.as_mut() {
-                worker.reset(events_buf);
+                worker.reset(events_buf, adpcm_events_buf);
                 vm.set_opm_synth_mode(OpmSynthMode::Offload);
                 vm.set_audio_enabled(true);
                 OpmAudioMode::Offload
@@ -1801,11 +1845,13 @@ pub unsafe extern "C" fn retro_reset() {
                 st.audio_opm.clear();
                 st.audio_pcm.clear();
                 st.audio_events.clear();
+                st.adpcm_events.clear();
                 st.opm_mode = configure_vm_opm(
                     &mut st.vm,
                     st.opm_mode,
                     &mut st.opm_worker,
                     &mut st.audio_events,
+                    &mut st.adpcm_events,
                 );
                 st.pending_scaled = false;
                 st.pending_native_w = 0;
@@ -1887,11 +1933,13 @@ pub unsafe extern "C" fn retro_run() {
                         st.audio_opm.clear();
                         st.audio_pcm.clear();
                         st.audio_events.clear();
+                        st.adpcm_events.clear();
                         st.opm_mode = configure_vm_opm(
                             &mut st.vm,
                             next_opm_mode,
                             &mut st.opm_worker,
                             &mut st.audio_events,
+                            &mut st.adpcm_events,
                         );
                         log_msg(
                             RETRO_LOG_INFO,
@@ -1975,10 +2023,12 @@ pub unsafe extern "C" fn retro_run() {
         let ta0 = st.perf_log.then(Instant::now);
         let offload_ready = if st.opm_mode == OpmAudioMode::Offload {
             st.audio_events.clear();
+            st.adpcm_events.clear();
             let target_clock = st.vm.take_audio_events(&mut st.audio_events);
-            st.opm_worker
-                .as_mut()
-                .and_then(|worker| worker.exchange(&mut st.audio_events, target_clock))
+            st.vm.take_adpcm_events(&mut st.adpcm_events);
+            st.opm_worker.as_mut().and_then(|worker| {
+                worker.exchange(&mut st.audio_events, &mut st.adpcm_events, target_clock)
+            })
         } else {
             None
         };
@@ -2140,9 +2190,10 @@ pub unsafe extern "C" fn retro_run() {
         let ta2 = st.perf_log.then(Instant::now);
         match st.opm_mode {
             OpmAudioMode::Offload => {
-                if let Some((pcm, bg_ns, ev_count)) = offload_ready {
+                if let Some((pcm, bg_ns, ev_count, adpcm_ev_count)) = offload_ready {
                     st.perf_opm_bg_ns += bg_ns;
                     st.perf_opm_events += ev_count as u64;
+                    st.perf_adpcm_events += adpcm_ev_count as u64;
                     if !pcm.is_empty() {
                         if let Some(acb) = audio_batch_cb {
                             unsafe {
@@ -2212,7 +2263,10 @@ pub unsafe extern "C" fn retro_run() {
                 if st.opm_mode == OpmAudioMode::Offload {
                     let bg_ms = (st.perf_opm_bg_ns as f64) / (n * 1_000_000.0);
                     let ev_avg = (st.perf_opm_events as f64) / n;
-                    extra.push_str(&format!(" [opm_bg={bg_ms:.2}ms ev={ev_avg:.1}]"));
+                    let adpcm_avg = (st.perf_adpcm_events as f64) / n;
+                    extra.push_str(&format!(
+                        " [opm_bg={bg_ms:.2}ms ev={ev_avg:.1} adpcm={adpcm_avg:.1}]"
+                    ));
                 }
                 if st.perf_timing_samples > 0 {
                     let tn = st.perf_timing_samples as f64;
@@ -2239,6 +2293,7 @@ pub unsafe extern "C" fn retro_run() {
                 st.perf_audio_ns = 0;
                 st.perf_opm_bg_ns = 0;
                 st.perf_opm_events = 0;
+                st.perf_adpcm_events = 0;
                 st.perf_up_us = 0;
                 st.perf_draw_us = 0;
                 st.perf_rb_us = 0;

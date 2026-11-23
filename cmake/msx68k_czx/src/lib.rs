@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use msx68k_bus::{CpuModel, CpuSpeedMode, FrameBudget, VmConfig, X68kVm};
+use msx68k_bus::{CpuModel, CpuSpeedMode, Crtc, FrameBudget, VmConfig, X68kVm};
 use msx68k_vicon::{
     FrameTimingStats, PixelFormat, RenderedFrame565, RendererConfig, ShaderGeneration,
     ViconCompositor,
@@ -52,6 +52,7 @@ const RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE: c_uint = 17;
 const RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME: c_uint = 18;
 const RETRO_ENVIRONMENT_GET_LOG_INTERFACE: c_uint = 27;
 const RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY: c_uint = 31;
+const RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO: c_uint = 32;
 const RETRO_ENVIRONMENT_SET_GEOMETRY: c_uint = 37;
 const RETRO_ENVIRONMENT_GET_LED_INTERFACE: c_uint = 46 | RETRO_ENVIRONMENT_EXPERIMENTAL;
 
@@ -275,6 +276,7 @@ struct CoreState {
     cur_w: u32,
     cur_h: u32,
     cur_aspect_bits: u32,
+    cur_fps: f64,
     gpu_scale: GpuScaleMode,
     pending_scaled: bool,
     need_full_vram_upload: bool,
@@ -316,7 +318,16 @@ thread_local! {
     static COMPOSITOR: RefCell<Option<ViconCompositor>> = const { RefCell::new(None) };
 }
 
-const SILENT_AUDIO_FRAME: [i16; 1600] = [0; 1600];
+const DEFAULT_X68K_FPS: f64 = 10_000_000.0 / (317.0 * 568.0);
+
+fn compute_crtc_fps(crtc: &Crtc) -> f64 {
+    let r20 = crtc.reg(20);
+    let scanline_cycles: f64 = if (r20 & 0x10) != 0 { 317.0 } else { 625.0 };
+    let v_total_lines: f64 = ((crtc.reg(4) & 0x0FFF).max(256) as u32 + 1) as f64;
+    (10_000_000.0 / (scanline_cycles * v_total_lines)).clamp(20.0, 120.0)
+}
+
+const SILENT_AUDIO_FRAME: [i16; 4800] = [0; 4800];
 
 const LIB_NAME: &[u8] = b"msx68k (X68000)\0";
 const LIB_VER: &[u8] = b"0.1.0-exp\0";
@@ -1053,6 +1064,7 @@ fn load_game_inner(game: *const RetroGameInfo) -> bool {
     }
 
     let cur_aspect_bits = aspect_for_resolution(cur_w, cur_h).to_bits();
+    let cur_fps = compute_crtc_fps(&vm.bus.crtc);
 
     let state = CoreState {
         vm,
@@ -1068,6 +1080,7 @@ fn load_game_inner(game: *const RetroGameInfo) -> bool {
         cur_w,
         cur_h,
         cur_aspect_bits,
+        cur_fps,
         gpu_scale,
         pending_scaled: false,
         need_full_vram_upload: false,
@@ -1263,14 +1276,21 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut RetroSystemAvInfo) 
     if info.is_null() {
         return;
     }
-    let (w, h, aspect) = CORE_STATE
+    let (w, h, aspect, fps) = CORE_STATE
         .lock()
         .ok()
         .and_then(|g| {
             g.as_ref()
-                .map(|s| (s.cur_w, s.cur_h, f32::from_bits(s.cur_aspect_bits)))
+                .map(|s| (s.cur_w, s.cur_h, f32::from_bits(s.cur_aspect_bits), s.cur_fps))
         })
-        .unwrap_or_else(|| (768, 512, aspect_for_resolution(768, 512)));
+        .unwrap_or_else(|| {
+            (
+                768,
+                512,
+                aspect_for_resolution(768, 512),
+                DEFAULT_X68K_FPS,
+            )
+        });
     let out = &mut *info;
     out.geometry = RetroGameGeometry {
         base_width: w,
@@ -1280,7 +1300,7 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut RetroSystemAvInfo) 
         aspect_ratio: aspect,
     };
     out.timing = RetroSystemTiming {
-        fps: 60.0,
+        fps,
         sample_rate: 48000.0,
     };
 }
@@ -1423,12 +1443,13 @@ pub unsafe extern "C" fn retro_run() {
         }
 
         let t0 = st.perf_log.then(Instant::now);
+        let run_fps = compute_crtc_fps(&st.vm.bus.crtc);
         if st.vm.speed_mode().is_burst() {
             st.vm.run_burst_frame(160_000, 166_667);
         } else {
-            let cpu_mhz = st.vm.timing_config().cpu_mhz.max(10);
-            let frame_cycles = (cpu_mhz * 1_000_000) / 60;
-            st.vm.run_frame(FrameBudget::Cycles(frame_cycles));
+            let cpu_mhz = st.vm.timing_config().cpu_mhz.max(10) as f64;
+            let frame_cycles = ((cpu_mhz * 1_000_000.0) / run_fps).round() as u32;
+            st.vm.run_frame(FrameBudget::Cycles(frame_cycles.max(1)));
         }
 
         let t1 = st.perf_log.then(Instant::now);
@@ -1482,6 +1503,8 @@ pub unsafe extern "C" fn retro_run() {
 
         let mut presented_w = st.cur_w;
         let mut presented_h = st.cur_h;
+        let next_fps = compute_crtc_fps(&st.vm.bus.crtc);
+        let fps_changed = (next_fps - st.cur_fps).abs() >= 0.05;
         if let Some(rendered) = rendered_opt {
             let w = rendered.width.max(1);
             let h = rendered.height.max(1);
@@ -1491,10 +1514,29 @@ pub unsafe extern "C" fn retro_run() {
                 aspect_for_resolution(w, h)
             };
             let aspect_bits = aspect.to_bits();
-            if w != st.cur_w || h != st.cur_h || aspect_bits != st.cur_aspect_bits {
+            let geom_changed = w != st.cur_w || h != st.cur_h || aspect_bits != st.cur_aspect_bits;
+            if geom_changed {
                 st.cur_w = w;
                 st.cur_h = h;
                 st.cur_aspect_bits = aspect_bits;
+            }
+            if fps_changed {
+                st.cur_fps = next_fps;
+                let mut av = RetroSystemAvInfo {
+                    geometry: RetroGameGeometry {
+                        base_width: w,
+                        base_height: h,
+                        max_width: 1024,
+                        max_height: 1024,
+                        aspect_ratio: aspect,
+                    },
+                    timing: RetroSystemTiming {
+                        fps: st.cur_fps,
+                        sample_rate: 48000.0,
+                    },
+                };
+                env_call(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &mut av);
+            } else if geom_changed {
                 let mut geom = RetroGameGeometry {
                     base_width: w,
                     base_height: h,
@@ -1517,6 +1559,22 @@ pub unsafe extern "C" fn retro_run() {
                     );
                 }
             }
+        } else if fps_changed {
+            st.cur_fps = next_fps;
+            let mut av = RetroSystemAvInfo {
+                geometry: RetroGameGeometry {
+                    base_width: st.cur_w,
+                    base_height: st.cur_h,
+                    max_width: 1024,
+                    max_height: 1024,
+                    aspect_ratio: f32::from_bits(st.cur_aspect_bits),
+                },
+                timing: RetroSystemTiming {
+                    fps: st.cur_fps,
+                    sample_rate: 48000.0,
+                },
+            };
+            env_call(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &mut av);
         }
 
         if let (Some(a), Some(b), Some(c), Some(d)) = (t0, t1, t2, t3) {
@@ -1562,8 +1620,10 @@ pub unsafe extern "C" fn retro_run() {
         }
 
         if let Some(acb) = audio_batch_cb {
+            let audio_frames = ((48000.0 / st.cur_fps).round() as usize)
+                .clamp(160, SILENT_AUDIO_FRAME.len() / 2);
             unsafe {
-                acb(SILENT_AUDIO_FRAME.as_ptr(), SILENT_AUDIO_FRAME.len() / 2);
+                acb(SILENT_AUDIO_FRAME.as_ptr(), audio_frames);
             }
         }
 

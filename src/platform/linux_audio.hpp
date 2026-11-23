@@ -5,8 +5,18 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace czx::platform {
+
+struct PulseCardProfileCandidate {
+    std::string name;
+    uint32_t n_sinks = 0;
+    uint32_t priority = 0;
+    bool available = true;
+};
+
+std::string select_best_hdmi_card_profile(const std::vector<PulseCardProfileCandidate>& profiles);
 
 class LinuxPulseAudio : public PlatformAudio {
 public:
@@ -34,13 +44,18 @@ private:
     struct PaCVolume;
     struct PaServerInfo;
     struct PaSinkInfo;
+    struct PaCardProfileInfo;
+    struct PaCardProfileInfo2;
+    struct PaCardInfo;
     struct PaBufferAttr;
+    struct SuccessQuery;
 
     using PaContextNotifyCb = void (*)(PaContext*, void*);
     using PaStreamNotifyCb = void (*)(PaStream*, void*);
     using PaContextSuccessCb = void (*)(PaContext*, int, void*);
     using PaServerInfoCb = void (*)(PaContext*, const PaServerInfo*, void*);
     using PaSinkInfoCb = void (*)(PaContext*, const PaSinkInfo*, int, void*);
+    using PaCardInfoCb = void (*)(PaContext*, const PaCardInfo*, int, void*);
 
     using FnMlNew = PaThreadedMainloop* (*)();
     using FnMlStart = int (*)(PaThreadedMainloop*);
@@ -78,6 +93,10 @@ private:
         PaOperation* (*)(PaContext*, const char*, const PaCVolume*, PaContextSuccessCb, void*);
     using FnCtxSetSinkMuteByName =
         PaOperation* (*)(PaContext*, const char*, int, PaContextSuccessCb, void*);
+    using FnCtxGetCardInfoList = PaOperation* (*)(PaContext*, PaCardInfoCb, void*);
+    using FnCtxSetCardProfileByName =
+        PaOperation* (*)(PaContext*, const char*, const char*, PaContextSuccessCb, void*);
+    using FnProplistGets = const char* (*)(const void*, const char*);
     using FnOpGetState = int (*)(const PaOperation*);
     using FnOpUnref = void (*)(PaOperation*);
     using FnCVolumeSet = PaCVolume* (*)(PaCVolume*, unsigned, uint32_t);
@@ -85,9 +104,17 @@ private:
 
     static void on_context_state(PaContext* ctx, void* userdata);
     static void on_stream_state(PaStream* stream, void* userdata);
+    static void on_op_success(PaContext* ctx, int success, void* userdata);
 
     bool wait_operation_locked(PaOperation* op);
     bool query_sink_locked(std::string& sink_name, PaCVolume& vol, bool& muted);
+    bool find_hdmi_sink_locked(std::string& out_sink,
+                               std::string& out_seen,
+                               PaChannelMap& out_chmap,
+                               bool& out_muted);
+    bool activate_hdmi_card_profile_locked();
+    void restore_hdmi_card_profile_locked();
+    void restore_hdmi_card_profile();
 
     void* dl_ = nullptr;
     PaThreadedMainloop* ml_ = nullptr;
@@ -98,6 +125,8 @@ private:
     uint32_t sample_rate_ = 0;
     uint32_t buffer_tlength_ = 0;
     std::string target_sink_;
+    std::string activated_hdmi_card_;
+    std::string prev_hdmi_card_profile_;
 
     FnMlNew fn_ml_new_ = nullptr;
     FnMlStart fn_ml_start_ = nullptr;
@@ -132,6 +161,9 @@ private:
     FnCtxGetSinkInfoByName fn_ctx_get_sink_info_by_name_ = nullptr;
     FnCtxSetSinkVolumeByName fn_ctx_set_sink_volume_by_name_ = nullptr;
     FnCtxSetSinkMuteByName fn_ctx_set_sink_mute_by_name_ = nullptr;
+    FnCtxGetCardInfoList fn_ctx_get_card_info_list_ = nullptr;
+    FnCtxSetCardProfileByName fn_ctx_set_card_profile_by_name_ = nullptr;
+    FnProplistGets fn_proplist_gets_ = nullptr;
     FnOpGetState fn_op_get_state_ = nullptr;
     FnOpUnref fn_op_unref_ = nullptr;
     FnCVolumeSet fn_cvolume_set_ = nullptr;

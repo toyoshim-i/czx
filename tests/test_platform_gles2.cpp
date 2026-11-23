@@ -1,4 +1,5 @@
 #include "platform/gles2_presenter.hpp"
+#include "platform/linux_audio.hpp"
 #include "platform/sdl2_gles2.hpp"
 
 #include <cstdio>
@@ -98,6 +99,34 @@ int main() {
         CHECK(w == 1920 && h == 1080);
         CHECK(czx::platform::compute_fullscreen_buffer_size(0, 0, 540, w, h));
         CHECK(w == 960 && h == 540);
+    }
+
+    // PulseAudio/PipeWire HDMI card profile selection chooses active sink profiles cleanly.
+    {
+        using czx::platform::PulseCardProfileCandidate;
+        using czx::platform::select_best_hdmi_card_profile;
+
+        CHECK(select_best_hdmi_card_profile({
+                  {"off", 0, 0, true},
+                  {"pro-audio", 1, 1, true},
+              }) == "pro-audio");
+
+        CHECK(select_best_hdmi_card_profile({
+                  {"off", 0, 0, true},
+                  {"pro-audio", 1, 1, true},
+                  {"output:hdmi-stereo", 1, 5100, true},
+              }) == "output:hdmi-stereo");
+
+        CHECK(select_best_hdmi_card_profile({
+                  {"off", 0, 0, true},
+                  {"output:hdmi-stereo", 1, 5100, false},
+                  {"pro-audio", 1, 1, true},
+              }) == "pro-audio");
+
+        CHECK(select_best_hdmi_card_profile({
+                  {"off", 0, 0, true},
+              })
+                  .empty());
     }
 
     std::printf("test_platform_gles2: OK\n");

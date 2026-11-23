@@ -12,6 +12,7 @@ namespace czx::platform {
 
 bool has_connected_hdmi_connector();
 bool has_desktop_session();
+bool compute_fullscreen_buffer_size(int disp_w, int disp_h, int max_h, int& out_w, int& out_h);
 
 struct Sdl2Gles2Context {
     static constexpr int kLcdScale = 3;

@@ -20,6 +20,8 @@ struct PlatformOptions {
     bool prefer_hdmi = false;
     bool force_lcd = false;
     bool fullscreen = false;
+    int max_fullscreen_height = 0;  // 0 = native desktop resolution; >0 caps fullscreen EGL buffer height for low-CMA GPUs
+    bool prefer_rgb565 = false;     // Request 16-bit RGB565 window surface when supported
 };
 
 struct NativeFrameView {

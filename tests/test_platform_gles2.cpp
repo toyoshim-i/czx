@@ -61,6 +61,24 @@ int main() {
         CHECK(keys.empty());
     }
 
+    // Fullscreen buffer capping helper preserves aspect and aligns to even pixels.
+    {
+        int w = 0;
+        int h = 0;
+        CHECK(czx::platform::compute_fullscreen_buffer_size(1920, 1080, 540, w, h));
+        CHECK(w == 960 && h == 540);
+        CHECK(czx::platform::compute_fullscreen_buffer_size(1280, 720, 540, w, h));
+        CHECK(w == 960 && h == 540);
+        CHECK(czx::platform::compute_fullscreen_buffer_size(1280, 1024, 540, w, h));
+        CHECK(w == 674 && h == 540);
+        CHECK(!czx::platform::compute_fullscreen_buffer_size(640, 480, 540, w, h));
+        CHECK(w == 640 && h == 480);
+        CHECK(!czx::platform::compute_fullscreen_buffer_size(1920, 1080, 0, w, h));
+        CHECK(w == 1920 && h == 1080);
+        CHECK(czx::platform::compute_fullscreen_buffer_size(0, 0, 540, w, h));
+        CHECK(w == 960 && h == 540);
+    }
+
     std::printf("test_platform_gles2: OK\n");
     return 0;
 }

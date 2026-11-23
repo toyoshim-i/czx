@@ -17,24 +17,50 @@ fi
 if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ]; then
     uid="$(id -u)"
     rt_dir="${XDG_RUNTIME_DIR:-/run/user/$uid}"
-    if [ -S "$rt_dir/wayland-0" ]; then
+    if [ -d "$rt_dir" ]; then
         export XDG_RUNTIME_DIR="$rt_dir"
-        export WAYLAND_DISPLAY="wayland-0"
-    elif [ -S "$rt_dir/wayland-1" ]; then
-        export XDG_RUNTIME_DIR="$rt_dir"
-        export WAYLAND_DISPLAY="wayland-1"
-    else
-        if [ "$uid" -eq 0 ]; then
-            for sock in /run/user/*/wayland-0 /run/user/*/wayland-1; do
-                if [ -S "$sock" ]; then
-                    export XDG_RUNTIME_DIR="$(dirname "$sock")"
-                    export WAYLAND_DISPLAY="$(basename "$sock")"
-                    break
-                fi
-            done
+    fi
+
+    if command -v systemctl >/dev/null 2>&1 && [ -d "$rt_dir" ]; then
+        sys_env="$(XDG_RUNTIME_DIR="$rt_dir" systemctl --user show-environment 2>/dev/null || true)"
+        if [ -n "$sys_env" ]; then
+            wl_val="$(printf '%s\n' "$sys_env" | sed -n 's/^WAYLAND_DISPLAY=//p' | head -n 1)"
+            disp_val="$(printf '%s\n' "$sys_env" | sed -n 's/^DISPLAY=//p' | head -n 1)"
+            xa_val="$(printf '%s\n' "$sys_env" | sed -n 's/^XAUTHORITY=//p' | head -n 1)"
+            if [ -n "$wl_val" ] && [ -S "$rt_dir/$wl_val" ]; then
+                export WAYLAND_DISPLAY="$wl_val"
+            fi
+            if [ -n "$disp_val" ]; then
+                export DISPLAY="$disp_val"
+            fi
+            if [ -n "$xa_val" ] && [ -r "$xa_val" ] && [ -z "${XAUTHORITY:-}" ]; then
+                export XAUTHORITY="$xa_val"
+            fi
         fi
-        if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -S /tmp/.X11-unix/X0 ]; then
-            export DISPLAY=":0"
+    fi
+
+    if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ]; then
+        if [ -S "$rt_dir/wayland-0" ]; then
+            export WAYLAND_DISPLAY="wayland-0"
+        elif [ -S "$rt_dir/wayland-1" ]; then
+            export WAYLAND_DISPLAY="wayland-1"
+        else
+            if [ "$uid" -eq 0 ]; then
+                for sock in /run/user/*/wayland-0 /run/user/*/wayland-1; do
+                    if [ -S "$sock" ]; then
+                        export XDG_RUNTIME_DIR="$(dirname "$sock")"
+                        export WAYLAND_DISPLAY="$(basename "$sock")"
+                        break
+                    fi
+                done
+            fi
+            if [ -z "${WAYLAND_DISPLAY:-}" ]; then
+                if [ -S /tmp/.X11-unix/X1 ]; then
+                    export DISPLAY=":1"
+                elif [ -S /tmp/.X11-unix/X0 ]; then
+                    export DISPLAY=":0"
+                fi
+            fi
         fi
     fi
 fi

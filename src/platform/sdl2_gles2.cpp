@@ -3,6 +3,7 @@
 #include "video/scaler.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -24,7 +25,13 @@ constexpr uint32_t kSdlWindowOpengl = 0x00000002u;
 constexpr uint32_t kSdlWindowResizable = 0x00000020u;
 constexpr uint32_t kSdlWindowFullscreenDesktop = kSdlWindowFullscreen | 0x00001000u;
 
+constexpr int kSdlGlRedSize = 0;
+constexpr int kSdlGlGreenSize = 1;
+constexpr int kSdlGlBlueSize = 2;
+constexpr int kSdlGlAlphaSize = 3;
 constexpr int kSdlGlDoublebuffer = 5;
+constexpr int kSdlGlDepthSize = 6;
+constexpr int kSdlGlStencilSize = 7;
 constexpr int kSdlGlContextMajorVersion = 17;
 constexpr int kSdlGlContextMinorVersion = 18;
 constexpr int kSdlGlContextProfileMask = 21;
@@ -214,7 +221,10 @@ czx_key_t sdl_scancode_to_czx(int32_t scancode, int32_t sym) noexcept {
 struct Sdl2Gles2Context::SdlApi {
     int (*SDL_Init)(uint32_t) = nullptr;
     void (*SDL_QuitSubSystem)(uint32_t) = nullptr;
+    int (*SDL_SetHint)(const char*, const char*) = nullptr;
+    const char* (*SDL_GetCurrentVideoDriver)() = nullptr;
     int (*SDL_GL_SetAttribute)(int, int) = nullptr;
+    int (*SDL_GL_GetAttribute)(int, int*) = nullptr;
     void* (*SDL_CreateWindow)(const char*, int, int, int, int, uint32_t) = nullptr;
     void (*SDL_DestroyWindow)(void*) = nullptr;
     void (*SDL_SetWindowMinimumSize)(void*, int, int) = nullptr;
@@ -223,6 +233,7 @@ struct Sdl2Gles2Context::SdlApi {
     void (*SDL_SetWindowTitle)(void*, const char*) = nullptr;
     int (*SDL_GetWindowDisplayIndex)(void*) = nullptr;
     int (*SDL_GetCurrentDisplayMode)(int, SdlDisplayMode*) = nullptr;
+    int (*SDL_GetDesktopDisplayMode)(int, SdlDisplayMode*) = nullptr;
     void* (*SDL_GL_CreateContext)(void*) = nullptr;
     void (*SDL_GL_DeleteContext)(void*) = nullptr;
     int (*SDL_GL_MakeCurrent)(void*, void*) = nullptr;
@@ -268,6 +279,28 @@ bool has_desktop_session() {
         return true;
     }
     return false;
+}
+
+bool compute_fullscreen_buffer_size(int disp_w, int disp_h, int max_h, int& out_w, int& out_h) {
+    if (disp_w <= 0 || disp_h <= 0) {
+        if (max_h > 0) {
+            out_h = std::max(240, max_h & ~1);
+            out_w = std::max(320, static_cast<int>(std::lround(static_cast<double>(out_h) * 16.0 / 9.0)) & ~1);
+            return true;
+        }
+        out_w = Sdl2Gles2Context::kDefaultNativeW;
+        out_h = Sdl2Gles2Context::kDefaultNativeH;
+        return false;
+    }
+    if (max_h <= 0 || disp_h <= max_h) {
+        out_w = disp_w;
+        out_h = disp_h;
+        return false;
+    }
+    const double scale = static_cast<double>(max_h) / static_cast<double>(disp_h);
+    out_w = std::max(320, static_cast<int>(std::lround(static_cast<double>(disp_w) * scale)) & ~1);
+    out_h = std::max(240, max_h & ~1);
+    return true;
 }
 
 Sdl2Gles2Context::~Sdl2Gles2Context() {
@@ -332,6 +365,10 @@ bool Sdl2Gles2Context::init(const PlatformOptions& opts) {
         resolve_sdl_sym(dl, "SDL_GL_SwapWindow", api->SDL_GL_SwapWindow) &&
         resolve_sdl_sym(dl, "SDL_PollEvent", api->SDL_PollEvent);
 
+    (void)resolve_sdl_sym(dl, "SDL_SetHint", api->SDL_SetHint);
+    (void)resolve_sdl_sym(dl, "SDL_GetCurrentVideoDriver", api->SDL_GetCurrentVideoDriver);
+    (void)resolve_sdl_sym(dl, "SDL_GetDesktopDisplayMode", api->SDL_GetDesktopDisplayMode);
+    (void)resolve_sdl_sym(dl, "SDL_GL_GetAttribute", api->SDL_GL_GetAttribute);
     (void)resolve_sdl_sym(dl, "SDL_GL_GetDrawableSize", api->SDL_GL_GetDrawableSize);
     (void)resolve_sdl_sym(dl, "SDL_ShowCursor", api->SDL_ShowCursor);
     (void)resolve_sdl_sym(dl, "SDL_GetError", api->SDL_GetError);
@@ -343,49 +380,117 @@ bool Sdl2Gles2Context::init(const PlatformOptions& opts) {
     }
     sdl = api;
 
-    if (sdl->SDL_Init(kSdlInitVideo) != 0) {
-        std::fprintf(stderr, "czx: SDL_Init failed: %s\n", sdl->SDL_GetError ? sdl->SDL_GetError() : "unknown");
-        cleanup();
-        return false;
+    const char* explicit_drv = std::getenv("SDL_VIDEODRIVER");
+    if (explicit_drv && explicit_drv[0] != '\0') {
+        if (sdl->SDL_Init(kSdlInitVideo) != 0) {
+            std::fprintf(stderr, "czx: SDL_Init failed: %s\n", sdl->SDL_GetError ? sdl->SDL_GetError() : "unknown");
+            cleanup();
+            return false;
+        }
+        sdl_video_inited = true;
+    } else {
+        std::vector<const char*> candidates;
+        if (const char* wl = std::getenv("WAYLAND_DISPLAY"); wl && wl[0] != '\0') {
+            candidates.push_back("wayland");
+        }
+        if (const char* disp = std::getenv("DISPLAY"); disp && disp[0] != '\0') {
+            candidates.push_back("x11");
+        }
+        if (candidates.empty()) {
+            cleanup();
+            return false;
+        }
+        for (const char* drv : candidates) {
+            if (sdl->SDL_SetHint) {
+                (void)sdl->SDL_SetHint("SDL_VIDEODRIVER", drv);
+            }
+            if (sdl->SDL_Init(kSdlInitVideo) == 0) {
+                const char* active = sdl->SDL_GetCurrentVideoDriver ? sdl->SDL_GetCurrentVideoDriver() : drv;
+                if (active && (std::strcmp(active, "wayland") == 0 || std::strcmp(active, "x11") == 0)) {
+                    sdl_video_inited = true;
+                    break;
+                }
+                sdl->SDL_QuitSubSystem(kSdlInitVideo);
+            }
+        }
+        if (!sdl_video_inited) {
+            std::fprintf(stderr, "czx: SDL_Init failed for desktop drivers: %s\n",
+                         sdl->SDL_GetError ? sdl->SDL_GetError() : "unknown");
+            cleanup();
+            return false;
+        }
     }
-    sdl_video_inited = true;
-
-    (void)sdl->SDL_GL_SetAttribute(kSdlGlContextProfileMask, kSdlGlContextProfileEs);
-    (void)sdl->SDL_GL_SetAttribute(kSdlGlContextMajorVersion, 2);
-    (void)sdl->SDL_GL_SetAttribute(kSdlGlContextMinorVersion, 0);
-    (void)sdl->SDL_GL_SetAttribute(kSdlGlDoublebuffer, 1);
 
     fullscreen = opts.fullscreen;
-    const int init_w = opts.desktop_native ? kDefaultNativeW : (video::kLcdWidth * kLcdScale);
-    const int init_h = opts.desktop_native ? kDefaultNativeH : (video::kLcdHeight * kLcdScale);
+    int init_w = opts.desktop_native ? kDefaultNativeW : (video::kLcdWidth * kLcdScale);
+    int init_h = opts.desktop_native ? kDefaultNativeH : (video::kLcdHeight * kLcdScale);
+    uint32_t win_flags = kSdlWindowOpengl | kSdlWindowResizable;
+    if (fullscreen) {
+        SdlDisplayMode dm{};
+        const int dm_rc = sdl->SDL_GetDesktopDisplayMode
+                              ? sdl->SDL_GetDesktopDisplayMode(0, &dm)
+                              : sdl->SDL_GetCurrentDisplayMode(0, &dm);
+        const int disp_w = (dm_rc == 0) ? dm.w : 0;
+        const int disp_h = (dm_rc == 0) ? dm.h : 0;
+        int buf_w = 0;
+        int buf_h = 0;
+        if (compute_fullscreen_buffer_size(disp_w, disp_h, opts.max_fullscreen_height, buf_w, buf_h)) {
+            init_w = buf_w;
+            init_h = buf_h;
+            win_flags = kSdlWindowOpengl | kSdlWindowFullscreen;
+        } else {
+            win_flags = kSdlWindowOpengl | kSdlWindowFullscreenDesktop;
+        }
+    }
+
     const char* init_title = fullscreen
                                  ? "czx - HDMI Fullscreen"
                                  : (opts.desktop_native ? "czx - Desktop Mode"
                                                         : "czx - Cardputer Zero Simulator (320x170)");
-    const uint32_t win_flags =
-        kSdlWindowOpengl | (fullscreen ? kSdlWindowFullscreenDesktop : kSdlWindowResizable);
 
-    window = sdl->SDL_CreateWindow(init_title, kSdlWindowPosCentered, kSdlWindowPosCentered,
-                                   init_w, init_h, win_flags);
-    if (!window) {
-        std::fprintf(stderr, "czx: SDL_CreateWindow failed: %s\n",
+    auto try_create = [&](bool use_rgb565) -> bool {
+        (void)sdl->SDL_GL_SetAttribute(kSdlGlContextProfileMask, kSdlGlContextProfileEs);
+        (void)sdl->SDL_GL_SetAttribute(kSdlGlContextMajorVersion, 2);
+        (void)sdl->SDL_GL_SetAttribute(kSdlGlContextMinorVersion, 0);
+        (void)sdl->SDL_GL_SetAttribute(kSdlGlDoublebuffer, 1);
+        (void)sdl->SDL_GL_SetAttribute(kSdlGlDepthSize, 0);
+        (void)sdl->SDL_GL_SetAttribute(kSdlGlStencilSize, 0);
+        (void)sdl->SDL_GL_SetAttribute(kSdlGlAlphaSize, 0);
+        (void)sdl->SDL_GL_SetAttribute(kSdlGlRedSize, use_rgb565 ? 5 : 8);
+        (void)sdl->SDL_GL_SetAttribute(kSdlGlGreenSize, use_rgb565 ? 6 : 8);
+        (void)sdl->SDL_GL_SetAttribute(kSdlGlBlueSize, use_rgb565 ? 5 : 8);
+
+        window = sdl->SDL_CreateWindow(init_title, kSdlWindowPosCentered, kSdlWindowPosCentered,
+                                       init_w, init_h, win_flags);
+        if (!window) {
+            return false;
+        }
+        gl_ctx = sdl->SDL_GL_CreateContext(window);
+        if (!gl_ctx || sdl->SDL_GL_MakeCurrent(window, gl_ctx) != 0) {
+            if (gl_ctx) {
+                sdl->SDL_GL_DeleteContext(gl_ctx);
+                gl_ctx = nullptr;
+            }
+            sdl->SDL_DestroyWindow(window);
+            window = nullptr;
+            return false;
+        }
+        return true;
+    };
+
+    const bool created = opts.prefer_rgb565 ? (try_create(true) || try_create(false)) : try_create(false);
+    if (!created) {
+        std::fprintf(stderr, "czx: SDL_CreateWindow/GL_CreateContext(GLES2) failed: %s\n",
                      sdl->SDL_GetError ? sdl->SDL_GetError() : "unknown");
         cleanup();
         return false;
     }
+
     last_title = init_title;
     if (!fullscreen) {
         sdl->SDL_SetWindowMinimumSize(window, kMinWinW, kMinWinH);
     } else if (sdl->SDL_ShowCursor) {
         (void)sdl->SDL_ShowCursor(0);
-    }
-
-    gl_ctx = sdl->SDL_GL_CreateContext(window);
-    if (!gl_ctx || sdl->SDL_GL_MakeCurrent(window, gl_ctx) != 0) {
-        std::fprintf(stderr, "czx: SDL_GL_CreateContext(GLES2) failed: %s\n",
-                     sdl->SDL_GetError ? sdl->SDL_GetError() : "unknown");
-        cleanup();
-        return false;
     }
 
     if (sdl->SDL_GL_SetSwapInterval(opts.vsync ? 1 : 0) == 0) {
@@ -401,6 +506,27 @@ bool Sdl2Gles2Context::init(const PlatformOptions& opts) {
         cleanup();
         return false;
     }
+
+    int dw = 0;
+    int dh = 0;
+    drawable_size(dw, dh);
+    int attr_r = -1;
+    int attr_g = -1;
+    int attr_b = -1;
+    int attr_a = -1;
+    int attr_d = -1;
+    if (sdl->SDL_GL_GetAttribute) {
+        (void)sdl->SDL_GL_GetAttribute(kSdlGlRedSize, &attr_r);
+        (void)sdl->SDL_GL_GetAttribute(kSdlGlGreenSize, &attr_g);
+        (void)sdl->SDL_GL_GetAttribute(kSdlGlBlueSize, &attr_b);
+        (void)sdl->SDL_GL_GetAttribute(kSdlGlAlphaSize, &attr_a);
+        (void)sdl->SDL_GL_GetAttribute(kSdlGlDepthSize, &attr_d);
+    }
+    const char* drv = sdl->SDL_GetCurrentVideoDriver ? sdl->SDL_GetCurrentVideoDriver() : nullptr;
+    std::fprintf(stderr,
+                 "czx: SDL2 GLES2 ready (driver=%s, drawable=%dx%d, rgba=%d%d%d%d depth=%d, vsync=%d)\n",
+                 drv ? drv : "unknown", dw, dh, attr_r, attr_g, attr_b, attr_a, attr_d,
+                 vsync_enabled ? 1 : 0);
 
     return true;
 }

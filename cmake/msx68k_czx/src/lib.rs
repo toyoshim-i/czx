@@ -309,6 +309,8 @@ struct CoreState {
     cur_fps: f64,
     gpu_scale: GpuScaleMode,
     pending_scaled: bool,
+    pending_native_w: u32,
+    pending_native_h: u32,
     need_full_vram_upload: bool,
     hw_render_enabled: bool,
     renderer_gen: ShaderGeneration,
@@ -1467,6 +1469,8 @@ fn load_game_inner(game: *const RetroGameInfo) -> bool {
         cur_fps,
         gpu_scale,
         pending_scaled: false,
+        pending_native_w: 0,
+        pending_native_h: 0,
         need_full_vram_upload: hw_render_enabled,
         hw_render_enabled,
         renderer_gen,
@@ -1804,6 +1808,8 @@ pub unsafe extern "C" fn retro_reset() {
                     &mut st.audio_events,
                 );
                 st.pending_scaled = false;
+                st.pending_native_w = 0;
+                st.pending_native_h = 0;
                 st.need_full_vram_upload = true;
             }
         }
@@ -1981,6 +1987,8 @@ pub unsafe extern "C" fn retro_run() {
         let t_vicon0 = st.perf_log.then(Instant::now);
         let mut presented_w = st.cur_w;
         let mut presented_h = st.cur_h;
+        let mut native_w = st.cur_w;
+        let mut native_h = st.cur_h;
         let next_fps = compute_crtc_fps(&st.vm.bus.crtc);
 
         let (timing, t2, t3): (Option<FrameTimingStats>, Option<Instant>, Option<Instant>) =
@@ -2011,6 +2019,8 @@ pub unsafe extern "C" fn retro_run() {
                     let w = raw_w.max(1);
                     let h = raw_h.max(1);
                     notify_geometry_and_fps(st, w, h, aspect_for_resolution(w, h), next_fps);
+                    native_w = w;
+                    native_h = h;
                     presented_w = w;
                     presented_h = h;
                     if let Some(vcb) = video_cb {
@@ -2029,9 +2039,11 @@ pub unsafe extern "C" fn retro_run() {
                 }
                 (timing, t_a, t_b)
             } else {
-                let (rendered_opt, out_scaled, timing, t_a, t_b): (
+                let (rendered_opt, out_scaled, out_nw, out_nh, timing, t_a, t_b): (
                     Option<RenderedFrame565>,
                     bool,
+                    u32,
+                    u32,
                     Option<FrameTimingStats>,
                     Option<Instant>,
                     Option<Instant>,
@@ -2042,12 +2054,18 @@ pub unsafe extern "C" fn retro_run() {
                             st.need_full_vram_upload = false;
                             let _ = st.vm.bus.take_written_vram_pages();
                             let frame = comp.render_frame_readonly(&st.vm.bus).to_rgb565();
+                            let fw = frame.width.max(1);
+                            let fh = frame.height.max(1);
                             st.pending_scaled = false;
+                            st.pending_native_w = 0;
+                            st.pending_native_h = 0;
                             let t_end = st.perf_log.then(Instant::now);
-                            (Some(frame), false, None, t_vicon0, t_end)
+                            (Some(frame), false, fw, fh, None, t_vicon0, t_end)
                         } else if st.renderer_gen == ShaderGeneration::Gles2 {
                             let prev = comp.finish_frame_rgb565();
                             let prev_scaled = st.pending_scaled;
+                            let prev_nw = st.pending_native_w;
+                            let prev_nh = st.pending_native_h;
                             let timing = if prev.is_some() && st.perf_detail {
                                 comp.last_timing()
                             } else {
@@ -2057,6 +2075,8 @@ pub unsafe extern "C" fn retro_run() {
                             let (raw_w, raw_h) = st.vm.bus.crtc.active_resolution();
                             let nw = raw_w.clamp(256, 1024);
                             let nh = raw_h.clamp(128, 1024);
+                            st.pending_native_w = nw;
+                            st.pending_native_h = nh;
                             if let Some((dw, dh)) = compute_gpu_scale_target(st.gpu_scale, nw, nh) {
                                 comp.submit_frame_scaled_rgb565(&mut st.vm.bus, dw, dh);
                                 st.pending_scaled = true;
@@ -2065,15 +2085,19 @@ pub unsafe extern "C" fn retro_run() {
                                 st.pending_scaled = false;
                             }
                             let t_after_submit = st.perf_log.then(Instant::now);
-                            (prev, prev_scaled, timing, t_after_finish, t_after_submit)
+                            (prev, prev_scaled, prev_nw, prev_nh, timing, t_after_finish, t_after_submit)
                         } else {
                             let frame = comp.render_frame_rgb565(&mut st.vm.bus);
+                            let fw = frame.width.max(1);
+                            let fh = frame.height.max(1);
                             st.pending_scaled = false;
+                            st.pending_native_w = 0;
+                            st.pending_native_h = 0;
                             let t_end = st.perf_log.then(Instant::now);
-                            (Some(frame), false, None, t_vicon0, t_end)
+                            (Some(frame), false, fw, fh, None, t_vicon0, t_end)
                         }
                     } else {
-                        (None, false, None, t_vicon0, t_vicon0)
+                        (None, false, 0, 0, None, t_vicon0, t_vicon0)
                     }
                 });
 
@@ -2086,6 +2110,8 @@ pub unsafe extern "C" fn retro_run() {
                         aspect_for_resolution(w, h)
                     };
                     notify_geometry_and_fps(st, w, h, aspect, next_fps);
+                    native_w = if out_nw > 0 { out_nw } else { w };
+                    native_h = if out_nh > 0 { out_nh } else { h };
                     presented_w = w;
                     presented_h = h;
 
@@ -2197,8 +2223,14 @@ pub unsafe extern "C" fn retro_run() {
                         " [up={up_ms:.2}ms draw={draw_ms:.2}ms rb={rb_ms:.2}ms]"
                     ));
                 }
+                let fps = st.cur_fps;
+                let mode_str = if native_w != presented_w || native_h != presented_h {
+                    format!("{native_w}x{native_h}@{fps:.1}Hz->{presented_w}x{presented_h}")
+                } else {
+                    format!("{presented_w}x{presented_h}@{fps:.1}Hz")
+                };
                 eprintln!(
-                    "[msx68k perf] [{gen:?}/{opm_lbl}] cpu={cpu_ms:.2}ms finish={fin_ms:.2}ms submit={sub_ms:.2}ms aud={aud_ms:.2}ms total={total_ms:.2}ms{extra} ({presented_w}x{presented_h})"
+                    "[msx68k perf] [{gen:?}/{opm_lbl}] cpu={cpu_ms:.2}ms finish={fin_ms:.2}ms submit={sub_ms:.2}ms aud={aud_ms:.2}ms total={total_ms:.2}ms{extra} ({mode_str})"
                 );
                 st.perf_frames = 0;
                 st.perf_cpu_ns = 0;

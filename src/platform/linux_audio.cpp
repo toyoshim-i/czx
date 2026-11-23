@@ -131,6 +131,7 @@ void LinuxPulseAudio::cleanup() {
     }
     active_ = false;
     sample_rate_ = 0;
+    buffer_tlength_ = 0;
     target_sink_.clear();
 
     fn_ml_new_ = nullptr;
@@ -307,6 +308,7 @@ bool LinuxPulseAudio::init_with_sink(uint32_t sample_rate, const char* sink_dev)
 
     active_ = true;
     sample_rate_ = sample_rate;
+    buffer_tlength_ = tlength;
     fn_ml_unlock_(ml_);
 
     std::fprintf(stderr, "czx: PulseAudio/PipeWire audio active (%u Hz)\n", sample_rate);
@@ -327,6 +329,25 @@ void LinuxPulseAudio::write_samples(const int16_t* stereo_s16, size_t frame_coun
         }
     }
     fn_ml_unlock_(ml_);
+}
+
+double LinuxPulseAudio::get_buffer_fill_ratio() const {
+    if (!active_ || !ml_ || !stream_ || buffer_tlength_ == 0u || !fn_stream_writable_size_ ||
+        !fn_stream_get_state_ || !fn_ml_lock_ || !fn_ml_unlock_) {
+        return -1.0;
+    }
+    fn_ml_lock_(ml_);
+    double ratio = -1.0;
+    if (fn_stream_get_state_(stream_) == kPaStreamReady) {
+        const size_t avail = fn_stream_writable_size_(stream_);
+        if (avail != static_cast<size_t>(-1)) {
+            const size_t tlen = static_cast<size_t>(buffer_tlength_);
+            const double queued = (avail >= tlen) ? 0.0 : static_cast<double>(tlen - avail);
+            ratio = std::clamp(queued / static_cast<double>(tlen), 0.0, 1.0);
+        }
+    }
+    fn_ml_unlock_(ml_);
+    return ratio;
 }
 
 bool LinuxPulseAudio::wait_operation_locked(PaOperation* op) {
@@ -568,6 +589,16 @@ void LinuxAudio::write_samples(const int16_t* stereo_s16, size_t frame_count) {
     } else if (active_ == ActiveBackend::Alsa) {
         alsa_.write_samples(stereo_s16, frame_count);
     }
+}
+
+double LinuxAudio::get_buffer_fill_ratio() const {
+    if (active_ == ActiveBackend::Pulse) {
+        return pulse_.get_buffer_fill_ratio();
+    }
+    if (active_ == ActiveBackend::Alsa) {
+        return alsa_.get_buffer_fill_ratio();
+    }
+    return -1.0;
 }
 
 const char* LinuxAudio::backend_name() const {

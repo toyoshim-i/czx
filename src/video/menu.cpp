@@ -14,9 +14,11 @@ namespace {
 enum class MenuRow {
     Core = 0,
     Variant,
+    Region,
     Drive1OrMediaOrPreset,
     Drive2OrEject,
     Display,
+    Vsync,
     Aspect,
     Borders,
     Margin,
@@ -29,14 +31,20 @@ enum class MenuRow {
 
 std::vector<MenuRow> build_rows(const MenuViewModel& vm) {
     std::vector<MenuRow> rows;
-    rows.reserve(13);
+    rows.reserve(15);
     rows.push_back(MenuRow::Core);
     if (vm.has_variant_option) {
         rows.push_back(MenuRow::Variant);
     }
+    if (vm.has_region_option) {
+        rows.push_back(MenuRow::Region);
+    }
     rows.push_back(MenuRow::Drive1OrMediaOrPreset);
     rows.push_back(MenuRow::Drive2OrEject);
     rows.push_back(MenuRow::Display);
+    if (vm.has_vsync_option) {
+        rows.push_back(MenuRow::Vsync);
+    }
     rows.push_back(MenuRow::Aspect);
     rows.push_back(MenuRow::Borders);
     rows.push_back(MenuRow::Margin);
@@ -92,6 +100,8 @@ MenuAction OverlayMenu::handle_key(const czx_key_event_t& ev, const MenuViewMode
             return MenuAction::None;
         case MenuRow::Variant:
             return left ? MenuAction::CycleVariantPrev : MenuAction::CycleVariantNext;
+        case MenuRow::Region:
+            return left ? MenuAction::CycleRegionPrev : MenuAction::CycleRegionNext;
         case MenuRow::Drive1OrMediaOrPreset:
             if (vm.drive_count >= 2u && vm.has_media_browser) {
                 if (left) return MenuAction::EjectDrive1;
@@ -109,6 +119,8 @@ MenuAction OverlayMenu::handle_key(const czx_key_event_t& ev, const MenuViewMode
             return (ok && vm.can_eject) ? MenuAction::EjectMedia : MenuAction::None;
         case MenuRow::Display:
             return left ? MenuAction::CycleDisplayModePrev : MenuAction::CycleDisplayModeNext;
+        case MenuRow::Vsync:
+            return MenuAction::ToggleVsync;
         case MenuRow::Aspect:
             return MenuAction::ToggleAspectPolicy;
         case MenuRow::Borders:
@@ -184,9 +196,28 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
     const int sel = std::clamp(cursor_, 0, count - 1);
 
     constexpr int kListY = kBoxY + 17;
-    const int row_h = (count > 12) ? 10 : 11;
+    int row_h = 11;
+    int visible = count;
+    if (count <= 12) {
+        row_h = 11;
+        visible = count;
+        scroll_ = 0;
+    } else if (count == 13) {
+        row_h = 10;
+        visible = 13;
+        scroll_ = 0;
+    } else {
+        row_h = 11;
+        visible = 12;
+        if (sel < scroll_) {
+            scroll_ = sel;
+        } else if (sel >= scroll_ + visible) {
+            scroll_ = sel - visible + 1;
+        }
+        scroll_ = std::clamp(scroll_, 0, count - visible);
+    }
 
-    for (int i = 0; i < count; ++i) {
+    for (int i = scroll_; i < scroll_ + visible; ++i) {
         const MenuRow kind = row_types[static_cast<size_t>(i)];
         const char* label = "";
         const char* val = "";
@@ -198,6 +229,10 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
             case MenuRow::Variant:
                 label = !vm.variant_option_label.empty() ? vm.variant_option_label.c_str() : "Model";
                 val = vm.variant_value_label.c_str();
+                break;
+            case MenuRow::Region:
+                label = "Region";
+                val = vm.region_value_label.c_str();
                 break;
             case MenuRow::Drive1OrMediaOrPreset:
                 label = dual ? vm.drive1_name.c_str() : (vm.has_media_browser ? "Load Media" : "Preset");
@@ -218,6 +253,10 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
             case MenuRow::Display:
                 label = "Display";
                 val = vm.desktop_native_active ? desktop_label : display_mode_name(vm.display_mode);
+                break;
+            case MenuRow::Vsync:
+                label = "VSync";
+                val = vm.vsync_enabled ? "On" : "Off";
                 break;
             case MenuRow::Aspect:
                 label = "Aspect";
@@ -256,7 +295,7 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
                 break;
         }
 
-        const int ry = kListY + i * row_h;
+        const int ry = kListY + (i - scroll_) * row_h;
         const bool selected = (i == sel);
         if (selected) {
             canvas.fill_rect(kBoxX + 6, ry, kBoxW - 12, row_h - 1, pack_rgb565(30, 86, 124));
@@ -273,6 +312,18 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
 
         const int vw = Rgb565Canvas::text_width(val);
         canvas.draw_text(kBoxX + kBoxW - 10 - vw, ry + 1, val, val_col);
+    }
+
+    if (count > visible) {
+        const int track_x = kBoxX + kBoxW - 5;
+        const int track_y = kListY;
+        const int track_h = visible * row_h - 1;
+        canvas.fill_rect(track_x, track_y, 2, track_h, pack_rgb565(40, 54, 72));
+        const int thumb_h = std::max(8, (track_h * visible) / count);
+        const int max_scroll = count - visible;
+        const int thumb_y =
+            track_y + ((max_scroll > 0) ? ((track_h - thumb_h) * scroll_) / max_scroll : 0);
+        canvas.fill_rect(track_x, thumb_y, 2, thumb_h, pack_rgb565(88, 210, 255));
     }
 
     canvas.draw_hline(kBoxX + 6, kBoxY + kBoxH - 14, kBoxW - 12, pack_rgb565(56, 74, 98));

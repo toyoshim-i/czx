@@ -147,6 +147,7 @@ typedef struct czx_host {
     const char* initial_media;
     bool disable_tape_warp;
     const char* initial_media2;
+    const char* initial_region;
 } czx_host_t;
 
 typedef struct czx_core_desc {

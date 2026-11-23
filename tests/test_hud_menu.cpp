@@ -105,17 +105,40 @@ void test_render_hud_activity_overlay() {
     // Alt held with fps_x10 > 0 draws top-left FPS pill; releasing Alt hides it.
     std::fill(fb.begin(), fb.end(), 0);
     hud.fps_x10 = 312;
+    hud.target_fps_x10 = 600;
     hud.alt_held = true;
     czx::video::render_hud(fb.data(), hud, layout);
-    CHECK(count_nonzero_in_rect(fb, 4, 4, 70, 18) > 40);
+    CHECK(count_nonzero_in_rect(fb, 4, 4, 110, 18) > 40);
 
     std::fill(fb.begin(), fb.end(), 0);
     hud.alt_held = false;
     czx::video::render_hud(fb.data(), hud, layout);
-    CHECK(count_nonzero_in_rect(fb, 4, 4, 70, 18) == 0);
+    CHECK(count_nonzero_in_rect(fb, 4, 4, 110, 18) == 0);
+
+    // FPS indicator dot color reflects % of target_fps_x10 (PAL 50.1 FPS at 100% is green).
+    const size_t dot_idx = 8u * czx::video::kLcdWidth + 8u;
+    std::fill(fb.begin(), fb.end(), 0);
+    hud.alt_held = true;
+    hud.force_alt_bar = false;
+    hud.menu_open = false;
+    hud.target_fps_x10 = 501;
+    hud.fps_x10 = 501;
+    czx::video::render_hud(fb.data(), hud, layout);
+    CHECK(fb[dot_idx] == czx::video::pack_rgb565(64, 235, 160));
+
+    std::fill(fb.begin(), fb.end(), 0);
+    hud.fps_x10 = 450;  // ~90% -> yellow
+    czx::video::render_hud(fb.data(), hud, layout);
+    CHECK(fb[dot_idx] == czx::video::pack_rgb565(255, 204, 64));
+
+    std::fill(fb.begin(), fb.end(), 0);
+    hud.fps_x10 = 200;  // ~40% -> red
+    czx::video::render_hud(fb.data(), hud, layout);
+    CHECK(fb[dot_idx] == czx::video::pack_rgb565(255, 88, 72));
 
     // Volume OSD draws centered pill when running, top-right inside header when menu open, nothing when timer=0.
     std::fill(fb.begin(), fb.end(), 0);
+    hud.alt_held = false;
     hud.show_activity_indicator = false;
     hud.fps_x10 = 0;
     hud.volume_osd_frames = 30;
@@ -289,6 +312,33 @@ void test_overlay_menu() {
     CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
     CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), ret_vm) == czx::video::MenuAction::ApplyCore);
     CHECK(!menu.is_open());
+
+    // Region + VSync + Variant (15 rows with scrolling).
+    czx::video::MenuViewModel c64_full_vm = c64_vm;
+    c64_full_vm.has_region_option = true;
+    c64_full_vm.region_value_label = "PAL (50Hz)";
+    c64_full_vm.has_vsync_option = true;
+    c64_full_vm.vsync_enabled = true;
+    menu.set_open(true);
+    menu.reset_cursor();
+    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), c64_full_vm) == czx::video::MenuAction::None);  // 1: Variant
+    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), c64_full_vm) == czx::video::MenuAction::None);  // 2: Region
+    CHECK(menu.handle_key(key_press(CZX_KEY_LEFT), c64_full_vm) == czx::video::MenuAction::CycleRegionPrev);
+    CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), c64_full_vm) == czx::video::MenuAction::CycleRegionNext);
+    for (int i = 0; i < 4; ++i) {
+        CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), c64_full_vm) == czx::video::MenuAction::None);
+    }  // 6: VSync
+    CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), c64_full_vm) == czx::video::MenuAction::ToggleVsync);
+    for (int i = 0; i < 8; ++i) {
+        CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), c64_full_vm) == czx::video::MenuAction::None);
+        std::fill(fb.begin(), fb.end(), 0);
+        menu.render(fb.data(), c64_full_vm);
+        CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
+    }  // 14: Quit -> wrap to 0: Core on next DOWN
+    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), c64_full_vm) == czx::video::MenuAction::None);
+    std::fill(fb.begin(), fb.end(), 0);
+    menu.render(fb.data(), c64_full_vm);
+    CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), c64_full_vm) == czx::video::MenuAction::CycleCoreNext);
 }
 
 }  // namespace

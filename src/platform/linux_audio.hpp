@@ -16,6 +16,7 @@ public:
     bool init(uint32_t sample_rate) override;
     bool init_with_sink(uint32_t sample_rate, const char* sink_dev);
     void write_samples(const int16_t* stereo_s16, size_t frame_count) override;
+    double get_buffer_fill_ratio() const override;
     const char* backend_name() const override { return active_ ? "linux-pulse" : "null-audio"; }
     bool get_system_volume(SystemVolumeState& out) override;
     bool adjust_system_volume(int delta_percent, SystemVolumeState& out) override;
@@ -94,6 +95,7 @@ private:
     bool started_ = false;
     bool active_ = false;
     uint32_t sample_rate_ = 0;
+    uint32_t buffer_tlength_ = 0;
     std::string target_sink_;
 
     FnMlNew fn_ml_new_ = nullptr;
@@ -141,6 +143,7 @@ public:
 
     bool init(uint32_t sample_rate) override;
     void write_samples(const int16_t* stereo_s16, size_t frame_count) override;
+    double get_buffer_fill_ratio() const override;
     const char* backend_name() const override;
     bool get_system_volume(SystemVolumeState& out) override;
     bool adjust_system_volume(int delta_percent, SystemVolumeState& out) override;

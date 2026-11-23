@@ -255,6 +255,7 @@ void test_launcher_state_persistence() {
     c64.media1_label = "Giana.d64";
     c64.last_media_dir = "/home/user/czx/media/c64";
     c64.variant_id = "accurate";
+    c64.region_id = "ntsc";
     c64.has_display_prefs = true;
     c64.display_mode = czx::video::DisplayMode::AspectFit;
     c64.desktop_native = true;
@@ -296,6 +297,7 @@ void test_launcher_state_persistence() {
     CHECK(lc64.media1_label == c64.media1_label);
     CHECK(lc64.last_media_dir == c64.last_media_dir);
     CHECK(lc64.variant_id == "accurate");
+    CHECK(lc64.region_id == "ntsc");
     CHECK(lc64.has_display_prefs);
     CHECK(lc64.display_mode == czx::video::DisplayMode::AspectFit);
     CHECK(lc64.desktop_native);

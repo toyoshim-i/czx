@@ -40,6 +40,8 @@ struct AppConfig {
     bool activity_indicator_override = false;
     bool tape_warp_enabled = true;
     bool tape_warp_override = false;
+    bool vsync_enabled = true;
+    bool vsync_override = false;
     int headless_frames = 0;
     bool verify_nonblank = false;
     czx::platform::PlatformOptions platform;
@@ -145,6 +147,8 @@ private:
     std::string last_window_title_;
     bool show_activity_indicator_ = true;
     bool tape_warp_enabled_ = true;
+    bool vsync_enabled_ = true;
+    std::string c64_region_ = "auto";
     bool live_warp_requested_ = false;
     uint32_t activity_flags_ = 0;
     int8_t activity_tape_percent_ = -1;
@@ -162,6 +166,8 @@ private:
     void load_app_config();
     void save_app_config() const;
     void sync_core_warp_option();
+    void sync_core_region_option();
+    std::string resolve_target_region_id(int target_index) const;
     void sync_core_gpu_scale_option();
     void sync_router_menu_open();
     void clear_activity_state() noexcept;

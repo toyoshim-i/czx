@@ -33,6 +33,7 @@ void print_usage(const char* prog) {
         "  --margin <auto|black>         Fill letterbox/pillarbox margins (default: auto)\n"
         "  --activity <on|off>           Show bottom-right tape/disk access indicator (default: on)\n"
         "  --tape-warp <on|off>          Uncapped fast-forward during MZ/C64 tape loads (default: on)\n"
+        "  --vsync <on|off>              Enable VSync on desktop SDL2 display (default: on)\n"
         "  --drm <path>                  Override DRM device path\n"
         "  --fb <path>                   Override fbdev device path\n"
         "  --fbdev                       Prefer fbdev over DRM on device\n"
@@ -130,6 +131,18 @@ int main(int argc, char** argv) {
                 cfg.tape_warp_override = true;
             } else {
                 std::fprintf(stderr, "Unknown tape-warp mode: %s\n", tw);
+                return 2;
+            }
+        } else if (std::strcmp(arg, "--vsync") == 0 && i + 1 < argc) {
+            const char* vs = argv[++i];
+            if (std::strcmp(vs, "on") == 0) {
+                cfg.vsync_enabled = true;
+                cfg.vsync_override = true;
+            } else if (std::strcmp(vs, "off") == 0) {
+                cfg.vsync_enabled = false;
+                cfg.vsync_override = true;
+            } else {
+                std::fprintf(stderr, "Unknown vsync mode: %s\n", vs);
                 return 2;
             }
         } else if (std::strcmp(arg, "--drm") == 0 && i + 1 < argc) {

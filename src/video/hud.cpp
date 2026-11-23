@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdio>
 
 namespace czx::video {
@@ -183,15 +184,22 @@ void draw_fps_indicator(Rgb565Canvas& canvas, const HudState& hud) {
         return;
     }
 
-    char label[24];
-    std::snprintf(label, sizeof(label), "%d.%d FPS", hud.fps_x10 / 10, hud.fps_x10 % 10);
+    const int target_x10 = (hud.target_fps_x10 > 0) ? hud.target_fps_x10 : 600;
+    const int pct = std::clamp(
+        static_cast<int>(std::lround(static_cast<double>(hud.fps_x10) * 100.0 /
+                                     static_cast<double>(target_x10))),
+        1, 999);
+
+    char label[32];
+    std::snprintf(label, sizeof(label), "%d.%d FPS (%d%%)",
+                  hud.fps_x10 / 10, hud.fps_x10 % 10, pct);
 
     uint16_t dot_col = pack_rgb565(64, 235, 160);
     uint16_t border_col = pack_rgb565(56, 196, 136);
-    if (hud.fps_x10 < 300) {
+    if (pct < 50) {
         dot_col = pack_rgb565(255, 88, 72);
         border_col = pack_rgb565(230, 80, 68);
-    } else if (hud.fps_x10 < 550) {
+    } else if (pct < 95) {
         dot_col = pack_rgb565(255, 204, 64);
         border_col = pack_rgb565(220, 172, 52);
     }

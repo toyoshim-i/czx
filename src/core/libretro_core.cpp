@@ -1878,7 +1878,17 @@ private:
             options_["vice_resid_sampling"] = "fast";
             options_["vice_drive_true_emulation"] = "enabled";
             options_["vice_zoom_mode"] = "none";
-            options_["vice_c64_model"] = "C64 PAL auto";
+            std::string reg = host_.initial_region ? host_.initial_region : "";
+            for (char& ch : reg) {
+                if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+            }
+            if (reg == "pal") {
+                options_["vice_c64_model"] = "C64 PAL";
+            } else if (reg == "ntsc") {
+                options_["vice_c64_model"] = "C64 NTSC";
+            } else {
+                options_["vice_c64_model"] = "C64 PAL auto";
+            }
             options_["vice_joyport"] = "2";
             options_["vice_autoloadwarp"] = host_.disable_tape_warp ? "disabled" : "enabled";
             options_["vice_warp_boost"] = "enabled";
@@ -2756,8 +2766,8 @@ bool LibretroCoreLoader::open_library() {
 
 void LibretroCoreLoader::update_av_timing(double fps, double) {
     if (fps > 1.0 && fps < 240.0) {
-        desc_.fps_num = static_cast<uint32_t>(std::lround(fps * 1000.0));
-        desc_.fps_den = 1000u;
+        desc_.fps_num = static_cast<uint32_t>(std::lround(fps * 1000000.0));
+        desc_.fps_den = 1000000u;
     }
     desc_.audio_sample_rate = kTargetAudioSampleRate;
 }

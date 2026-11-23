@@ -90,9 +90,20 @@ bool DesktopSdl2Context::init(const PlatformOptions& opts) {
     last_title = init_title;
     SDL_SetWindowMinimumSize(window, kMinWinW, kMinWinH);
 
-    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!renderer) {
+    const Uint32 flags =
+        SDL_RENDERER_ACCELERATED | (opts.vsync ? static_cast<Uint32>(SDL_RENDERER_PRESENTVSYNC) : 0u);
+    renderer = SDL_CreateRenderer(window, -1, flags);
+    if (renderer) {
+        vsync_enabled = opts.vsync;
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+        vsync_toggleable = true;
+#else
+        vsync_toggleable = false;
+#endif
+    } else {
         renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+        vsync_enabled = false;
+        vsync_toggleable = false;
     }
     if (!renderer) return false;
 
@@ -106,6 +117,20 @@ bool DesktopSdl2Context::init(const PlatformOptions& opts) {
         SDL_SetTextureBlendMode(overlay_texture, SDL_BLENDMODE_BLEND);
     }
     return texture != nullptr && overlay_texture != nullptr;
+}
+
+bool DesktopSdl2Context::set_vsync_enabled(bool enabled) {
+    if (!renderer || !vsync_toggleable) return false;
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+    if (SDL_RenderSetVSync(renderer, enabled ? 1 : 0) == 0) {
+        vsync_enabled = enabled;
+        return true;
+    }
+    return false;
+#else
+    (void)enabled;
+    return false;
+#endif
 }
 
 void DesktopSdl2Context::resize_window(int w, int h) {

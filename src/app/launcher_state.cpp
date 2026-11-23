@@ -409,6 +409,8 @@ LauncherState load_launcher_state(const std::string& path) {
                 ts.preset_index = parse_u32_val(val, ts.preset_index);
             } else if (key == "variant_id") {
                 ts.variant_id = val;
+            } else if (key == "region") {
+                ts.region_id = val;
             } else if (key == "cycle_accurate") {
                 if (ts.variant_id.empty() && current_target == "c64") {
                     ts.variant_id = parse_bool_val(val, false) ? "accurate" : "fast";
@@ -469,6 +471,9 @@ bool save_launcher_state(const std::string& path, const LauncherState& state) {
             ofs << "preset_index = " << ts.preset_index << "\n";
             if (!ts.variant_id.empty()) {
                 ofs << "variant_id = " << sanitize_ini_value(ts.variant_id) << "\n";
+            }
+            if (!ts.region_id.empty()) {
+                ofs << "region = " << sanitize_ini_value(ts.region_id) << "\n";
             }
             ofs << "has_display_prefs = " << (ts.has_display_prefs ? "true" : "false") << "\n";
             ofs << "display_mode = " << display_mode_to_ini(ts.display_mode) << "\n";

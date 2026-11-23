@@ -15,6 +15,7 @@ public:
 
     bool init(uint32_t sample_rate) override;
     void write_samples(const int16_t* stereo_s16, size_t frame_count) override;
+    double get_buffer_fill_ratio() const override;
     const char* backend_name() const override { return active_ ? "linux-alsa" : "null-audio"; }
     bool get_system_volume(SystemVolumeState& out) override;
     bool adjust_system_volume(int delta_percent, SystemVolumeState& out) override;
@@ -28,6 +29,7 @@ private:
     using FnPcmOpen = int (*)(PcmHandle*, const char*, int, int);
     using FnPcmSetParams = int (*)(PcmHandle, int, int, unsigned int, unsigned int, int, unsigned int);
     using FnPcmWritei = long (*)(PcmHandle, const void*, unsigned long);
+    using FnPcmDelay = int (*)(PcmHandle, long*);
     using FnPcmRecover = int (*)(PcmHandle, int, int);
     using FnPcmDrain = int (*)(PcmHandle);
     using FnPcmClose = int (*)(PcmHandle);
@@ -53,12 +55,14 @@ private:
     PcmHandle pcm_ = nullptr;
     bool active_ = false;
     uint32_t sample_rate_ = 0;
+    uint32_t buffer_frames_ = 0;
     bool soft_muted_ = false;
     int soft_mute_prev_pct_ = 60;
 
     FnPcmOpen fn_open_ = nullptr;
     FnPcmSetParams fn_set_params_ = nullptr;
     FnPcmWritei fn_writei_ = nullptr;
+    FnPcmDelay fn_delay_ = nullptr;
     FnPcmRecover fn_recover_ = nullptr;
     FnPcmDrain fn_drain_ = nullptr;
     FnPcmClose fn_close_ = nullptr;

@@ -59,11 +59,13 @@ void LinuxAlsaAudio::cleanup() {
     }
     active_ = false;
     sample_rate_ = 0;
+    buffer_frames_ = 0;
     soft_muted_ = false;
     soft_mute_prev_pct_ = 60;
     fn_open_ = nullptr;
     fn_set_params_ = nullptr;
     fn_writei_ = nullptr;
+    fn_delay_ = nullptr;
     fn_recover_ = nullptr;
     fn_drain_ = nullptr;
     fn_close_ = nullptr;
@@ -110,6 +112,7 @@ bool LinuxAlsaAudio::open_device(const char* device, uint32_t sample_rate, std::
         return false;
     }
 
+    buffer_frames_ = std::max<uint32_t>(1u, sample_rate / 10u);
     return true;
 }
 
@@ -129,6 +132,7 @@ bool LinuxAlsaAudio::init(uint32_t sample_rate) {
     fn_open_ = reinterpret_cast<FnPcmOpen>(dlsym(dl_, "snd_pcm_open"));
     fn_set_params_ = reinterpret_cast<FnPcmSetParams>(dlsym(dl_, "snd_pcm_set_params"));
     fn_writei_ = reinterpret_cast<FnPcmWritei>(dlsym(dl_, "snd_pcm_writei"));
+    fn_delay_ = reinterpret_cast<FnPcmDelay>(dlsym(dl_, "snd_pcm_delay"));
     fn_recover_ = reinterpret_cast<FnPcmRecover>(dlsym(dl_, "snd_pcm_recover"));
     fn_drain_ = reinterpret_cast<FnPcmDrain>(dlsym(dl_, "snd_pcm_drain"));
     fn_close_ = reinterpret_cast<FnPcmClose>(dlsym(dl_, "snd_pcm_close"));
@@ -182,6 +186,17 @@ void LinuxAlsaAudio::write_samples(const int16_t* stereo_s16, size_t frame_count
             }
         }
     }
+}
+
+double LinuxAlsaAudio::get_buffer_fill_ratio() const {
+    if (!active_ || !pcm_ || !fn_delay_ || buffer_frames_ == 0u) {
+        return -1.0;
+    }
+    long delay = 0;
+    if (fn_delay_(pcm_, &delay) < 0) {
+        return -1.0;
+    }
+    return std::clamp(static_cast<double>(delay) / static_cast<double>(buffer_frames_), 0.0, 1.0);
 }
 
 bool LinuxAlsaAudio::ensure_dl_and_mixer_syms() {

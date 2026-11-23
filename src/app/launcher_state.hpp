@@ -56,6 +56,7 @@ struct TargetSavedState {
     std::string last_media_dir;
     uint32_t preset_index = 0;
     std::string variant_id;
+    std::string region_id;  // e.g. "pal" / "ntsc" for C64
     bool has_display_prefs = false;
     czx::video::DisplayMode display_mode = czx::video::DisplayMode::OverflowFit;
     bool desktop_native = false;

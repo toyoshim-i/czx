@@ -16,6 +16,7 @@ struct PlatformOptions {
     bool prefer_fbdev = false;
     bool headless = false;
     bool desktop_native = true;
+    bool vsync = true;
 };
 
 struct NativeFrameView {
@@ -52,6 +53,9 @@ public:
     virtual bool consume_redraw_request() { return false; }
     virtual void set_window_title(const char*) {}
     virtual bool should_close() const { return false; }
+    virtual bool supports_vsync_toggle() const { return false; }
+    virtual bool is_vsync_enabled() const { return false; }
+    virtual bool set_vsync_enabled(bool /*enabled*/) { return false; }
     virtual const char* backend_name() const = 0;
 };
 
@@ -74,6 +78,8 @@ public:
     virtual ~PlatformAudio() = default;
     virtual bool init(uint32_t sample_rate) = 0;
     virtual void write_samples(const int16_t* stereo_s16, size_t frame_count) = 0;
+    // Returns estimated playback buffer fill ratio in [0.0, 1.0], or < 0.0 if unavailable.
+    virtual double get_buffer_fill_ratio() const { return -1.0; }
     virtual const char* backend_name() const = 0;
     virtual bool get_system_volume(SystemVolumeState& /*out*/) { return false; }
     virtual bool adjust_system_volume(int /*delta_percent*/, SystemVolumeState& /*out*/) { return false; }

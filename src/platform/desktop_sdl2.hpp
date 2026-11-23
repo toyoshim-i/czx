@@ -29,9 +29,12 @@ struct DesktopSdl2Context {
     std::string last_title;
     std::vector<RawMouseEvent> pending_mouse;
     bool close_requested = false;
+    bool vsync_enabled = false;
+    bool vsync_toggleable = false;
 
     ~DesktopSdl2Context();
     bool init(const PlatformOptions& opts);
+    bool set_vsync_enabled(bool enabled);
     void present(const uint16_t* rgb565);
     void present_native(const NativeFrameView& view);
     void resize_window(int w, int h);
@@ -67,6 +70,9 @@ public:
         if (ctx_) ctx_->set_window_title(title);
     }
     bool should_close() const override { return ctx_ && ctx_->close_requested; }
+    bool supports_vsync_toggle() const override { return ctx_ && ctx_->vsync_toggleable; }
+    bool is_vsync_enabled() const override { return ctx_ && ctx_->vsync_enabled; }
+    bool set_vsync_enabled(bool enabled) override { return ctx_ && ctx_->set_vsync_enabled(enabled); }
     const char* backend_name() const override { return "desktop-sdl2"; }
 
 private:

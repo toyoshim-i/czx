@@ -137,6 +137,30 @@ bool resolve_saved_drive_media(const std::string& media_path,
     return false;
 }
 
+std::string normalize_c64_region(std::string r) {
+    for (char& ch : r) {
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = static_cast<char>(ch - 'A' + 'a');
+        }
+    }
+    if (r == "pal" || r == "ntsc") {
+        return r;
+    }
+    return "auto";
+}
+
+const char* region_display_label(const std::string& r) noexcept {
+    if (r == "pal") return "PAL (50Hz)";
+    if (r == "ntsc") return "NTSC (60Hz)";
+    return "Auto";
+}
+
+const char* vice_model_for_region(const std::string& r) noexcept {
+    if (r == "pal") return "C64 PAL";
+    if (r == "ntsc") return "C64 NTSC";
+    return "C64 PAL auto";
+}
+
 }  // namespace
 
 EmulatorApp::EmulatorApp(AppConfig cfg)
@@ -160,6 +184,7 @@ EmulatorApp::EmulatorApp(AppConfig cfg)
     scaler_cfg_.margin_fill = cfg_.margin_fill;
     show_activity_indicator_ = cfg_.show_activity_indicator;
     tape_warp_enabled_ = cfg_.tape_warp_enabled;
+    vsync_enabled_ = cfg_.vsync_enabled;
     load_app_config();
     desktop_scale_ = std::clamp(cfg_.desktop_scale, 1, 3);
     default_desktop_scale_ = desktop_scale_;
@@ -202,7 +227,7 @@ void EmulatorApp::ensure_data_dirs() {
 }
 
 void EmulatorApp::load_app_config() {
-    if (cfg_.activity_indicator_override && cfg_.tape_warp_override) return;
+    if (cfg_.activity_indicator_override && cfg_.tape_warp_override && cfg_.vsync_override) return;
     const fs::path cfg_path = fs::path(cfg_.data_dir) / "config" / "czx.cfg";
     std::ifstream ifs(cfg_path);
     if (!ifs.is_open()) return;
@@ -236,6 +261,8 @@ void EmulatorApp::load_app_config() {
             parse_bool(show_activity_indicator_);
         } else if (key == "tape_warp" && !cfg_.tape_warp_override) {
             parse_bool(tape_warp_enabled_);
+        } else if (key == "vsync" && !cfg_.vsync_override) {
+            parse_bool(vsync_enabled_);
         }
     }
 }
@@ -248,6 +275,7 @@ void EmulatorApp::save_app_config() const {
     std::vector<std::string> lines;
     bool updated_led = false;
     bool updated_warp = false;
+    bool updated_vsync = false;
     {
         std::ifstream ifs(cfg_path);
         std::string line;
@@ -267,6 +295,9 @@ void EmulatorApp::save_app_config() const {
                 } else if (key == "tape_warp") {
                     line = std::string("tape_warp = ") + (tape_warp_enabled_ ? "on" : "off");
                     updated_warp = true;
+                } else if (key == "vsync") {
+                    line = std::string("vsync = ") + (vsync_enabled_ ? "on" : "off");
+                    updated_vsync = true;
                 }
             }
             lines.push_back(std::move(line));
@@ -277,6 +308,9 @@ void EmulatorApp::save_app_config() const {
     }
     if (!updated_warp) {
         lines.emplace_back(std::string("tape_warp = ") + (tape_warp_enabled_ ? "on" : "off"));
+    }
+    if (!updated_vsync) {
+        lines.emplace_back(std::string("vsync = ") + (vsync_enabled_ ? "on" : "off"));
     }
 
     std::ofstream ofs(cfg_path, std::ios::trunc);
@@ -297,6 +331,31 @@ void EmulatorApp::sync_core_warp_option() {
         core_api_->set_option(core_inst_, "emuz700_tape_turbo", val);
     } else if (id.rfind("efm7", 0) == 0) {
         core_api_->set_option(core_inst_, "efm7_tape_turbo", val);
+    }
+}
+
+std::string EmulatorApp::resolve_target_region_id(int target_index) const {
+    if (target_index >= 0 && static_cast<size_t>(target_index) < targets_.size() &&
+        targets_[static_cast<size_t>(target_index)].id == "c64") {
+        const TargetSavedState* st = find_target_saved_state(target_index);
+        if (st && !st->region_id.empty()) {
+            return normalize_c64_region(st->region_id);
+        }
+        return "auto";
+    }
+    const auto it = launcher_state_.targets.find("c64");
+    if (it != launcher_state_.targets.end() && !it->second.region_id.empty()) {
+        return normalize_c64_region(it->second.region_id);
+    }
+    return "auto";
+}
+
+void EmulatorApp::sync_core_region_option() {
+    if (!core_api_ || !core_inst_ || !core_api_->set_option || !core_api_->get_desc) return;
+    const czx_core_desc_t* desc = core_api_->get_desc(core_api_);
+    const std::string id = (desc && desc->id) ? desc->id : "";
+    if (id.rfind("vice", 0) == 0) {
+        core_api_->set_option(core_inst_, "vice_c64_model", vice_model_for_region(c64_region_));
     }
 }
 
@@ -449,6 +508,10 @@ void EmulatorApp::apply_target_prefs(int target_index) {
     }
 
     preset_index_ = st ? st->preset_index : cfg_.preset_index;
+    if (target_index >= 0 && static_cast<size_t>(target_index) < targets_.size() &&
+        targets_[static_cast<size_t>(target_index)].id == "c64") {
+        c64_region_ = resolve_target_region_id(target_index);
+    }
     scaler_cfg_.pan_x = 0;
     scaler_cfg_.pan_y = 0;
     hud_.desktop_native = desktop_native_mode_;
@@ -473,6 +536,9 @@ void EmulatorApp::capture_current_prefs_to_target(int target_index, bool include
     st.margin_fill = scaler_cfg_.margin_fill;
     st.input_mode = std::clamp(static_cast<int>(router_.input_mode()), 0, 3);
     st.preset_index = preset_index_;
+    if (targets_[static_cast<size_t>(target_index)].id == "c64") {
+        st.region_id = normalize_c64_region(c64_region_);
+    }
     if (include_active_media) {
         const auto& t = targets_[static_cast<size_t>(target_index)];
         const czx_core_api_t* api = target_core_api(target_index, active_variant_index_);
@@ -988,6 +1054,12 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media, con
     ++native_seq_;
     force_present_ = true;
 
+    const czx_core_desc_t* pre_desc = next_api->get_desc ? next_api->get_desc(next_api) : nullptr;
+    const std::string pre_id = (pre_desc && pre_desc->id) ? pre_desc->id : "";
+    if (pre_id.rfind("vice", 0) == 0) {
+        c64_region_ = resolve_target_region_id(find_target_index_by_id(targets_, "c64"));
+    }
+
     czx_host_t host{};
     host.user_data = this;
     host.video_frame = cb_video_frame;
@@ -996,6 +1068,7 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media, con
     host.initial_media = initial_media.empty() ? nullptr : initial_media.c_str();
     host.disable_tape_warp = !tape_warp_enabled_;
     host.initial_media2 = initial_media2.empty() ? nullptr : initial_media2.c_str();
+    host.initial_region = (pre_id.rfind("vice", 0) == 0) ? c64_region_.c_str() : nullptr;
 
     core_inst_ = core_api_->create(core_api_, &host);
     if (!core_inst_) {
@@ -1009,6 +1082,7 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media, con
         core_api_->set_data_dir(core_inst_, cfg_.data_dir.c_str());
     }
     sync_core_warp_option();
+    sync_core_region_option();
     sync_core_gpu_scale_option();
 
     if (core_api_->select_preset && core_api_->get_preset_count) {
@@ -1316,6 +1390,8 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
         vm.desktop_native_active = desktop_native_mode_;
         vm.desktop_scale = desktop_scale_;
         vm.display_mode = scaler_cfg_.mode;
+        vm.has_vsync_option = platform_.display && platform_.display->supports_vsync_toggle();
+        vm.vsync_enabled = vsync_enabled_;
         vm.aspect_policy = scaler_cfg_.aspect_policy;
         vm.show_borders = scaler_cfg_.show_borders;
         vm.margin_fill = scaler_cfg_.margin_fill;
@@ -1341,6 +1417,25 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
         vm.core_name = (desc && desc->name) ? desc->name : "Core";
     }
     vm.core_pending = core_pending;
+
+    bool is_c64 = false;
+    if (!targets_.empty() && pending_target_index_ >= 0 &&
+        static_cast<size_t>(pending_target_index_) < targets_.size()) {
+        is_c64 = (targets_[static_cast<size_t>(pending_target_index_)].id == "c64");
+    } else if (menu_api && menu_api->get_desc) {
+        const auto* desc = menu_api->get_desc(menu_api);
+        if (desc && desc->id) {
+            is_c64 = (std::string(desc->id).rfind("vice", 0) == 0);
+        }
+    }
+    if (is_c64) {
+        vm.has_region_option = true;
+        const std::string reg =
+            (vm.from_launcher || core_pending)
+                ? resolve_target_region_id(pending_target_index_)
+                : normalize_c64_region(c64_region_);
+        vm.region_value_label = region_display_label(reg);
+    }
 
     const char* exts = (menu_api && menu_api->get_extensions) ? menu_api->get_extensions(menu_api) : nullptr;
     vm.has_media_browser = (exts != nullptr);
@@ -1425,6 +1520,8 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
     vm.desktop_native_active = desktop_native_mode_;
     vm.desktop_scale = desktop_scale_;
     vm.display_mode = scaler_cfg_.mode;
+    vm.has_vsync_option = platform_.display && platform_.display->supports_vsync_toggle();
+    vm.vsync_enabled = vsync_enabled_;
     vm.aspect_policy = scaler_cfg_.aspect_policy;
     vm.show_borders = scaler_cfg_.show_borders;
     vm.margin_fill = scaler_cfg_.margin_fill;
@@ -1926,6 +2023,42 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
                 }
             }
             break;
+        case czx::video::MenuAction::CycleRegionPrev:
+        case czx::video::MenuAction::CycleRegionNext: {
+            static constexpr const char* kRegions[3] = {"auto", "pal", "ntsc"};
+            const bool is_pending = has_pending_core_change();
+            const std::string cur_reg =
+                ((in_launcher_ && menu_from_launcher_) || is_pending)
+                    ? resolve_target_region_id(pending_target_index_)
+                    : normalize_c64_region(c64_region_);
+            int cur_idx = 0;
+            for (int i = 0; i < 3; ++i) {
+                if (cur_reg == kRegions[i]) {
+                    cur_idx = i;
+                    break;
+                }
+            }
+            const int delta = (action == czx::video::MenuAction::CycleRegionPrev) ? -1 : 1;
+            const std::string next_reg = kRegions[((cur_idx + delta) % 3 + 3) % 3];
+            if (pending_target_index_ >= 0 &&
+                static_cast<size_t>(pending_target_index_) < targets_.size()) {
+                target_saved_state(pending_target_index_).region_id = next_reg;
+                persist_launcher_state();
+            }
+            if ((in_launcher_ && menu_from_launcher_) || !is_pending) {
+                c64_region_ = next_reg;
+            }
+            if (!in_launcher_ && !is_pending) {
+                sync_core_region_option();
+            }
+            std::string lbl = region_display_label(next_reg);
+            for (char& ch : lbl) {
+                if (ch >= 'a' && ch <= 'z') ch = static_cast<char>(ch - 'a' + 'A');
+            }
+            show_toast(("REGION: " + lbl).c_str());
+            force_present_ = true;
+            break;
+        }
         case czx::video::MenuAction::OpenMediaBrowser:
         case czx::video::MenuAction::OpenDrive1Browser:
             open_browser_for_drive(0);
@@ -1998,6 +2131,19 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
             cycle_display_mode(1);
             refresh_paused_preview();
             save_target_prefs_now();
+            break;
+        case czx::video::MenuAction::ToggleVsync:
+            if (platform_.display && platform_.display->supports_vsync_toggle()) {
+                const bool next = !vsync_enabled_;
+                if (platform_.display->set_vsync_enabled(next)) {
+                    vsync_enabled_ = next;
+                    save_app_config();
+                    show_toast(vsync_enabled_ ? "VSYNC: ON" : "VSYNC: OFF");
+                    force_present_ = true;
+                } else {
+                    show_toast("VSYNC: FAILED");
+                }
+            }
             break;
         case czx::video::MenuAction::ToggleAspectPolicy:
             scaler_cfg_.aspect_policy =
@@ -2597,7 +2743,11 @@ int EmulatorApp::run() {
     cfg_.platform.desktop_native =
         !cfg_.platform.headless && !cfg_.force_lcd_sim &&
         (cfg_.force_desktop || !cfg_.display_mode_explicit);
+    cfg_.platform.vsync = vsync_enabled_;
     platform_ = czx::platform::create_platform_bundle(cfg_.platform);
+    if (platform_.display && platform_.display->supports_vsync_toggle()) {
+        vsync_enabled_ = platform_.display->is_vsync_enabled();
+    }
     default_desktop_native_ = !cfg_.platform.headless && platform_.display &&
                               platform_.display->supports_native_present() &&
                               cfg_.platform.desktop_native;
@@ -2674,17 +2824,24 @@ int EmulatorApp::run() {
         update_window_title();
     }
 
-    auto get_frame_period = [&]() {
+    auto get_target_fps = [&]() {
         const czx_core_desc_t* d = (core_api_ && core_api_->get_desc) ? core_api_->get_desc(core_api_) : nullptr;
         const double fps = (d && d->fps_num > 0 && d->fps_den > 0)
                                ? (static_cast<double>(d->fps_num) / static_cast<double>(d->fps_den))
                                : 60.0;
+        return std::clamp(fps, 10.0, 240.0);
+    };
+    auto frame_period_for_fps = [](double fps, double pace_adj) {
         return std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-            std::chrono::duration<double>(1.0 / fps));
+            std::chrono::duration<double>((1.0 / fps) * (1.0 + pace_adj)));
     };
 
+    double last_target_fps = get_target_fps();
+    double audio_pace_adj = 0.0;
+    hud_.target_fps_x10 = std::clamp(static_cast<int>(std::lround(last_target_fps * 10.0)), 100, 2400);
+
     auto last_tick = std::chrono::steady_clock::now();
-    auto next_frame = last_tick + get_frame_period();
+    auto next_frame = last_tick + frame_period_for_fps(last_target_fps, 0.0);
     auto fps_window_start = last_tick;
     int fps_window_frames = 0;
     bool fps_initialized = false;
@@ -2702,6 +2859,17 @@ int EmulatorApp::run() {
         const auto now = std::chrono::steady_clock::now();
         const double dt_sec = std::chrono::duration<double>(now - last_tick).count();
         last_tick = now;
+
+        const double cur_target_fps = get_target_fps();
+        hud_.target_fps_x10 = std::clamp(static_cast<int>(std::lround(cur_target_fps * 10.0)), 100, 2400);
+        if (std::abs(cur_target_fps - last_target_fps) > 0.05) {
+            last_target_fps = cur_target_fps;
+            audio_pace_adj = 0.0;
+            next_frame = now + frame_period_for_fps(cur_target_fps, 0.0);
+            fps_window_start = now;
+            fps_window_frames = 0;
+            fps_initialized = false;
+        }
 
         const double fps_ms = std::chrono::duration<double, std::milli>(now - fps_window_start).count();
         const double fps_interval = fps_initialized ? 500.0 : 250.0;
@@ -2737,8 +2905,10 @@ int EmulatorApp::run() {
         if ((was_paused && !menu_paused) || (seen_core_epoch != core_epoch_)) {
             seen_core_epoch = core_epoch_;
             const auto reset_now = std::chrono::steady_clock::now();
+            last_target_fps = get_target_fps();
+            audio_pace_adj = 0.0;
             last_tick = reset_now;
-            next_frame = reset_now + get_frame_period();
+            next_frame = reset_now + frame_period_for_fps(last_target_fps, 0.0);
             fps_window_start = reset_now;
             fps_window_frames = 0;
             fps_initialized = false;
@@ -2763,8 +2933,14 @@ int EmulatorApp::run() {
                 core_api_->set_fast_forward(core_inst_, false, false);
             }
             if (!in_launcher_ && core_inst_ && platform_.audio) {
-                static constexpr int16_t kSilence[735 * 2] = {};
-                platform_.audio->write_samples(kSilence, 735);
+                static constexpr int16_t kSilence[2048 * 2] = {};
+                const czx_core_desc_t* d =
+                    (core_api_ && core_api_->get_desc) ? core_api_->get_desc(core_api_) : nullptr;
+                const uint32_t sr = (d && d->audio_sample_rate > 0u) ? d->audio_sample_rate : 48000u;
+                const size_t nframes = std::clamp<size_t>(
+                    static_cast<size_t>(std::llround(static_cast<double>(sr) / cur_target_fps)),
+                    160u, 2048u);
+                platform_.audio->write_samples(kSilence, nframes);
             }
         } else if (!do_warp) {
             if (core_inst_ && core_api_ && core_api_->set_fast_forward) {
@@ -2932,11 +3108,32 @@ int EmulatorApp::run() {
         }
 
         if (cfg_.headless_frames == 0) {
+            const double end_target_fps = get_target_fps();
+            hud_.target_fps_x10 = std::clamp(static_cast<int>(std::lround(end_target_fps * 10.0)), 100, 2400);
             if (do_warp || (tape_warp_enabled_ && live_warp_requested_ && !interactive_overlay)) {
-                next_frame = std::chrono::steady_clock::now() + get_frame_period();
+                audio_pace_adj = 0.0;
+                last_target_fps = end_target_fps;
+                next_frame = std::chrono::steady_clock::now() + frame_period_for_fps(end_target_fps, 0.0);
             } else {
-                const auto frame_period = get_frame_period();
                 const auto after = std::chrono::steady_clock::now();
+                if (std::abs(end_target_fps - last_target_fps) > 0.05) {
+                    last_target_fps = end_target_fps;
+                    audio_pace_adj = 0.0;
+                    next_frame = after;
+                    fps_window_start = after;
+                    fps_window_frames = 0;
+                    fps_initialized = false;
+                } else if (!menu_paused && core_inst_ && platform_.audio &&
+                           !(platform_.display && platform_.display->is_vsync_enabled())) {
+                    const double fill = platform_.audio->get_buffer_fill_ratio();
+                    if (fill >= 0.0) {
+                        const double raw_adj = std::clamp((fill - 0.5) * 0.005, -0.0025, 0.0025);
+                        audio_pace_adj = audio_pace_adj * 0.95 + raw_adj * 0.05;
+                    }
+                } else {
+                    audio_pace_adj = 0.0;
+                }
+                const auto frame_period = frame_period_for_fps(end_target_fps, audio_pace_adj);
                 if (after < next_frame) {
                     std::this_thread::sleep_until(next_frame);
                 } else if (after - next_frame > frame_period * 3) {

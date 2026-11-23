@@ -46,6 +46,7 @@ const RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY: c_uint = 9;
 const RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: c_uint = 10;
 const RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK: c_uint = 12;
 const RETRO_ENVIRONMENT_SET_DISK_CONTROL_INTERFACE: c_uint = 13;
+const RETRO_ENVIRONMENT_SET_HW_RENDER: c_uint = 14;
 const RETRO_ENVIRONMENT_GET_VARIABLE: c_uint = 15;
 const RETRO_ENVIRONMENT_SET_VARIABLES: c_uint = 16;
 const RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE: c_uint = 17;
@@ -243,6 +244,29 @@ pub struct RetroLedInterface {
     pub set_led_state: Option<RetroSetLedStateFn>,
 }
 
+const RETRO_HW_CONTEXT_OPENGLES2: c_uint = 2;
+const RETRO_HW_FRAME_BUFFER_VALID: *const c_void = (-1isize) as *const c_void;
+
+type RetroHwContextResetFn = unsafe extern "C" fn();
+type RetroHwGetCurrentFramebufferFn = unsafe extern "C" fn() -> usize;
+type RetroHwGetProcAddressFn = msx68k_vicon::gles2::GlGetProcAddressFn;
+
+#[repr(C)]
+pub struct RetroHwRenderCallback {
+    pub context_type: c_uint,
+    pub context_reset: Option<RetroHwContextResetFn>,
+    pub get_current_framebuffer: Option<RetroHwGetCurrentFramebufferFn>,
+    pub get_proc_address: Option<RetroHwGetProcAddressFn>,
+    pub depth: bool,
+    pub stencil: bool,
+    pub bottom_left_origin: bool,
+    pub version_major: c_uint,
+    pub version_minor: c_uint,
+    pub cache_context: bool,
+    pub context_destroy: Option<RetroHwContextResetFn>,
+    pub debug_context: bool,
+}
+
 type RetroEnvironmentFn = unsafe extern "C" fn(c_uint, *mut c_void) -> bool;
 type RetroVideoRefreshFn = unsafe extern "C" fn(*const c_void, c_uint, c_uint, usize);
 type RetroAudioSampleFn = unsafe extern "C" fn(i16, i16);
@@ -260,6 +284,8 @@ struct Callbacks {
     input_state: Option<RetroInputStateFn>,
     log: Option<RetroLogPrintfFn>,
     led: Option<RetroSetLedStateFn>,
+    hw_get_fbo: Option<RetroHwGetCurrentFramebufferFn>,
+    hw_get_proc: Option<RetroHwGetProcAddressFn>,
 }
 
 struct CoreState {
@@ -280,6 +306,7 @@ struct CoreState {
     gpu_scale: GpuScaleMode,
     pending_scaled: bool,
     need_full_vram_upload: bool,
+    hw_render_enabled: bool,
     renderer_gen: ShaderGeneration,
     fd_accesses: [Arc<AtomicU64>; 4],
     fd_seen: [u64; 4],
@@ -310,12 +337,96 @@ static CALLBACKS: Mutex<Callbacks> = Mutex::new(Callbacks {
     input_state: None,
     log: None,
     led: None,
+    hw_get_fbo: None,
+    hw_get_proc: None,
 });
 
 static CORE_STATE: Mutex<Option<CoreState>> = Mutex::new(None);
 
 thread_local! {
     static COMPOSITOR: RefCell<Option<ViconCompositor>> = const { RefCell::new(None) };
+}
+
+unsafe extern "C" fn hw_context_reset() {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        let hw_get_proc = CALLBACKS.lock().ok().and_then(|c| c.hw_get_proc);
+        let perf_detail = CORE_STATE
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|s| s.perf_detail))
+            .unwrap_or(false);
+
+        COMPOSITOR.with(|cell| {
+            if let Some(mut old) = cell.borrow_mut().take() {
+                old.mark_context_lost();
+            }
+        });
+
+        let ext_comp = unsafe {
+            ViconCompositor::new_gles2_external(
+                RendererConfig {
+                    generation: ShaderGeneration::Gles2,
+                    max_width: 1024,
+                    max_height: 1024,
+                    output_format: PixelFormat::Rgba8,
+                },
+                hw_get_proc,
+            )
+        };
+
+        if let Some(mut comp) = ext_comp {
+            comp.set_collect_timing(perf_detail);
+            match comp.renderer_name() {
+                Some(name) if !name.is_empty() => {
+                    log_msg(RETRO_LOG_INFO, &format!("VICON renderer: HW GLES2 external ({name})"));
+                }
+                _ => {
+                    log_msg(RETRO_LOG_INFO, "VICON renderer: HW GLES2 external");
+                }
+            }
+            COMPOSITOR.with(|cell| {
+                *cell.borrow_mut() = Some(comp);
+            });
+            if let Ok(mut guard) = CORE_STATE.lock() {
+                if let Some(st) = guard.as_mut() {
+                    st.hw_render_enabled = true;
+                    st.renderer_gen = ShaderGeneration::Gles2;
+                    st.need_full_vram_upload = true;
+                }
+            }
+        } else {
+            log_msg(
+                RETRO_LOG_WARN,
+                "VICON HW GLES2 external context unavailable, falling back to CPU compositor",
+            );
+            let fallback = ViconCompositor::new(RendererConfig {
+                generation: ShaderGeneration::Cpu,
+                max_width: 1024,
+                max_height: 1024,
+                output_format: PixelFormat::Rgb565,
+            });
+            COMPOSITOR.with(|cell| {
+                *cell.borrow_mut() = Some(fallback);
+            });
+            if let Ok(mut guard) = CORE_STATE.lock() {
+                if let Some(st) = guard.as_mut() {
+                    st.hw_render_enabled = false;
+                    st.renderer_gen = ShaderGeneration::Cpu;
+                    st.need_full_vram_upload = false;
+                }
+            }
+        }
+    }));
+}
+
+unsafe extern "C" fn hw_context_destroy() {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        COMPOSITOR.with(|cell| {
+            if let Some(mut comp) = cell.borrow_mut().take() {
+                comp.destroy_gl_resources();
+            }
+        });
+    }));
 }
 
 const DEFAULT_X68K_FPS: f64 = 10_000_000.0 / (317.0 * 568.0);
@@ -1044,24 +1155,62 @@ fn load_game_inner(game: *const RetroGameInfo) -> bool {
         .as_deref()
         .is_some_and(|v| v == "2" || v.eq_ignore_ascii_case("detail") || v.eq_ignore_ascii_case("full"));
 
+    if let Ok(mut cbs) = CALLBACKS.lock() {
+        cbs.hw_get_fbo = None;
+        cbs.hw_get_proc = None;
+    }
+
     let generation = parse_renderer_option(get_variable(VAR_RENDERER_K).as_deref());
     let gpu_scale = parse_gpu_scale_option(get_variable(VAR_GPU_SCALE_K).as_deref());
-    let mut compositor = ViconCompositor::new(RendererConfig {
-        generation,
-        max_width: 1024,
-        max_height: 1024,
-        output_format: PixelFormat::Rgb565,
-    });
-    compositor.set_collect_timing(perf_detail);
-    let renderer_gen = compositor.active_generation();
-    match compositor.renderer_name() {
-        Some(name) if !name.is_empty() => {
-            log_msg(RETRO_LOG_INFO, &format!("VICON renderer: {renderer_gen:?} ({name})"));
-        }
-        _ => {
-            log_msg(RETRO_LOG_INFO, &format!("VICON renderer: {renderer_gen:?}"));
+
+    let mut hw_render_enabled = false;
+    let mut renderer_gen = ShaderGeneration::Gles2;
+
+    if generation != ShaderGeneration::Cpu {
+        let mut hw_cb = RetroHwRenderCallback {
+            context_type: RETRO_HW_CONTEXT_OPENGLES2,
+            context_reset: Some(hw_context_reset),
+            get_current_framebuffer: None,
+            get_proc_address: None,
+            depth: false,
+            stencil: false,
+            bottom_left_origin: false,
+            version_major: 2,
+            version_minor: 0,
+            cache_context: false,
+            context_destroy: Some(hw_context_destroy),
+            debug_context: false,
+        };
+        if env_call(RETRO_ENVIRONMENT_SET_HW_RENDER, &mut hw_cb) {
+            if let Ok(mut cbs) = CALLBACKS.lock() {
+                cbs.hw_get_fbo = hw_cb.get_current_framebuffer;
+                cbs.hw_get_proc = hw_cb.get_proc_address;
+            }
+            hw_render_enabled = true;
         }
     }
+
+    let compositor_opt = if hw_render_enabled {
+        None
+    } else {
+        let mut compositor = ViconCompositor::new(RendererConfig {
+            generation,
+            max_width: 1024,
+            max_height: 1024,
+            output_format: PixelFormat::Rgb565,
+        });
+        compositor.set_collect_timing(perf_detail);
+        renderer_gen = compositor.active_generation();
+        match compositor.renderer_name() {
+            Some(name) if !name.is_empty() => {
+                log_msg(RETRO_LOG_INFO, &format!("VICON renderer: {renderer_gen:?} ({name})"));
+            }
+            _ => {
+                log_msg(RETRO_LOG_INFO, &format!("VICON renderer: {renderer_gen:?}"));
+            }
+        }
+        Some(compositor)
+    };
 
     let cur_aspect_bits = aspect_for_resolution(cur_w, cur_h).to_bits();
     let cur_fps = compute_crtc_fps(&vm.bus.crtc);
@@ -1083,7 +1232,8 @@ fn load_game_inner(game: *const RetroGameInfo) -> bool {
         cur_fps,
         gpu_scale,
         pending_scaled: false,
-        need_full_vram_upload: false,
+        need_full_vram_upload: hw_render_enabled,
+        hw_render_enabled,
         renderer_gen,
         fd_accesses,
         fd_seen,
@@ -1108,7 +1258,7 @@ fn load_game_inner(game: *const RetroGameInfo) -> bool {
     if let Ok(mut guard) = CORE_STATE.lock() {
         *guard = Some(state);
         COMPOSITOR.with(|cell| {
-            *cell.borrow_mut() = Some(compositor);
+            *cell.borrow_mut() = compositor_opt;
         });
         true
     } else {
@@ -1243,19 +1393,31 @@ pub unsafe extern "C" fn retro_init() {
     }
 }
 
+fn teardown_core_state() {
+    let mut state_opt = CORE_STATE.lock().ok().and_then(|mut g| g.take());
+    let hw_active = state_opt.as_ref().is_some_and(|s| s.hw_render_enabled);
+    COMPOSITOR.with(|cell| {
+        if hw_active {
+            if let Some(mut comp) = cell.borrow_mut().take() {
+                comp.mark_context_lost();
+            }
+        } else {
+            *cell.borrow_mut() = None;
+        }
+    });
+    if let Ok(mut cbs) = CALLBACKS.lock() {
+        cbs.hw_get_fbo = None;
+        cbs.hw_get_proc = None;
+    }
+    if let Some(mut st) = state_opt.take() {
+        st.flush_persistent(true);
+        st.set_led_mask(0);
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn retro_deinit() {
-    let _ = catch_unwind(AssertUnwindSafe(|| {
-        COMPOSITOR.with(|cell| {
-            *cell.borrow_mut() = None;
-        });
-        if let Ok(mut guard) = CORE_STATE.lock() {
-            if let Some(mut st) = guard.take() {
-                st.flush_persistent(true);
-                st.set_led_mask(0);
-            }
-        }
-    }));
+    let _ = catch_unwind(AssertUnwindSafe(teardown_core_state));
 }
 
 #[no_mangle]
@@ -1321,27 +1483,24 @@ pub unsafe extern "C" fn retro_load_game_special(
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_unload_game() {
-    let _ = catch_unwind(AssertUnwindSafe(|| {
-        COMPOSITOR.with(|cell| {
-            *cell.borrow_mut() = None;
-        });
-        if let Ok(mut guard) = CORE_STATE.lock() {
-            if let Some(mut st) = guard.take() {
-                st.flush_persistent(true);
-                st.set_led_mask(0);
-            }
-        }
-    }));
+    let _ = catch_unwind(AssertUnwindSafe(teardown_core_state));
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_reset() {
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        COMPOSITOR.with(|cell| {
-            if let Some(comp) = cell.borrow_mut().as_mut() {
-                let _ = comp.finish_frame_rgb565();
-            }
-        });
+        let hw_enabled = CORE_STATE
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|s| s.hw_render_enabled))
+            .unwrap_or(false);
+        if !hw_enabled {
+            COMPOSITOR.with(|cell| {
+                if let Some(comp) = cell.borrow_mut().as_mut() {
+                    let _ = comp.finish_frame_rgb565();
+                }
+            });
+        }
         if let Ok(mut guard) = CORE_STATE.lock() {
             if let Some(st) = guard.as_mut() {
                 st.flush_persistent(true);
@@ -1358,14 +1517,57 @@ pub unsafe extern "C" fn retro_reset() {
     }));
 }
 
+fn notify_geometry_and_fps(st: &mut CoreState, w: u32, h: u32, aspect: f32, next_fps: f64) {
+    let aspect_bits = aspect.to_bits();
+    let geom_changed = w != st.cur_w || h != st.cur_h || aspect_bits != st.cur_aspect_bits;
+    let fps_changed = (next_fps - st.cur_fps).abs() >= 0.05;
+    if geom_changed {
+        st.cur_w = w;
+        st.cur_h = h;
+        st.cur_aspect_bits = aspect_bits;
+    }
+    if fps_changed {
+        st.cur_fps = next_fps;
+        let mut av = RetroSystemAvInfo {
+            geometry: RetroGameGeometry {
+                base_width: st.cur_w,
+                base_height: st.cur_h,
+                max_width: 1024,
+                max_height: 1024,
+                aspect_ratio: f32::from_bits(st.cur_aspect_bits),
+            },
+            timing: RetroSystemTiming {
+                fps: st.cur_fps,
+                sample_rate: 48000.0,
+            },
+        };
+        env_call(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &mut av);
+    } else if geom_changed {
+        let mut geom = RetroGameGeometry {
+            base_width: st.cur_w,
+            base_height: st.cur_h,
+            max_width: 1024,
+            max_height: 1024,
+            aspect_ratio: f32::from_bits(st.cur_aspect_bits),
+        };
+        env_call(RETRO_ENVIRONMENT_SET_GEOMETRY, &mut geom);
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn retro_run() {
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        let (video_cb, audio_batch_cb, input_poll_cb, input_state_cb) = {
+        let (video_cb, audio_batch_cb, input_poll_cb, input_state_cb, hw_get_fbo) = {
             let Ok(cbs) = CALLBACKS.lock() else {
                 return;
             };
-            (cbs.video, cbs.audio_batch, cbs.input_poll, cbs.input_state)
+            (
+                cbs.video,
+                cbs.audio_batch,
+                cbs.input_poll,
+                cbs.input_state,
+                cbs.hw_get_fbo,
+            )
         };
 
         let mut vars_updated = false;
@@ -1453,129 +1655,137 @@ pub unsafe extern "C" fn retro_run() {
         }
 
         let t1 = st.perf_log.then(Instant::now);
-        let (rendered_opt, out_scaled, timing, t2, t3): (
-            Option<RenderedFrame565>,
-            bool,
-            Option<FrameTimingStats>,
-            Option<Instant>,
-            Option<Instant>,
-        ) = COMPOSITOR.with(|cell| {
-            let mut borrow = cell.borrow_mut();
-            if let Some(comp) = borrow.as_mut() {
-                if st.need_full_vram_upload {
-                    st.need_full_vram_upload = false;
-                    let _ = st.vm.bus.take_written_vram_pages();
-                    let frame = comp.render_frame_readonly(&st.vm.bus).to_rgb565();
-                    st.pending_scaled = false;
-                    let t_end = st.perf_log.then(Instant::now);
-                    (Some(frame), false, None, t1, t_end)
-                } else if st.renderer_gen == ShaderGeneration::Gles2 {
-                    let prev = comp.finish_frame_rgb565();
-                    let prev_scaled = st.pending_scaled;
-                    let timing = if prev.is_some() && st.perf_detail {
-                        comp.last_timing()
-                    } else {
-                        None
-                    };
-                    let t_after_finish = st.perf_log.then(Instant::now);
-                    let (raw_w, raw_h) = st.vm.bus.crtc.active_resolution();
-                    let nw = raw_w.clamp(256, 1024);
-                    let nh = raw_h.clamp(128, 1024);
-                    if let Some((dw, dh)) = compute_gpu_scale_target(st.gpu_scale, nw, nh) {
-                        comp.submit_frame_scaled_rgb565(&mut st.vm.bus, dw, dh);
-                        st.pending_scaled = true;
-                    } else {
-                        comp.submit_frame_rgb565(&mut st.vm.bus);
-                        st.pending_scaled = false;
-                    }
-                    let t_after_submit = st.perf_log.then(Instant::now);
-                    (prev, prev_scaled, timing, t_after_finish, t_after_submit)
-                } else {
-                    let frame = comp.render_frame_rgb565(&mut st.vm.bus);
-                    st.pending_scaled = false;
-                    let t_end = st.perf_log.then(Instant::now);
-                    (Some(frame), false, None, t1, t_end)
-                }
-            } else {
-                (None, false, None, t1, t1)
-            }
-        });
-
         let mut presented_w = st.cur_w;
         let mut presented_h = st.cur_h;
         let next_fps = compute_crtc_fps(&st.vm.bus.crtc);
-        let fps_changed = (next_fps - st.cur_fps).abs() >= 0.05;
-        if let Some(rendered) = rendered_opt {
-            let w = rendered.width.max(1);
-            let h = rendered.height.max(1);
-            let aspect = if out_scaled {
-                0.0
-            } else {
-                aspect_for_resolution(w, h)
-            };
-            let aspect_bits = aspect.to_bits();
-            let geom_changed = w != st.cur_w || h != st.cur_h || aspect_bits != st.cur_aspect_bits;
-            if geom_changed {
-                st.cur_w = w;
-                st.cur_h = h;
-                st.cur_aspect_bits = aspect_bits;
-            }
-            if fps_changed {
-                st.cur_fps = next_fps;
-                let mut av = RetroSystemAvInfo {
-                    geometry: RetroGameGeometry {
-                        base_width: w,
-                        base_height: h,
-                        max_width: 1024,
-                        max_height: 1024,
-                        aspect_ratio: aspect,
-                    },
-                    timing: RetroSystemTiming {
-                        fps: st.cur_fps,
-                        sample_rate: 48000.0,
-                    },
-                };
-                env_call(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &mut av);
-            } else if geom_changed {
-                let mut geom = RetroGameGeometry {
-                    base_width: w,
-                    base_height: h,
-                    max_width: 1024,
-                    max_height: 1024,
-                    aspect_ratio: aspect,
-                };
-                env_call(RETRO_ENVIRONMENT_SET_GEOMETRY, &mut geom);
-            }
-            presented_w = w;
-            presented_h = h;
 
-            if let Some(vcb) = video_cb {
-                unsafe {
-                    vcb(
-                        rendered.rgb565.as_ptr() as *const c_void,
-                        w,
-                        h,
-                        (w as usize) * std::mem::size_of::<u16>(),
+        let (timing, t2, t3): (Option<FrameTimingStats>, Option<Instant>, Option<Instant>) =
+            if st.hw_render_enabled {
+                let fbo = hw_get_fbo.map(|f| unsafe { f() } as u32).unwrap_or(0);
+                let (hw_dims, timing, t_a, t_b) = COMPOSITOR.with(|cell| {
+                    let mut borrow = cell.borrow_mut();
+                    if let Some(comp) = borrow.as_mut() {
+                        let dims = if st.need_full_vram_upload {
+                            st.need_full_vram_upload = false;
+                            let _ = st.vm.bus.take_written_vram_pages();
+                            comp.render_frame_to_fbo_readonly(&st.vm.bus, fbo, false)
+                        } else {
+                            comp.render_frame_to_fbo(&mut st.vm.bus, fbo, false)
+                        };
+                        let timing = if dims.is_some() && st.perf_detail {
+                            comp.last_timing()
+                        } else {
+                            None
+                        };
+                        let t_end = st.perf_log.then(Instant::now);
+                        (dims, timing, t1, t_end)
+                    } else {
+                        (None, None, t1, t1)
+                    }
+                });
+                if let Some((raw_w, raw_h)) = hw_dims {
+                    let w = raw_w.max(1);
+                    let h = raw_h.max(1);
+                    notify_geometry_and_fps(st, w, h, aspect_for_resolution(w, h), next_fps);
+                    presented_w = w;
+                    presented_h = h;
+                    if let Some(vcb) = video_cb {
+                        unsafe {
+                            vcb(RETRO_HW_FRAME_BUFFER_VALID, w, h, 0);
+                        }
+                    }
+                } else {
+                    notify_geometry_and_fps(
+                        st,
+                        st.cur_w,
+                        st.cur_h,
+                        f32::from_bits(st.cur_aspect_bits),
+                        next_fps,
                     );
                 }
-            }
-        } else if fps_changed {
-            st.cur_fps = next_fps;
-            let mut av = RetroSystemAvInfo {
-                geometry: RetroGameGeometry {
-                    base_width: st.cur_w,
-                    base_height: st.cur_h,
-                    max_width: 1024,
-                    max_height: 1024,
-                    aspect_ratio: f32::from_bits(st.cur_aspect_bits),
-                },
-                timing: RetroSystemTiming {
-                    fps: st.cur_fps,
-                    sample_rate: 48000.0,
-                },
+                (timing, t_a, t_b)
+            } else {
+                let (rendered_opt, out_scaled, timing, t_a, t_b): (
+                    Option<RenderedFrame565>,
+                    bool,
+                    Option<FrameTimingStats>,
+                    Option<Instant>,
+                    Option<Instant>,
+                ) = COMPOSITOR.with(|cell| {
+                    let mut borrow = cell.borrow_mut();
+                    if let Some(comp) = borrow.as_mut() {
+                        if st.need_full_vram_upload {
+                            st.need_full_vram_upload = false;
+                            let _ = st.vm.bus.take_written_vram_pages();
+                            let frame = comp.render_frame_readonly(&st.vm.bus).to_rgb565();
+                            st.pending_scaled = false;
+                            let t_end = st.perf_log.then(Instant::now);
+                            (Some(frame), false, None, t1, t_end)
+                        } else if st.renderer_gen == ShaderGeneration::Gles2 {
+                            let prev = comp.finish_frame_rgb565();
+                            let prev_scaled = st.pending_scaled;
+                            let timing = if prev.is_some() && st.perf_detail {
+                                comp.last_timing()
+                            } else {
+                                None
+                            };
+                            let t_after_finish = st.perf_log.then(Instant::now);
+                            let (raw_w, raw_h) = st.vm.bus.crtc.active_resolution();
+                            let nw = raw_w.clamp(256, 1024);
+                            let nh = raw_h.clamp(128, 1024);
+                            if let Some((dw, dh)) = compute_gpu_scale_target(st.gpu_scale, nw, nh) {
+                                comp.submit_frame_scaled_rgb565(&mut st.vm.bus, dw, dh);
+                                st.pending_scaled = true;
+                            } else {
+                                comp.submit_frame_rgb565(&mut st.vm.bus);
+                                st.pending_scaled = false;
+                            }
+                            let t_after_submit = st.perf_log.then(Instant::now);
+                            (prev, prev_scaled, timing, t_after_finish, t_after_submit)
+                        } else {
+                            let frame = comp.render_frame_rgb565(&mut st.vm.bus);
+                            st.pending_scaled = false;
+                            let t_end = st.perf_log.then(Instant::now);
+                            (Some(frame), false, None, t1, t_end)
+                        }
+                    } else {
+                        (None, false, None, t1, t1)
+                    }
+                });
+
+                if let Some(rendered) = rendered_opt {
+                    let w = rendered.width.max(1);
+                    let h = rendered.height.max(1);
+                    let aspect = if out_scaled {
+                        0.0
+                    } else {
+                        aspect_for_resolution(w, h)
+                    };
+                    notify_geometry_and_fps(st, w, h, aspect, next_fps);
+                    presented_w = w;
+                    presented_h = h;
+
+                    if let Some(vcb) = video_cb {
+                        unsafe {
+                            vcb(
+                                rendered.rgb565.as_ptr() as *const c_void,
+                                w,
+                                h,
+                                (w as usize) * std::mem::size_of::<u16>(),
+                            );
+                        }
+                    }
+                } else {
+                    notify_geometry_and_fps(
+                        st,
+                        st.cur_w,
+                        st.cur_h,
+                        f32::from_bits(st.cur_aspect_bits),
+                        next_fps,
+                    );
+                }
+                (timing, t_a, t_b)
             };
-            env_call(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &mut av);
-        }
 
         if let (Some(a), Some(b), Some(c), Some(d)) = (t0, t1, t2, t3) {
             st.perf_cpu_ns += b.duration_since(a).as_nanos() as u64;

@@ -1,14 +1,18 @@
 #![allow(non_camel_case_types, non_snake_case, non_upper_case_globals, dead_code)]
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 use std::time::Instant;
 
-use msx68k_bus::{CpuModel, CpuSpeedMode, Crtc, FrameBudget, VmConfig, X68kVm};
+use msx68k_bus::{
+    CpuModel, CpuSpeedMode, Crtc, FrameBudget, Opm, OpmRegEvent, OpmSynthMode, VmConfig, X68kVm,
+};
 use msx68k_vicon::{
     FrameTimingStats, PixelFormat, RenderedFrame565, RendererConfig, ShaderGeneration,
     ViconCompositor,
@@ -318,16 +322,214 @@ struct CoreState {
     frame_counter: u64,
     audio_opm: Vec<(i16, i16)>,
     audio_pcm: Vec<i16>,
+    audio_events: Vec<OpmRegEvent>,
+    opm_mode: OpmAudioMode,
+    opm_worker: Option<OpmOffloadWorker>,
     perf_log: bool,
     perf_detail: bool,
     perf_frames: u32,
     perf_cpu_ns: u64,
     perf_finish_ns: u64,
     perf_submit_ns: u64,
+    perf_audio_ns: u64,
+    perf_opm_bg_ns: u64,
+    perf_opm_events: u64,
     perf_up_us: u64,
     perf_draw_us: u64,
     perf_rb_us: u64,
     perf_timing_samples: u32,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum OpmAudioMode {
+    Inline,
+    Offload,
+    Off,
+}
+
+impl OpmAudioMode {
+    const fn label(self) -> &'static str {
+        match self {
+            OpmAudioMode::Inline => "inline",
+            OpmAudioMode::Offload => "offload",
+            OpmAudioMode::Off => "off",
+        }
+    }
+}
+
+enum OpmWorkerReq {
+    Synthesize {
+        events: Vec<OpmRegEvent>,
+        target_clock: u64,
+        pcm_buf: Vec<i16>,
+    },
+    Reset,
+    Shutdown,
+}
+
+struct OpmWorkerResp {
+    pcm_buf: Vec<i16>,
+    events_buf: Vec<OpmRegEvent>,
+    synth_ns: u64,
+    event_count: usize,
+}
+
+struct OpmOffloadWorker {
+    req_tx: mpsc::Sender<OpmWorkerReq>,
+    resp_rx: mpsc::Receiver<OpmWorkerResp>,
+    handle: Option<thread::JoinHandle<()>>,
+    in_flight: bool,
+    spare_pcm: Vec<i16>,
+}
+
+impl OpmOffloadWorker {
+    fn spawn() -> Option<Self> {
+        let (req_tx, req_rx) = mpsc::channel::<OpmWorkerReq>();
+        let (resp_tx, resp_rx) = mpsc::channel::<OpmWorkerResp>();
+        let handle = thread::Builder::new()
+            .name("msx68k-opm".into())
+            .spawn(move || {
+                let mut synth_opm = Opm::new();
+                synth_opm.set_audio_enabled(true);
+                let mut synth_clock: u64 = 0;
+                let mut pending_events: VecDeque<OpmRegEvent> = VecDeque::with_capacity(1024);
+
+                while let Ok(req) = req_rx.recv() {
+                    match req {
+                        OpmWorkerReq::Synthesize {
+                            mut events,
+                            target_clock,
+                            mut pcm_buf,
+                        } => {
+                            let t_start = Instant::now();
+                            let event_count = events.len();
+                            pending_events.extend(events.drain(..));
+                            if target_clock < synth_clock {
+                                synth_clock = target_clock;
+                            }
+                            let n_samples = target_clock.saturating_sub(synth_clock) as usize;
+                            pcm_buf.clear();
+                            if pcm_buf.capacity() < n_samples * 2 {
+                                pcm_buf.reserve(n_samples * 2 - pcm_buf.capacity());
+                            }
+                            while synth_clock < target_clock {
+                                while let Some(ev) = pending_events.front() {
+                                    if ev.sample_time <= synth_clock {
+                                        synth_opm.write_reg(ev.reg, ev.val);
+                                        pending_events.pop_front();
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                let (l, r) = synth_opm.next_sample();
+                                pcm_buf.push(l);
+                                pcm_buf.push(r);
+                                synth_clock += 1;
+                            }
+                            let synth_ns = t_start.elapsed().as_nanos() as u64;
+                            if resp_tx
+                                .send(OpmWorkerResp {
+                                    pcm_buf,
+                                    events_buf: events,
+                                    synth_ns,
+                                    event_count,
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        OpmWorkerReq::Reset => {
+                            synth_opm.reset();
+                            synth_opm.set_audio_enabled(true);
+                            pending_events.clear();
+                            synth_clock = 0;
+                            let _ = resp_tx.send(OpmWorkerResp {
+                                pcm_buf: Vec::new(),
+                                events_buf: Vec::new(),
+                                synth_ns: 0,
+                                event_count: 0,
+                            });
+                        }
+                        OpmWorkerReq::Shutdown => break,
+                    }
+                }
+            })
+            .ok()?;
+        Some(Self {
+            req_tx,
+            resp_rx,
+            handle: Some(handle),
+            in_flight: false,
+            spare_pcm: Vec::with_capacity(4096),
+        })
+    }
+
+    fn exchange(
+        &mut self,
+        events: &mut Vec<OpmRegEvent>,
+        target_clock: u64,
+    ) -> Option<(Vec<i16>, u64, usize)> {
+        let send_events = std::mem::take(events);
+        let mut ready = None;
+        if self.in_flight {
+            if let Ok(resp) = self.resp_rx.recv() {
+                *events = resp.events_buf;
+                events.clear();
+                ready = Some((resp.pcm_buf, resp.synth_ns, resp.event_count));
+            }
+            self.in_flight = false;
+        }
+        let pcm_buf = std::mem::take(&mut self.spare_pcm);
+        if self
+            .req_tx
+            .send(OpmWorkerReq::Synthesize {
+                events: send_events,
+                target_clock,
+                pcm_buf,
+            })
+            .is_ok()
+        {
+            self.in_flight = true;
+        }
+        ready
+    }
+
+    fn recycle_pcm(&mut self, mut buf: Vec<i16>) {
+        buf.clear();
+        if buf.capacity() >= self.spare_pcm.capacity() {
+            self.spare_pcm = buf;
+        }
+    }
+
+    fn reset(&mut self, events: &mut Vec<OpmRegEvent>) {
+        if self.in_flight {
+            if let Ok(resp) = self.resp_rx.recv() {
+                self.recycle_pcm(resp.pcm_buf);
+                if resp.events_buf.capacity() >= events.capacity() {
+                    *events = resp.events_buf;
+                }
+                events.clear();
+            }
+            self.in_flight = false;
+        }
+        if self.req_tx.send(OpmWorkerReq::Reset).is_ok() {
+            let _ = self.resp_rx.recv();
+        }
+    }
+}
+
+impl Drop for OpmOffloadWorker {
+    fn drop(&mut self) {
+        if self.in_flight {
+            let _ = self.resp_rx.recv();
+            self.in_flight = false;
+        }
+        let _ = self.req_tx.send(OpmWorkerReq::Shutdown);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
 }
 
 static CALLBACKS: Mutex<Callbacks> = Mutex::new(Callbacks {
@@ -460,6 +662,8 @@ const VAR_RENDERER_K: &[u8] = b"msx68k_renderer\0";
 const VAR_RENDERER_V: &[u8] = b"Renderer; auto|gles2|cpu\0";
 const VAR_GPU_SCALE_K: &[u8] = b"msx68k_gpu_scale\0";
 const VAR_GPU_SCALE_V: &[u8] = b"GPU Downscale; off|fit_par|fit_4x3|axis\0";
+const VAR_OPM_THREAD_K: &[u8] = b"msx68k_opm_thread\0";
+const VAR_OPM_THREAD_V: &[u8] = b"OPM Synth Thread; inline|offload|off\0";
 
 fn log_msg(level: c_uint, msg: &str) {
     let cb = CALLBACKS.lock().ok().and_then(|c| c.log);
@@ -564,6 +768,25 @@ fn parse_gpu_scale_option(s: Option<&str>) -> GpuScaleMode {
         Some("axis") => GpuScaleMode::Axis,
         _ => GpuScaleMode::Off,
     }
+}
+
+fn parse_opm_mode_str(s: &str) -> OpmAudioMode {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "offload" => OpmAudioMode::Offload,
+        "off" | "none" | "disabled" => OpmAudioMode::Off,
+        _ => OpmAudioMode::Inline,
+    }
+}
+
+fn resolve_opm_audio_mode() -> OpmAudioMode {
+    if let Ok(v) = std::env::var("MSX68K_OPM_THREAD") {
+        if !v.trim().is_empty() {
+            return parse_opm_mode_str(&v);
+        }
+    }
+    get_variable(VAR_OPM_THREAD_K)
+        .map(|s| parse_opm_mode_str(&s))
+        .unwrap_or(OpmAudioMode::Inline)
 }
 
 fn compute_gpu_scale_target(mode: GpuScaleMode, native_w: u32, native_h: u32) -> Option<(u32, u32)> {
@@ -1133,7 +1356,16 @@ fn load_game_inner(game: *const RetroGameInfo) -> bool {
         log_msg(RETRO_LOG_ERROR, &format!("X68000 VM reset failed: {e:?}"));
         return false;
     }
-    vm.set_audio_enabled(true);
+
+    let mut audio_events = Vec::with_capacity(256);
+    let mut opm_worker = None;
+    let opm_mode = configure_vm_opm(
+        &mut vm,
+        resolve_opm_audio_mode(),
+        &mut opm_worker,
+        &mut audio_events,
+    );
+    log_msg(RETRO_LOG_INFO, &format!("YM2151 OPM synth mode: {}", opm_mode.label()));
 
     let (cur_w, cur_h) = vm.bus.crtc.active_resolution();
     let fd_accesses = [
@@ -1248,12 +1480,18 @@ fn load_game_inner(game: *const RetroGameInfo) -> bool {
         frame_counter: 0,
         audio_opm: Vec::with_capacity(2048),
         audio_pcm: Vec::with_capacity(4096),
+        audio_events,
+        opm_mode,
+        opm_worker,
         perf_log,
         perf_detail,
         perf_frames: 0,
         perf_cpu_ns: 0,
         perf_finish_ns: 0,
         perf_submit_ns: 0,
+        perf_audio_ns: 0,
+        perf_opm_bg_ns: 0,
+        perf_opm_events: 0,
         perf_up_us: 0,
         perf_draw_us: 0,
         perf_rb_us: 0,
@@ -1313,6 +1551,10 @@ pub unsafe extern "C" fn retro_set_environment(cb: Option<RetroEnvironmentFn>) {
             RetroVariable {
                 key: VAR_GPU_SCALE_K.as_ptr() as *const c_char,
                 value: VAR_GPU_SCALE_V.as_ptr() as *const c_char,
+            },
+            RetroVariable {
+                key: VAR_OPM_THREAD_K.as_ptr() as *const c_char,
+                value: VAR_OPM_THREAD_V.as_ptr() as *const c_char,
             },
             RetroVariable {
                 key: std::ptr::null(),
@@ -1491,6 +1733,43 @@ pub unsafe extern "C" fn retro_unload_game() {
     let _ = catch_unwind(AssertUnwindSafe(teardown_core_state));
 }
 
+fn configure_vm_opm(
+    vm: &mut X68kVm,
+    requested: OpmAudioMode,
+    worker_slot: &mut Option<OpmOffloadWorker>,
+    events_buf: &mut Vec<OpmRegEvent>,
+) -> OpmAudioMode {
+    match requested {
+        OpmAudioMode::Offload => {
+            if worker_slot.is_none() {
+                *worker_slot = OpmOffloadWorker::spawn();
+            }
+            if let Some(worker) = worker_slot.as_mut() {
+                worker.reset(events_buf);
+                vm.set_opm_synth_mode(OpmSynthMode::Offload);
+                vm.set_audio_enabled(true);
+                OpmAudioMode::Offload
+            } else {
+                log_msg(RETRO_LOG_WARN, "Failed to spawn OPM offload thread; falling back to inline");
+                vm.set_opm_synth_mode(OpmSynthMode::Inline);
+                vm.set_audio_enabled(true);
+                OpmAudioMode::Inline
+            }
+        }
+        OpmAudioMode::Inline => {
+            *worker_slot = None;
+            vm.set_opm_synth_mode(OpmSynthMode::Inline);
+            vm.set_audio_enabled(true);
+            OpmAudioMode::Inline
+        }
+        OpmAudioMode::Off => {
+            *worker_slot = None;
+            vm.set_audio_enabled(false);
+            OpmAudioMode::Off
+        }
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn retro_reset() {
     let _ = catch_unwind(AssertUnwindSafe(|| {
@@ -1515,9 +1794,15 @@ pub unsafe extern "C" fn retro_reset() {
                 if let Err(e) = st.vm.reset() {
                     log_msg(RETRO_LOG_ERROR, &format!("X68000 VM reset failed: {e:?}"));
                 }
-                st.vm.set_audio_enabled(true);
                 st.audio_opm.clear();
                 st.audio_pcm.clear();
+                st.audio_events.clear();
+                st.opm_mode = configure_vm_opm(
+                    &mut st.vm,
+                    st.opm_mode,
+                    &mut st.opm_worker,
+                    &mut st.audio_events,
+                );
                 st.pending_scaled = false;
                 st.need_full_vram_upload = true;
             }
@@ -1584,6 +1869,7 @@ pub unsafe extern "C" fn retro_run() {
             let next_speed = parse_speed_option(get_variable(VAR_SPEED_K).as_deref(), cpu);
             let next_drive = parse_drive_option();
             let next_gpu_scale = parse_gpu_scale_option(get_variable(VAR_GPU_SCALE_K).as_deref());
+            let next_opm_mode = resolve_opm_audio_mode();
             if let Ok(mut guard) = CORE_STATE.lock() {
                 if let Some(st) = guard.as_mut() {
                     if st.vm.speed_mode() != next_speed {
@@ -1591,6 +1877,21 @@ pub unsafe extern "C" fn retro_run() {
                     }
                     st.swap_drive = next_drive;
                     st.gpu_scale = next_gpu_scale;
+                    if st.opm_mode != next_opm_mode {
+                        st.audio_opm.clear();
+                        st.audio_pcm.clear();
+                        st.audio_events.clear();
+                        st.opm_mode = configure_vm_opm(
+                            &mut st.vm,
+                            next_opm_mode,
+                            &mut st.opm_worker,
+                            &mut st.audio_events,
+                        );
+                        log_msg(
+                            RETRO_LOG_INFO,
+                            &format!("YM2151 OPM synth mode: {}", st.opm_mode.label()),
+                        );
+                    }
                 }
             }
         }
@@ -1664,6 +1965,20 @@ pub unsafe extern "C" fn retro_run() {
         }
 
         let t1 = st.perf_log.then(Instant::now);
+
+        let ta0 = st.perf_log.then(Instant::now);
+        let offload_ready = if st.opm_mode == OpmAudioMode::Offload {
+            st.audio_events.clear();
+            let target_clock = st.vm.take_audio_events(&mut st.audio_events);
+            st.opm_worker
+                .as_mut()
+                .and_then(|worker| worker.exchange(&mut st.audio_events, target_clock))
+        } else {
+            None
+        };
+        let ta1 = st.perf_log.then(Instant::now);
+
+        let t_vicon0 = st.perf_log.then(Instant::now);
         let mut presented_w = st.cur_w;
         let mut presented_h = st.cur_h;
         let next_fps = compute_crtc_fps(&st.vm.bus.crtc);
@@ -1687,9 +2002,9 @@ pub unsafe extern "C" fn retro_run() {
                             None
                         };
                         let t_end = st.perf_log.then(Instant::now);
-                        (dims, timing, t1, t_end)
+                        (dims, timing, t_vicon0, t_end)
                     } else {
-                        (None, None, t1, t1)
+                        (None, None, t_vicon0, t_vicon0)
                     }
                 });
                 if let Some((raw_w, raw_h)) = hw_dims {
@@ -1729,7 +2044,7 @@ pub unsafe extern "C" fn retro_run() {
                             let frame = comp.render_frame_readonly(&st.vm.bus).to_rgb565();
                             st.pending_scaled = false;
                             let t_end = st.perf_log.then(Instant::now);
-                            (Some(frame), false, None, t1, t_end)
+                            (Some(frame), false, None, t_vicon0, t_end)
                         } else if st.renderer_gen == ShaderGeneration::Gles2 {
                             let prev = comp.finish_frame_rgb565();
                             let prev_scaled = st.pending_scaled;
@@ -1755,10 +2070,10 @@ pub unsafe extern "C" fn retro_run() {
                             let frame = comp.render_frame_rgb565(&mut st.vm.bus);
                             st.pending_scaled = false;
                             let t_end = st.perf_log.then(Instant::now);
-                            (Some(frame), false, None, t1, t_end)
+                            (Some(frame), false, None, t_vicon0, t_end)
                         }
                     } else {
-                        (None, false, None, t1, t1)
+                        (None, false, None, t_vicon0, t_vicon0)
                     }
                 });
 
@@ -1796,10 +2111,61 @@ pub unsafe extern "C" fn retro_run() {
                 (timing, t_a, t_b)
             };
 
-        if let (Some(a), Some(b), Some(c), Some(d)) = (t0, t1, t2, t3) {
+        let ta2 = st.perf_log.then(Instant::now);
+        match st.opm_mode {
+            OpmAudioMode::Offload => {
+                if let Some((pcm, bg_ns, ev_count)) = offload_ready {
+                    st.perf_opm_bg_ns += bg_ns;
+                    st.perf_opm_events += ev_count as u64;
+                    if !pcm.is_empty() {
+                        if let Some(acb) = audio_batch_cb {
+                            unsafe {
+                                acb(pcm.as_ptr(), pcm.len() / 2);
+                            }
+                        }
+                    }
+                    if let Some(worker) = st.opm_worker.as_mut() {
+                        worker.recycle_pcm(pcm);
+                    }
+                }
+            }
+            OpmAudioMode::Inline => {
+                st.audio_opm.clear();
+                st.vm.take_audio_samples(&mut st.audio_opm);
+                if !st.audio_opm.is_empty() {
+                    if let Some(acb) = audio_batch_cb {
+                        st.audio_pcm.clear();
+                        st.audio_pcm.reserve(st.audio_opm.len() * 2);
+                        for &(l, r) in &st.audio_opm {
+                            st.audio_pcm.push(l);
+                            st.audio_pcm.push(r);
+                        }
+                        unsafe {
+                            acb(st.audio_pcm.as_ptr(), st.audio_opm.len());
+                        }
+                    }
+                }
+            }
+            OpmAudioMode::Off => {
+                if let Some(acb) = audio_batch_cb {
+                    let frames = ((OPM_SAMPLE_RATE / st.cur_fps).round() as usize).clamp(160, 4096);
+                    st.audio_pcm.resize(frames * 2, 0);
+                    unsafe {
+                        acb(st.audio_pcm.as_ptr(), frames);
+                    }
+                }
+            }
+        }
+        let ta3 = st.perf_log.then(Instant::now);
+
+        if let (Some(a), Some(b), Some(tv0), Some(c), Some(d)) = (t0, t1, t_vicon0, t2, t3) {
             st.perf_cpu_ns += b.duration_since(a).as_nanos() as u64;
-            st.perf_finish_ns += c.duration_since(b).as_nanos() as u64;
+            st.perf_finish_ns += c.duration_since(tv0).as_nanos() as u64;
             st.perf_submit_ns += d.duration_since(c).as_nanos() as u64;
+            if let (Some(a0), Some(a1), Some(a2), Some(a3)) = (ta0, ta1, ta2, ta3) {
+                st.perf_audio_ns += a1.duration_since(a0).as_nanos() as u64
+                    + a3.duration_since(a2).as_nanos() as u64;
+            }
             if let Some(t) = timing {
                 st.perf_up_us += t.upload_us as u64;
                 st.perf_draw_us += t.draw_us as u64;
@@ -1812,45 +2178,39 @@ pub unsafe extern "C" fn retro_run() {
                 let cpu_ms = (st.perf_cpu_ns as f64) / (n * 1_000_000.0);
                 let fin_ms = (st.perf_finish_ns as f64) / (n * 1_000_000.0);
                 let sub_ms = (st.perf_submit_ns as f64) / (n * 1_000_000.0);
-                let total_ms = cpu_ms + fin_ms + sub_ms;
+                let aud_ms = (st.perf_audio_ns as f64) / (n * 1_000_000.0);
+                let total_ms = cpu_ms + fin_ms + sub_ms + aud_ms;
                 let gen = st.renderer_gen;
+                let opm_lbl = st.opm_mode.label();
+                let mut extra = String::new();
+                if st.opm_mode == OpmAudioMode::Offload {
+                    let bg_ms = (st.perf_opm_bg_ns as f64) / (n * 1_000_000.0);
+                    let ev_avg = (st.perf_opm_events as f64) / n;
+                    extra.push_str(&format!(" [opm_bg={bg_ms:.2}ms ev={ev_avg:.1}]"));
+                }
                 if st.perf_timing_samples > 0 {
                     let tn = st.perf_timing_samples as f64;
                     let up_ms = (st.perf_up_us as f64) / (tn * 1000.0);
                     let draw_ms = (st.perf_draw_us as f64) / (tn * 1000.0);
                     let rb_ms = (st.perf_rb_us as f64) / (tn * 1000.0);
-                    eprintln!(
-                        "[msx68k perf] [{gen:?}] cpu={cpu_ms:.2}ms finish={fin_ms:.2}ms submit={sub_ms:.2}ms total={total_ms:.2}ms [up={up_ms:.2}ms draw={draw_ms:.2}ms rb={rb_ms:.2}ms] ({presented_w}x{presented_h})"
-                    );
-                } else {
-                    eprintln!(
-                        "[msx68k perf] [{gen:?}] cpu={cpu_ms:.2}ms finish={fin_ms:.2}ms submit={sub_ms:.2}ms total={total_ms:.2}ms ({presented_w}x{presented_h})"
-                    );
+                    extra.push_str(&format!(
+                        " [up={up_ms:.2}ms draw={draw_ms:.2}ms rb={rb_ms:.2}ms]"
+                    ));
                 }
+                eprintln!(
+                    "[msx68k perf] [{gen:?}/{opm_lbl}] cpu={cpu_ms:.2}ms finish={fin_ms:.2}ms submit={sub_ms:.2}ms aud={aud_ms:.2}ms total={total_ms:.2}ms{extra} ({presented_w}x{presented_h})"
+                );
                 st.perf_frames = 0;
                 st.perf_cpu_ns = 0;
                 st.perf_finish_ns = 0;
                 st.perf_submit_ns = 0;
+                st.perf_audio_ns = 0;
+                st.perf_opm_bg_ns = 0;
+                st.perf_opm_events = 0;
                 st.perf_up_us = 0;
                 st.perf_draw_us = 0;
                 st.perf_rb_us = 0;
                 st.perf_timing_samples = 0;
-            }
-        }
-
-        st.audio_opm.clear();
-        st.vm.take_audio_samples(&mut st.audio_opm);
-        if !st.audio_opm.is_empty() {
-            if let Some(acb) = audio_batch_cb {
-                st.audio_pcm.clear();
-                st.audio_pcm.reserve(st.audio_opm.len() * 2);
-                for &(l, r) in &st.audio_opm {
-                    st.audio_pcm.push(l);
-                    st.audio_pcm.push(r);
-                }
-                unsafe {
-                    acb(st.audio_pcm.as_ptr(), st.audio_opm.len());
-                }
             }
         }
 

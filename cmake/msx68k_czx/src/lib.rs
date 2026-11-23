@@ -663,7 +663,7 @@ const VAR_RENDERER_V: &[u8] = b"Renderer; auto|gles2|cpu\0";
 const VAR_GPU_SCALE_K: &[u8] = b"msx68k_gpu_scale\0";
 const VAR_GPU_SCALE_V: &[u8] = b"GPU Downscale; off|fit_par|fit_4x3|axis\0";
 const VAR_OPM_THREAD_K: &[u8] = b"msx68k_opm_thread\0";
-const VAR_OPM_THREAD_V: &[u8] = b"OPM Synth Thread; inline|offload|off\0";
+const VAR_OPM_THREAD_V: &[u8] = b"OPM Synth Thread; offload|inline|off\0";
 
 fn log_msg(level: c_uint, msg: &str) {
     let cb = CALLBACKS.lock().ok().and_then(|c| c.log);
@@ -772,9 +772,9 @@ fn parse_gpu_scale_option(s: Option<&str>) -> GpuScaleMode {
 
 fn parse_opm_mode_str(s: &str) -> OpmAudioMode {
     match s.trim().to_ascii_lowercase().as_str() {
-        "offload" => OpmAudioMode::Offload,
+        "inline" => OpmAudioMode::Inline,
         "off" | "none" | "disabled" => OpmAudioMode::Off,
-        _ => OpmAudioMode::Inline,
+        _ => OpmAudioMode::Offload,
     }
 }
 
@@ -786,7 +786,7 @@ fn resolve_opm_audio_mode() -> OpmAudioMode {
     }
     get_variable(VAR_OPM_THREAD_K)
         .map(|s| parse_opm_mode_str(&s))
-        .unwrap_or(OpmAudioMode::Inline)
+        .unwrap_or(OpmAudioMode::Offload)
 }
 
 fn compute_gpu_scale_target(mode: GpuScaleMode, native_w: u32, native_h: u32) -> Option<(u32, u32)> {

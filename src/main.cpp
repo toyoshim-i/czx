@@ -31,6 +31,7 @@ void print_usage(const char* prog) {
         "  --mode <pan|overflow|aspect>  Initial LCD scaling mode (implies --lcd, default: overflow)\n"
         "  --preset <0..4>               Initial test pattern preset (default: 0)\n"
         "  --borders                     Show overscan/PAL borders when present\n"
+        "  --aspect <par|4:3|full>       Aspect ratio policy (default: par)\n"
         "  --crt43                       Use 4:3 CRT aspect policy\n"
         "  --margin <auto|black>         Fill letterbox/pillarbox margins (default: auto)\n"
         "  --activity <on|off>           Show bottom-right tape/disk access indicator (default: on)\n"
@@ -108,6 +109,18 @@ int main(int argc, char** argv) {
             cfg.preset_index = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
         } else if (std::strcmp(arg, "--borders") == 0) {
             cfg.show_borders = true;
+        } else if (std::strcmp(arg, "--aspect") == 0 && i + 1 < argc) {
+            const char* ap = argv[++i];
+            if (std::strcmp(ap, "par") == 0) {
+                cfg.aspect_policy = czx::video::AspectPolicy::ParAware;
+            } else if (std::strcmp(ap, "4:3") == 0 || std::strcmp(ap, "crt43") == 0) {
+                cfg.aspect_policy = czx::video::AspectPolicy::Crt4x3;
+            } else if (std::strcmp(ap, "full") == 0 || std::strcmp(ap, "stretch") == 0) {
+                cfg.aspect_policy = czx::video::AspectPolicy::FullStretch;
+            } else {
+                std::fprintf(stderr, "Unknown aspect policy: %s\n", ap);
+                return 2;
+            }
         } else if (std::strcmp(arg, "--crt43") == 0) {
             cfg.aspect_policy = czx::video::AspectPolicy::Crt4x3;
         } else if (std::strcmp(arg, "--margin") == 0 && i + 1 < argc) {

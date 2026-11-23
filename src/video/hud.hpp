@@ -20,9 +20,11 @@ struct HudState {
     std::string toast_text;
     int fps_x10 = 0;  // Tenths of FPS (e.g. 599 = 59.9 FPS); <=0 hides indicator
     int target_fps_x10 = 600;  // Target core FPS in tenths (e.g. 501 = 50.1 FPS)
+    bool fullscreen_native = false;
     bool desktop_native = false;
     int desktop_scale = 2;
     DisplayMode display_mode = DisplayMode::OverflowFit;
+    AspectPolicy aspect_policy = AspectPolicy::ParAware;
     int input_mode = 0;  // 0=KBD, 1=JP1, 2=JP2
     bool menu_open = false;
     bool show_activity_indicator = true;

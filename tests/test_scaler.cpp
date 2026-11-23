@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 using namespace czx::video;
@@ -51,6 +52,11 @@ void test_layouts() {
         ScalerConfig cfg{DisplayMode::AspectFit, AspectPolicy::Crt4x3, false, 0, 0};
         const auto l = Scaler::compute_layout(a2_40, cfg);
         CHECK(l.dst_w == 227 && l.dst_h == 170);
+    }
+    {
+        ScalerConfig cfg{DisplayMode::AspectFit, AspectPolicy::FullStretch, false, 0, 0};
+        const auto l = Scaler::compute_layout(a2_40, cfg);
+        CHECK(l.dst_x == 0 && l.dst_y == 0 && l.dst_w == kLcdWidth && l.dst_h == kLcdHeight);
     }
 
     // 2. Apple II 80-col: 560x192, PAR 1:2
@@ -472,6 +478,10 @@ void test_desktop_window_size() {
     auto c_512 = compute_desktop_window_size(512, 512, 1, 1, AspectPolicy::Crt4x3, 1);
     CHECK(c_512.width == 683 && c_512.height == 512);
 
+    // FullStretch windowed sizing keeps PAR dimensions cleanly
+    auto fs = compute_desktop_window_size(560, 192, 1, 2, AspectPolicy::FullStretch, 2);
+    CHECK(fs.width == 1120 && fs.height == 768);
+
     // Clamping to display bounds preserves aspect ratio
     auto clamped = compute_desktop_window_size(768, 512, 1, 1, AspectPolicy::ParAware, 3, 1920, 1080);
     CHECK(clamped.width == 1620 && clamped.height == 1080);
@@ -485,6 +495,62 @@ void test_desktop_window_size() {
     CHECK(hi.width == 960 && hi.height == 600);
 }
 
+void test_aspect_policy_and_native_present_rect() {
+    CHECK(std::strcmp(aspect_policy_name(AspectPolicy::ParAware), "PAR") == 0);
+    CHECK(std::strcmp(aspect_policy_name(AspectPolicy::Crt4x3), "CRT 4:3") == 0);
+    CHECK(std::strcmp(aspect_policy_name(AspectPolicy::FullStretch), "Full") == 0);
+    CHECK(std::strcmp(aspect_policy_short(AspectPolicy::ParAware), "PAR") == 0);
+    CHECK(std::strcmp(aspect_policy_short(AspectPolicy::Crt4x3), "4:3") == 0);
+    CHECK(std::strcmp(aspect_policy_short(AspectPolicy::FullStretch), "FULL") == 0);
+
+    // 768x512 (3:2) on 16:9 1920x1080
+    {
+        const auto r_par = compute_native_present_rect(768, 512, 1, 1, AspectPolicy::ParAware, 1920, 1080);
+        CHECK(r_par.x == 150 && r_par.y == 0 && r_par.width == 1620 && r_par.height == 1080);
+
+        const auto r_43 = compute_native_present_rect(768, 512, 1, 1, AspectPolicy::Crt4x3, 1920, 1080);
+        CHECK(r_43.x == 240 && r_43.y == 0 && r_43.width == 1440 && r_43.height == 1080);
+
+        const auto r_full = compute_native_present_rect(768, 512, 1, 1, AspectPolicy::FullStretch, 1920, 1080);
+        CHECK(r_full.x == 0 && r_full.y == 0 && r_full.width == 1920 && r_full.height == 1080);
+    }
+
+    // 768x512 (3:2) on 4:3 1024x768 (Cardputer Zero test monitor)
+    {
+        const auto r_par = compute_native_present_rect(768, 512, 1, 1, AspectPolicy::ParAware, 1024, 768);
+        CHECK(r_par.x == 0 && r_par.y == 42 && r_par.width == 1024 && r_par.height == 683);
+
+        const auto r_43 = compute_native_present_rect(768, 512, 1, 1, AspectPolicy::Crt4x3, 1024, 768);
+        CHECK(r_43.x == 0 && r_43.y == 0 && r_43.width == 1024 && r_43.height == 768);
+
+        const auto r_full = compute_native_present_rect(768, 512, 1, 1, AspectPolicy::FullStretch, 1024, 768);
+        CHECK(r_full.x == 0 && r_full.y == 0 && r_full.width == 1024 && r_full.height == 768);
+    }
+
+    // Non-square PAR: Apple II 560x192 (PAR 1:2 -> eff 560x384, ~1.458) on 1024x768
+    {
+        const auto r_par = compute_native_present_rect(560, 192, 1, 2, AspectPolicy::ParAware, 1024, 768);
+        CHECK(r_par.x == 0 && r_par.y == 33 && r_par.width == 1024 && r_par.height == 702);
+
+        const auto r_43 = compute_native_present_rect(560, 192, 1, 2, AspectPolicy::Crt4x3, 1024, 768);
+        CHECK(r_43.x == 0 && r_43.y == 0 && r_43.width == 1024 && r_43.height == 768);
+    }
+
+    // Wide PAR: X68000 256x256 (PAR 1333:1000) on 1920x1080
+    {
+        const auto r_par = compute_native_present_rect(256, 256, 1333, 1000, AspectPolicy::ParAware, 1920, 1080);
+        CHECK(r_par.x == 240 && r_par.y == 0 && r_par.width == 1440 && r_par.height == 1080);
+    }
+
+    // Invalid dimension guard
+    {
+        const auto r_bad1 = compute_native_present_rect(0, 512, 1, 1, AspectPolicy::ParAware, 1920, 1080);
+        const auto r_bad2 = compute_native_present_rect(512, 512, 1, 1, AspectPolicy::FullStretch, 0, 1080);
+        CHECK(r_bad1.width == 0 && r_bad1.height == 0);
+        CHECK(r_bad2.width == 0 && r_bad2.height == 0);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -493,6 +559,7 @@ int main() {
     test_hud_render();
     test_float_oracle_all_formats();
     test_desktop_window_size();
+    test_aspect_policy_and_native_present_rect();
     std::printf("test_scaler: all assertions passed\n");
     return 0;
 }

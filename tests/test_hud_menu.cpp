@@ -102,6 +102,36 @@ void test_render_hud_activity_overlay() {
     czx::video::render_hud(fb.data(), hud, layout);
     CHECK(count_nonzero_in_rect(fb, 0, 144, czx::video::kLcdWidth, czx::video::kLcdHeight) > 400);
 
+    // Fullscreen native mode renders PAR / 4:3 / FULL pills on slots 4 / 5 / 6.
+    const uint16_t active_pill_bg = czx::video::pack_rgb565(18, 86, 118);
+    const uint16_t inactive_pill_bg = czx::video::pack_rgb565(24, 30, 42);
+    const size_t slot4_bg = 147u * czx::video::kLcdWidth + 27u;
+    const size_t slot5_bg = 147u * czx::video::kLcdWidth + 84u;
+    const size_t slot6_bg = 147u * czx::video::kLcdWidth + 139u;
+
+    std::fill(fb.begin(), fb.end(), 0);
+    hud.fullscreen_native = true;
+    hud.aspect_policy = czx::video::AspectPolicy::ParAware;
+    czx::video::render_hud(fb.data(), hud, layout);
+    CHECK(fb[slot4_bg] == active_pill_bg);
+    CHECK(fb[slot5_bg] == inactive_pill_bg);
+    CHECK(fb[slot6_bg] == inactive_pill_bg);
+
+    std::fill(fb.begin(), fb.end(), 0);
+    hud.aspect_policy = czx::video::AspectPolicy::Crt4x3;
+    czx::video::render_hud(fb.data(), hud, layout);
+    CHECK(fb[slot4_bg] == inactive_pill_bg);
+    CHECK(fb[slot5_bg] == active_pill_bg);
+    CHECK(fb[slot6_bg] == inactive_pill_bg);
+
+    std::fill(fb.begin(), fb.end(), 0);
+    hud.aspect_policy = czx::video::AspectPolicy::FullStretch;
+    czx::video::render_hud(fb.data(), hud, layout);
+    CHECK(fb[slot4_bg] == inactive_pill_bg);
+    CHECK(fb[slot5_bg] == inactive_pill_bg);
+    CHECK(fb[slot6_bg] == active_pill_bg);
+    hud.fullscreen_native = false;
+
     // Alt held with fps_x10 > 0 draws top-left FPS pill; releasing Alt hides it.
     std::fill(fb.begin(), fb.end(), 0);
     hud.fps_x10 = 312;
@@ -339,6 +369,48 @@ void test_overlay_menu() {
     std::fill(fb.begin(), fb.end(), 0);
     menu.render(fb.data(), c64_full_vm);
     CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), c64_full_vm) == czx::video::MenuAction::CycleCoreNext);
+
+    // Non-fullscreen menu keeps Display -> VSync -> Aspect (rows 3, 4, 5 for 1-variant no-region vm).
+    czx::video::MenuViewModel non_fs_vm{};
+    non_fs_vm.core_name = "X68000 (msx68k)";
+    non_fs_vm.fullscreen_native = false;
+    non_fs_vm.desktop_native_active = true;
+    non_fs_vm.desktop_scale = 2;
+    non_fs_vm.has_vsync_option = true;
+    non_fs_vm.vsync_enabled = true;
+    menu.set_open(true);
+    menu.reset_cursor();
+    for (int i = 0; i < 3; ++i) {
+        CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), non_fs_vm) == czx::video::MenuAction::None);
+    }  // 3: Display
+    CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), non_fs_vm) == czx::video::MenuAction::CycleDisplayModeNext);
+    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), non_fs_vm) == czx::video::MenuAction::None);  // 4: VSync
+    CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), non_fs_vm) == czx::video::MenuAction::ToggleVsync);
+    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), non_fs_vm) == czx::video::MenuAction::None);  // 5: Aspect
+    CHECK(menu.handle_key(key_press(CZX_KEY_LEFT), non_fs_vm) == czx::video::MenuAction::CycleAspectPolicyPrev);
+    CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), non_fs_vm) == czx::video::MenuAction::CycleAspectPolicyNext);
+
+    // Fullscreen native menu omits Display row and places Aspect right after Drive2OrEject (index 3).
+    czx::video::MenuViewModel fs_vm = non_fs_vm;
+    fs_vm.fullscreen_native = true;
+    menu.set_open(true);
+    menu.reset_cursor();
+    for (int i = 0; i < 3; ++i) {
+        CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), fs_vm) == czx::video::MenuAction::None);
+    }  // 3: Aspect
+    CHECK(menu.handle_key(key_press(CZX_KEY_LEFT), fs_vm) == czx::video::MenuAction::CycleAspectPolicyPrev);
+    CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), fs_vm) == czx::video::MenuAction::CycleAspectPolicyNext);
+    CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), fs_vm) == czx::video::MenuAction::CycleAspectPolicyNext);
+    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), fs_vm) == czx::video::MenuAction::None);  // 4: VSync
+    CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), fs_vm) == czx::video::MenuAction::ToggleVsync);
+    for (const auto pol : {czx::video::AspectPolicy::ParAware,
+                           czx::video::AspectPolicy::Crt4x3,
+                           czx::video::AspectPolicy::FullStretch}) {
+        fs_vm.aspect_policy = pol;
+        std::fill(fb.begin(), fb.end(), 0);
+        menu.render(fb.data(), fs_vm);
+        CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
+    }
 }
 
 }  // namespace

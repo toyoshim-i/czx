@@ -56,6 +56,45 @@ constexpr uint16_t kIconAspectFit[10] = {
     0b111111111111,
 };
 
+constexpr uint16_t kIconAspectPar[10] = {
+    0b111111111111,
+    0b100000000001,
+    0b100011110001,
+    0b100100001001,
+    0b100101101001,
+    0b100101101001,
+    0b100100001001,
+    0b100011110001,
+    0b100000000001,
+    0b111111111111,
+};
+
+constexpr uint16_t kIconAspect4x3[10] = {
+    0b111111111111,
+    0b101000000101,
+    0b101011110101,
+    0b101011110101,
+    0b101011110101,
+    0b101011110101,
+    0b101011110101,
+    0b101011110101,
+    0b101000000101,
+    0b111111111111,
+};
+
+constexpr uint16_t kIconAspectFull[10] = {
+    0b111111111111,
+    0b111000000111,
+    0b110100001011,
+    0b101000000101,
+    0b100000000001,
+    0b100000000001,
+    0b101000000101,
+    0b110100001011,
+    0b111000000111,
+    0b111111111111,
+};
+
 constexpr uint16_t kIconKeyboard[10] = {
     0b000000000000,
     0b111111111111,
@@ -373,16 +412,24 @@ void render_hud(uint16_t* fb_rgb565, const HudState& hud, const ViewportLayout& 
                           : ((hud.input_mode == 1) ? "JP1" : "KBD"));
     const bool joy_active = (hud.input_mode != 0);
 
-    const std::array<Slot, 5> slots = {{
-        {'4', hud.desktop_native ? "1X" : "1:1", kIconNativePan,
-         hud.desktop_native ? (hud.desktop_scale == 1) : (hud.display_mode == DisplayMode::NativePan)},
-        {'5', hud.desktop_native ? "2X" : "FIT", kIconOverflowFit,
-         hud.desktop_native ? (hud.desktop_scale == 2) : (hud.display_mode == DisplayMode::OverflowFit)},
-        {'6', hud.desktop_native ? "3X" : "ASP", kIconAspectFit,
-         hud.desktop_native ? (hud.desktop_scale == 3) : (hud.display_mode == DisplayMode::AspectFit)},
-        {'7', joy_label, joy_active ? kIconJoystick : kIconKeyboard, joy_active},
-        {'8', "MENU", kIconMenu, hud.menu_open},
-    }};
+    const std::array<Slot, 5> slots = hud.fullscreen_native
+        ? std::array<Slot, 5>{{
+              {'4', "PAR", kIconAspectPar, hud.aspect_policy == AspectPolicy::ParAware},
+              {'5', "4:3", kIconAspect4x3, hud.aspect_policy == AspectPolicy::Crt4x3},
+              {'6', "FULL", kIconAspectFull, hud.aspect_policy == AspectPolicy::FullStretch},
+              {'7', joy_label, joy_active ? kIconJoystick : kIconKeyboard, joy_active},
+              {'8', "MENU", kIconMenu, hud.menu_open},
+          }}
+        : std::array<Slot, 5>{{
+              {'4', hud.desktop_native ? "1X" : "1:1", kIconNativePan,
+               hud.desktop_native ? (hud.desktop_scale == 1) : (hud.display_mode == DisplayMode::NativePan)},
+              {'5', hud.desktop_native ? "2X" : "FIT", kIconOverflowFit,
+               hud.desktop_native ? (hud.desktop_scale == 2) : (hud.display_mode == DisplayMode::OverflowFit)},
+              {'6', hud.desktop_native ? "3X" : "ASP", kIconAspectFit,
+               hud.desktop_native ? (hud.desktop_scale == 3) : (hud.display_mode == DisplayMode::AspectFit)},
+              {'7', joy_label, joy_active ? kIconJoystick : kIconKeyboard, joy_active},
+              {'8', "MENU", kIconMenu, hud.menu_open},
+          }};
 
     for (size_t i = 0; i < slots.size(); ++i) {
         const auto& s = slots[i];

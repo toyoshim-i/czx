@@ -230,21 +230,9 @@ void DesktopSdl2Context::present_native(const NativeFrameView& view) {
         if (native_texture) {
             SDL_UpdateTexture(native_texture, nullptr, view.xrgb,
                               view.width * static_cast<int>(sizeof(uint32_t)));
-            double eff_w = static_cast<double>(view.width);
-            const double eff_h = static_cast<double>(view.height);
-            if (view.crt_4x3) {
-                eff_w = eff_h * (4.0 / 3.0);
-            } else {
-                const int pn = std::max(1, view.par_num);
-                const int pd = std::max(1, view.par_den);
-                eff_w = eff_w * static_cast<double>(pn) / static_cast<double>(pd);
-            }
-            const double scale = std::min(
-                static_cast<double>(out_w) / eff_w,
-                static_cast<double>(out_h) / eff_h);
-            const int dst_w = std::clamp(static_cast<int>(std::lround(eff_w * scale)), 1, out_w);
-            const int dst_h = std::clamp(static_cast<int>(std::lround(eff_h * scale)), 1, out_h);
-            const SDL_Rect dst{(out_w - dst_w) / 2, (out_h - dst_h) / 2, dst_w, dst_h};
+            const auto r = video::compute_native_present_rect(
+                view.width, view.height, view.par_num, view.par_den, view.aspect_policy, out_w, out_h);
+            const SDL_Rect dst{r.x, r.y, r.width, r.height};
             SDL_RenderCopy(renderer, native_texture, nullptr, &dst);
         }
     }

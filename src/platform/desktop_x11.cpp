@@ -396,23 +396,12 @@ void DesktopX11Context::present_native(const NativeFrameView& view) {
     if (!view.xrgb || view.width <= 0 || view.height <= 0) {
         std::fill(xrgb_buf.begin(), xrgb_buf.end(), view.margin_xrgb);
     } else {
-        double eff_w = static_cast<double>(view.width);
-        const double eff_h = static_cast<double>(view.height);
-        if (view.crt_4x3) {
-            eff_w = eff_h * (4.0 / 3.0);
-        } else {
-            const int pn = std::max(1, view.par_num);
-            const int pd = std::max(1, view.par_den);
-            eff_w = eff_w * static_cast<double>(pn) / static_cast<double>(pd);
-        }
-
-        const double scale = std::min(
-            static_cast<double>(win_w) / eff_w,
-            static_cast<double>(win_h) / eff_h);
-        const int dst_w = std::clamp(static_cast<int>(std::lround(eff_w * scale)), 1, win_w);
-        const int dst_h = std::clamp(static_cast<int>(std::lround(eff_h * scale)), 1, win_h);
-        const int dst_x = (win_w - dst_w) / 2;
-        const int dst_y = (win_h - dst_h) / 2;
+        const auto dst = video::compute_native_present_rect(
+            view.width, view.height, view.par_num, view.par_den, view.aspect_policy, win_w, win_h);
+        const int dst_w = dst.width;
+        const int dst_h = dst.height;
+        const int dst_x = dst.x;
+        const int dst_y = dst.y;
 
         if (dst_x != 0 || dst_y != 0 || dst_w != win_w || dst_h != win_h) {
             std::fill(xrgb_buf.begin(), xrgb_buf.end(), view.margin_xrgb);

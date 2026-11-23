@@ -41,11 +41,18 @@ std::vector<MenuRow> build_rows(const MenuViewModel& vm) {
     }
     rows.push_back(MenuRow::Drive1OrMediaOrPreset);
     rows.push_back(MenuRow::Drive2OrEject);
-    rows.push_back(MenuRow::Display);
-    if (vm.has_vsync_option) {
-        rows.push_back(MenuRow::Vsync);
+    if (vm.fullscreen_native) {
+        rows.push_back(MenuRow::Aspect);
+        if (vm.has_vsync_option) {
+            rows.push_back(MenuRow::Vsync);
+        }
+    } else {
+        rows.push_back(MenuRow::Display);
+        if (vm.has_vsync_option) {
+            rows.push_back(MenuRow::Vsync);
+        }
+        rows.push_back(MenuRow::Aspect);
     }
-    rows.push_back(MenuRow::Aspect);
     rows.push_back(MenuRow::Borders);
     rows.push_back(MenuRow::Margin);
     rows.push_back(MenuRow::AccessLed);
@@ -122,7 +129,7 @@ MenuAction OverlayMenu::handle_key(const czx_key_event_t& ev, const MenuViewMode
         case MenuRow::Vsync:
             return MenuAction::ToggleVsync;
         case MenuRow::Aspect:
-            return MenuAction::ToggleAspectPolicy;
+            return left ? MenuAction::CycleAspectPolicyPrev : MenuAction::CycleAspectPolicyNext;
         case MenuRow::Borders:
             return MenuAction::ToggleBorders;
         case MenuRow::Margin:

@@ -107,11 +107,19 @@ czx::video::DisplayMode parse_display_mode(std::string_view v, czx::video::Displ
 }
 
 const char* aspect_policy_to_ini(czx::video::AspectPolicy p) noexcept {
-    return (p == czx::video::AspectPolicy::Crt4x3) ? "crt_4x3" : "par_aware";
+    switch (p) {
+        case czx::video::AspectPolicy::ParAware: return "par_aware";
+        case czx::video::AspectPolicy::Crt4x3: return "crt_4x3";
+        case czx::video::AspectPolicy::FullStretch: return "full_stretch";
+    }
+    return "par_aware";
 }
 
 czx::video::AspectPolicy parse_aspect_policy(std::string_view v, czx::video::AspectPolicy fallback) noexcept {
     const std::string low = to_lower_copy(trim_whitespace(v));
+    if (low == "full_stretch" || low == "fullstretch" || low == "full" || low == "stretch" || low == "2") {
+        return czx::video::AspectPolicy::FullStretch;
+    }
     if (low == "crt_4x3" || low == "crt4x3" || low == "4:3" || low == "1") {
         return czx::video::AspectPolicy::Crt4x3;
     }

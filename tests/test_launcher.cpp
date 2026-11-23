@@ -282,6 +282,8 @@ void test_launcher_state_persistence() {
     fm7.variant_id = "fm77av";
     fm7.media1 = "/home/user/czx/media/fm7/Thexder.d77";
     fm7.media1_label = "Thexder.d77";
+    fm7.has_display_prefs = true;
+    fm7.aspect_policy = czx::video::AspectPolicy::FullStretch;
     st.targets["fm7"] = fm7;
 
     CHECK(save_launcher_state(ini_path.string(), st));
@@ -310,6 +312,7 @@ void test_launcher_state_persistence() {
     const auto& lfm7 = loaded.targets.at("fm7");
     CHECK(lfm7.variant_id == "fm77av");
     CHECK(lfm7.media1 == fm7.media1);
+    CHECK(lfm7.aspect_policy == czx::video::AspectPolicy::FullStretch);
 
     const auto& lpc88 = loaded.targets.at("quasi88");
     CHECK(lpc88.variant_id.empty());
@@ -354,6 +357,21 @@ void test_launcher_state_persistence() {
     CHECK(corrupt.targets.at("g800").input_mode == 0);
     CHECK(corrupt.targets.at("g800").d88_index1 == -1);
     CHECK(corrupt.targets.at("g800").preset_index == 0u);
+
+    // Alias parsing for FullStretch ("full", "stretch", "2").
+    {
+        std::ofstream ofs(ini_path, std::ios::trunc);
+        ofs << "[target.msx68k]\n"
+            << "aspect_policy = full\n"
+            << "[target.applewin]\n"
+            << "aspect_policy = stretch\n"
+            << "[target.bluemsx]\n"
+            << "aspect_policy = 2\n";
+    }
+    const LauncherState aliases = load_launcher_state(ini_path.string());
+    CHECK(aliases.targets.at("msx68k").aspect_policy == czx::video::AspectPolicy::FullStretch);
+    CHECK(aliases.targets.at("applewin").aspect_policy == czx::video::AspectPolicy::FullStretch);
+    CHECK(aliases.targets.at("bluemsx").aspect_policy == czx::video::AspectPolicy::FullStretch);
 
     fs::remove_all(tmp_dir, ec);
 }

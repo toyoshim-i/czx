@@ -42,8 +42,22 @@ const char* aspect_policy_name(AspectPolicy policy) noexcept {
             return "PAR";
         case AspectPolicy::Crt4x3:
             return "CRT 4:3";
+        case AspectPolicy::FullStretch:
+            return "Full";
     }
     return "Unknown";
+}
+
+const char* aspect_policy_short(AspectPolicy policy) noexcept {
+    switch (policy) {
+        case AspectPolicy::ParAware:
+            return "PAR";
+        case AspectPolicy::Crt4x3:
+            return "4:3";
+        case AspectPolicy::FullStretch:
+            return "FULL";
+    }
+    return "?";
 }
 
 const char* margin_fill_name(MarginFill fill) noexcept {
@@ -436,6 +450,14 @@ ViewportLayout Scaler::compute_layout(const czx_frame_t& frame, const ScalerConf
             out.src_w = active_w;
             out.src_h = active_h;
 
+            if (cfg.aspect_policy == AspectPolicy::FullStretch) {
+                out.dst_x = 0;
+                out.dst_y = 0;
+                out.dst_w = kLcdWidth;
+                out.dst_h = kLcdHeight;
+                break;
+            }
+
             double eff_w = static_cast<double>(active_w);
             double eff_h = static_cast<double>(active_h);
             if (cfg.aspect_policy == AspectPolicy::ParAware) {
@@ -724,6 +746,34 @@ WindowSize compute_desktop_window_size(int src_w, int src_h,
     }
 
     return WindowSize{std::max(1, target_w), std::max(1, target_h)};
+}
+
+PresentRect compute_native_present_rect(int src_w, int src_h,
+                                        int par_num, int par_den,
+                                        AspectPolicy aspect_policy,
+                                        int out_w, int out_h) noexcept {
+    if (src_w <= 0 || src_h <= 0 || out_w <= 0 || out_h <= 0) {
+        return PresentRect{0, 0, 0, 0};
+    }
+    if (aspect_policy == AspectPolicy::FullStretch) {
+        return PresentRect{0, 0, out_w, out_h};
+    }
+
+    double eff_w = static_cast<double>(src_w);
+    const double eff_h = static_cast<double>(src_h);
+    if (aspect_policy == AspectPolicy::Crt4x3) {
+        eff_w = eff_h * (4.0 / 3.0);
+    } else {
+        const int pn = std::max(1, par_num);
+        const int pd = std::max(1, par_den);
+        eff_w = eff_w * static_cast<double>(pn) / static_cast<double>(pd);
+    }
+
+    const double scale = std::min(static_cast<double>(out_w) / eff_w,
+                                  static_cast<double>(out_h) / eff_h);
+    const int dst_w = std::clamp(static_cast<int>(std::lround(eff_w * scale)), 1, out_w);
+    const int dst_h = std::clamp(static_cast<int>(std::lround(eff_h * scale)), 1, out_h);
+    return PresentRect{(out_w - dst_w) / 2, (out_h - dst_h) / 2, dst_w, dst_h};
 }
 
 }  // namespace czx::video

@@ -189,6 +189,7 @@ EmulatorApp::EmulatorApp(AppConfig cfg)
     desktop_scale_ = std::clamp(cfg_.desktop_scale, 1, 3);
     default_desktop_scale_ = desktop_scale_;
     hud_.desktop_scale = desktop_scale_;
+    hud_.aspect_policy = scaler_cfg_.aspect_policy;
     hud_.show_activity_indicator = show_activity_indicator_;
     preset_index_ = cfg_.preset_index;
 }
@@ -370,7 +371,17 @@ void EmulatorApp::sync_core_gpu_scale_option() {
         if (scaler_cfg_.mode == czx::video::DisplayMode::OverflowFit) {
             val = "axis";
         } else {
-            val = (scaler_cfg_.aspect_policy == czx::video::AspectPolicy::Crt4x3) ? "fit_4x3" : "fit_par";
+            switch (scaler_cfg_.aspect_policy) {
+                case czx::video::AspectPolicy::ParAware:
+                    val = "fit_par";
+                    break;
+                case czx::video::AspectPolicy::Crt4x3:
+                    val = "fit_4x3";
+                    break;
+                case czx::video::AspectPolicy::FullStretch:
+                    val = "off";
+                    break;
+            }
         }
     }
     core_api_->set_option(core_inst_, "msx68k_gpu_scale", val);
@@ -515,9 +526,11 @@ void EmulatorApp::apply_target_prefs(int target_index) {
     }
     scaler_cfg_.pan_x = 0;
     scaler_cfg_.pan_y = 0;
+    hud_.fullscreen_native = is_fullscreen_display();
     hud_.desktop_native = desktop_native_mode_;
     hud_.desktop_scale = desktop_scale_;
     hud_.display_mode = scaler_cfg_.mode;
+    hud_.aspect_policy = scaler_cfg_.aspect_policy;
     hud_.input_mode = static_cast<int>(router_.input_mode());
     router_.set_native_pan_enabled(!desktop_native_mode_ &&
                                    scaler_cfg_.mode == czx::video::DisplayMode::NativePan);
@@ -1214,6 +1227,40 @@ void EmulatorApp::show_toast(const char* text) {
     hud_.toast_frames = 75;
 }
 
+bool EmulatorApp::is_fullscreen_display() const noexcept {
+    return platform_.display && platform_.display->is_fullscreen();
+}
+
+void EmulatorApp::set_aspect_policy(czx::video::AspectPolicy policy, bool show_osd) {
+    scaler_cfg_.aspect_policy = policy;
+    hud_.aspect_policy = policy;
+    sync_core_gpu_scale_option();
+    if (!in_launcher_ && desktop_native_mode_) {
+        sync_desktop_window_size(false);
+    }
+    refresh_paused_preview();
+    force_present_ = true;
+    if (show_osd) {
+        switch (policy) {
+            case czx::video::AspectPolicy::ParAware:
+                show_toast("ASPECT: PAR");
+                break;
+            case czx::video::AspectPolicy::Crt4x3:
+                show_toast("ASPECT: CRT 4:3");
+                break;
+            case czx::video::AspectPolicy::FullStretch:
+                show_toast("ASPECT: FULL");
+                break;
+        }
+    }
+}
+
+void EmulatorApp::cycle_aspect_policy(int delta) {
+    const int cur = static_cast<int>(scaler_cfg_.aspect_policy);
+    const int next = ((cur + delta) % 3 + 3) % 3;
+    set_aspect_policy(static_cast<czx::video::AspectPolicy>(next), true);
+}
+
 void EmulatorApp::set_display_mode(czx::video::DisplayMode mode) {
     if (platform_.display && platform_.display->is_fullscreen()) {
         desktop_native_mode_ = true;
@@ -1427,6 +1474,7 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
         vm.drive_count = 1u;
         vm.src_width = last_src_w_;
         vm.src_height = last_src_h_;
+        vm.fullscreen_native = is_fullscreen_display();
         vm.desktop_native_active = desktop_native_mode_;
         vm.desktop_scale = desktop_scale_;
         vm.display_mode = scaler_cfg_.mode;
@@ -1557,6 +1605,7 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
         vm.src_height = last_src_h_;
     }
 
+    vm.fullscreen_native = is_fullscreen_display();
     vm.desktop_native_active = desktop_native_mode_;
     vm.desktop_scale = desktop_scale_;
     vm.display_mode = scaler_cfg_.mode;
@@ -1683,7 +1732,9 @@ void EmulatorApp::handle_host_command(czx::input::HostCommand cmd) {
 
     switch (cmd) {
         case czx::input::HostCommand::SetModeNativePan:
-            if (desktop_native_mode_) {
+            if (is_fullscreen_display()) {
+                set_aspect_policy(czx::video::AspectPolicy::ParAware, true);
+            } else if (desktop_native_mode_) {
                 set_desktop_scale(1);
             } else {
                 set_display_mode(czx::video::DisplayMode::NativePan);
@@ -1691,7 +1742,9 @@ void EmulatorApp::handle_host_command(czx::input::HostCommand cmd) {
             save_display_or_input_pref();
             break;
         case czx::input::HostCommand::SetModeOverflowFit:
-            if (desktop_native_mode_) {
+            if (is_fullscreen_display()) {
+                set_aspect_policy(czx::video::AspectPolicy::Crt4x3, true);
+            } else if (desktop_native_mode_) {
                 set_desktop_scale(2);
             } else {
                 set_display_mode(czx::video::DisplayMode::OverflowFit);
@@ -1699,7 +1752,9 @@ void EmulatorApp::handle_host_command(czx::input::HostCommand cmd) {
             save_display_or_input_pref();
             break;
         case czx::input::HostCommand::SetModeAspectFit:
-            if (desktop_native_mode_) {
+            if (is_fullscreen_display()) {
+                set_aspect_policy(czx::video::AspectPolicy::FullStretch, true);
+            } else if (desktop_native_mode_) {
                 set_desktop_scale(3);
             } else {
                 set_display_mode(czx::video::DisplayMode::AspectFit);
@@ -2185,16 +2240,12 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
                 }
             }
             break;
-        case czx::video::MenuAction::ToggleAspectPolicy:
-            scaler_cfg_.aspect_policy =
-                (scaler_cfg_.aspect_policy == czx::video::AspectPolicy::ParAware)
-                    ? czx::video::AspectPolicy::Crt4x3
-                    : czx::video::AspectPolicy::ParAware;
-            sync_core_gpu_scale_option();
-            if (!in_launcher_ && desktop_native_mode_) {
-                sync_desktop_window_size(false);
-            }
-            refresh_paused_preview();
+        case czx::video::MenuAction::CycleAspectPolicyPrev:
+            cycle_aspect_policy(-1);
+            save_target_prefs_now();
+            break;
+        case czx::video::MenuAction::CycleAspectPolicyNext:
+            cycle_aspect_policy(1);
             save_target_prefs_now();
             break;
         case czx::video::MenuAction::ToggleBorders:
@@ -2433,11 +2484,12 @@ void EmulatorApp::update_window_title() {
         } else if (platform_.display->is_fullscreen()) {
             const int w = (native_w_ > 0) ? native_w_ : last_src_w_;
             const int h = (native_h_ > 0) ? native_h_ : last_src_h_;
+            const char* asp = czx::video::aspect_policy_short(scaler_cfg_.aspect_policy);
             if (w > 0 && h > 0) {
-                std::snprintf(buf, sizeof(buf), "czx - %s [HDMI %dx%d%s]", name, w, h,
+                std::snprintf(buf, sizeof(buf), "czx - %s [HDMI %dx%d %s%s]", name, w, h, asp,
                               hw_render_active_ ? " GLES2" : "");
             } else {
-                std::snprintf(buf, sizeof(buf), "czx - %s [HDMI%s]", name,
+                std::snprintf(buf, sizeof(buf), "czx - %s [HDMI %s%s]", name, asp,
                               hw_render_active_ ? " GLES2" : "");
             }
         } else if (desktop_native_mode_ || hw_render_active_) {
@@ -2864,8 +2916,10 @@ int EmulatorApp::run() {
     default_desktop_scale_ = std::clamp(cfg_.desktop_scale, 1, 3);
     desktop_native_mode_ = default_desktop_native_;
     desktop_scale_ = default_desktop_scale_;
+    hud_.fullscreen_native = hdmi_fullscreen;
     hud_.desktop_native = desktop_native_mode_;
     hud_.desktop_scale = desktop_scale_;
+    hud_.aspect_policy = scaler_cfg_.aspect_policy;
 
     czx::input::RouterCallbacks rcb{};
     rcb.user_data = this;
@@ -3128,7 +3182,7 @@ int EmulatorApp::run() {
                     view.height = native_h_;
                     view.par_num = native_par_num_;
                     view.par_den = native_par_den_;
-                    view.crt_4x3 = (scaler_cfg_.aspect_policy == czx::video::AspectPolicy::Crt4x3);
+                    view.aspect_policy = scaler_cfg_.aspect_policy;
                     view.bottom_left_origin = hw_bottom_left_;
                     view.margin_xrgb = 0u;
                     if (overlay_active) {
@@ -3147,7 +3201,7 @@ int EmulatorApp::run() {
                     view.height = native_h_;
                     view.par_num = native_par_num_;
                     view.par_den = native_par_den_;
-                    view.crt_4x3 = (scaler_cfg_.aspect_policy == czx::video::AspectPolicy::Crt4x3);
+                    view.aspect_policy = scaler_cfg_.aspect_policy;
                     view.margin_xrgb =
                         (scaler_cfg_.margin_fill == czx::video::MarginFill::Auto) ? native_margin_xrgb_ : 0u;
                     if (overlay_active) {

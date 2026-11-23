@@ -208,13 +208,16 @@ private:
     void eject_drive_slot(uint32_t drive);
 
     void show_toast(const char* text);
+    bool is_fullscreen_display() const noexcept;
     void set_display_mode(czx::video::DisplayMode mode);
     void set_desktop_scale(int scale);
+    void set_aspect_policy(czx::video::AspectPolicy policy, bool show_osd = true);
     void sync_desktop_window_size(bool force = false);
     void apply_pan_delta(int dx, int dy);
     void cycle_core(int delta);
     void cycle_preset(int delta);
     void cycle_display_mode(int delta);
+    void cycle_aspect_policy(int delta);
     void handle_host_command(czx::input::HostCommand cmd);
     void handle_menu_key(const czx_key_event_t& ev);
 

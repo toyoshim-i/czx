@@ -19,6 +19,7 @@ enum class DisplayMode {
 enum class AspectPolicy {
     ParAware = 0,     // Respect core pixel aspect ratio (par_num:par_den)
     Crt4x3 = 1,       // Normalize target display aspect ratio to 4:3 CRT
+    FullStretch = 2,  // Stretch to fill the target display area
 };
 
 enum class MarginFill {
@@ -97,15 +98,28 @@ struct WindowSize {
     int height = 0;
 };
 
+struct PresentRect {
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+};
+
 WindowSize compute_desktop_window_size(int src_w, int src_h,
                                        int par_num, int par_den,
                                        AspectPolicy aspect_policy,
                                        int scale,
                                        int max_w = 0, int max_h = 0) noexcept;
 
+PresentRect compute_native_present_rect(int src_w, int src_h,
+                                        int par_num, int par_den,
+                                        AspectPolicy aspect_policy,
+                                        int out_w, int out_h) noexcept;
+
 const char* display_mode_name(DisplayMode mode) noexcept;
 const char* display_mode_short(DisplayMode mode) noexcept;
 const char* aspect_policy_name(AspectPolicy policy) noexcept;
+const char* aspect_policy_short(AspectPolicy policy) noexcept;
 const char* margin_fill_name(MarginFill fill) noexcept;
 
 }  // namespace czx::video

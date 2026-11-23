@@ -777,23 +777,10 @@ void Gles2Presenter::present_native(int out_w, int out_h, const NativeFrameView&
         gl_->glPixelStorei(kGlUnpackAlignment, 1);
         gl_->glTexSubImage2D(kGlTexture2d, 0, 0, 0, cw, ch, kGlRgba, kGlUnsignedByte, view.xrgb);
 
-        double eff_w = static_cast<double>(view.width);
-        const double eff_h = static_cast<double>(view.height);
-        if (view.crt_4x3) {
-            eff_w = eff_h * (4.0 / 3.0);
-        } else {
-            const int pn = std::max(1, view.par_num);
-            const int pd = std::max(1, view.par_den);
-            eff_w = eff_w * static_cast<double>(pn) / static_cast<double>(pd);
-        }
-        const double scale = std::min(static_cast<double>(out_w) / eff_w,
-                                      static_cast<double>(out_h) / eff_h);
-        const int dst_w = std::clamp(static_cast<int>(std::lround(eff_w * scale)), 1, out_w);
-        const int dst_h = std::clamp(static_cast<int>(std::lround(eff_h * scale)), 1, out_h);
-        const int dst_x = (out_w - dst_w) / 2;
-        const int dst_y = (out_h - dst_h) / 2;
+        const auto dst = video::compute_native_present_rect(
+            view.width, view.height, view.par_num, view.par_den, view.aspect_policy, out_w, out_h);
 
-        draw_textured_quad(tex_native_, dst_x, dst_y, dst_w, dst_h, out_w, out_h,
+        draw_textured_quad(tex_native_, dst.x, dst.y, dst.width, dst.height, out_w, out_h,
                            1.0f, 1.0f, 1.0f, 1.0f, false, true, true);
     }
 
@@ -808,28 +795,15 @@ void Gles2Presenter::present_hw(int out_w, int out_h, const NativeHwFrameView& v
     if (hw_tex_ && hw_tex_w_ > 0 && hw_tex_h_ > 0 && view.width > 0 && view.height > 0) {
         const int w = std::min(view.width, hw_tex_w_);
         const int h = std::min(view.height, hw_tex_h_);
-        double eff_w = static_cast<double>(w);
-        const double eff_h = static_cast<double>(h);
-        if (view.crt_4x3) {
-            eff_w = eff_h * (4.0 / 3.0);
-        } else {
-            const int pn = std::max(1, view.par_num);
-            const int pd = std::max(1, view.par_den);
-            eff_w = eff_w * static_cast<double>(pn) / static_cast<double>(pd);
-        }
-        const double scale = std::min(static_cast<double>(out_w) / eff_w,
-                                      static_cast<double>(out_h) / eff_h);
-        const int dst_w = std::clamp(static_cast<int>(std::lround(eff_w * scale)), 1, out_w);
-        const int dst_h = std::clamp(static_cast<int>(std::lround(eff_h * scale)), 1, out_h);
-        const int dst_x = (out_w - dst_w) / 2;
-        const int dst_y = (out_h - dst_h) / 2;
+        const auto dst = video::compute_native_present_rect(
+            w, h, view.par_num, view.par_den, view.aspect_policy, out_w, out_h);
 
         const float u_max = static_cast<float>(w) / static_cast<float>(hw_tex_w_);
         const float v_max = static_cast<float>(h) / static_cast<float>(hw_tex_h_);
         const float u_clamp = (static_cast<float>(w) - 0.5f) / static_cast<float>(hw_tex_w_);
         const float v_clamp = (static_cast<float>(h) - 0.5f) / static_cast<float>(hw_tex_h_);
 
-        draw_textured_quad(hw_tex_, dst_x, dst_y, dst_w, dst_h, out_w, out_h,
+        draw_textured_quad(hw_tex_, dst.x, dst.y, dst.width, dst.height, out_w, out_h,
                            u_max, v_max, u_clamp, v_clamp, view.bottom_left_origin, false, true);
     }
 

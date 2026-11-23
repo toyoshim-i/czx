@@ -1,6 +1,7 @@
 #pragma once
 
 #include "input/keycodes.hpp"
+#include "video/scaler.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -30,7 +31,7 @@ struct NativeFrameView {
     int height = 0;
     int par_num = 1;
     int par_den = 1;
-    bool crt_4x3 = false;
+    video::AspectPolicy aspect_policy = video::AspectPolicy::ParAware;
     uint32_t margin_xrgb = 0;
     const uint32_t* overlay_argb = nullptr;  // 320x170 straight ARGB8888, or nullptr
     bool dim_outside_overlay = false;
@@ -41,7 +42,7 @@ struct NativeHwFrameView {
     int height = 0;
     int par_num = 1;
     int par_den = 1;
-    bool crt_4x3 = false;
+    video::AspectPolicy aspect_policy = video::AspectPolicy::ParAware;
     bool bottom_left_origin = false;
     uint32_t margin_xrgb = 0;
     const uint32_t* overlay_argb = nullptr;  // 320x170 straight ARGB8888, or nullptr

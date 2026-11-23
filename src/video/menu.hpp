@@ -29,7 +29,8 @@ enum class MenuAction {
     CycleDisplayModePrev,
     CycleDisplayModeNext,
     ToggleVsync,
-    ToggleAspectPolicy,
+    CycleAspectPolicyPrev,
+    CycleAspectPolicyNext,
     ToggleBorders,
     ToggleMarginFill,
     ToggleActivityIndicator,
@@ -60,6 +61,7 @@ struct MenuViewModel {
     std::string drive2_label = "Empty";
     int src_width = 0;
     int src_height = 0;
+    bool fullscreen_native = false;
     bool desktop_native_active = false;
     int desktop_scale = 2;
     DisplayMode display_mode = DisplayMode::OverflowFit;

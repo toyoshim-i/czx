@@ -108,7 +108,7 @@ PlatformBundle create_platform_bundle(const PlatformOptions& opts) {
             } else {
                 bundle.input = std::move(sdl_input);
             }
-            bundle.audio = std::make_unique<LinuxAudio>();
+            bundle.audio = std::make_unique<LinuxAudio>(true);
             return bundle;
         }
         std::fprintf(stderr, "czx: HDMI SDL2 GLES2 unavailable, falling back to internal LCD\n");

@@ -14,7 +14,7 @@ public:
     ~LinuxPulseAudio() override;
 
     bool init(uint32_t sample_rate) override;
-    bool init_with_sink(uint32_t sample_rate, const char* sink_dev);
+    bool init_with_sink(uint32_t sample_rate, const char* sink_dev, bool prefer_hdmi_sink = false);
     void write_samples(const int16_t* stereo_s16, size_t frame_count) override;
     double get_buffer_fill_ratio() const override;
     const char* backend_name() const override { return active_ ? "linux-pulse" : "null-audio"; }
@@ -72,6 +72,7 @@ private:
     using FnStrerror = const char* (*)(int);
 
     using FnCtxGetServerInfo = PaOperation* (*)(PaContext*, PaServerInfoCb, void*);
+    using FnCtxGetSinkInfoList = PaOperation* (*)(PaContext*, PaSinkInfoCb, void*);
     using FnCtxGetSinkInfoByName = PaOperation* (*)(PaContext*, const char*, PaSinkInfoCb, void*);
     using FnCtxSetSinkVolumeByName =
         PaOperation* (*)(PaContext*, const char*, const PaCVolume*, PaContextSuccessCb, void*);
@@ -127,6 +128,7 @@ private:
     FnStrerror fn_strerror_ = nullptr;
 
     FnCtxGetServerInfo fn_ctx_get_server_info_ = nullptr;
+    FnCtxGetSinkInfoList fn_ctx_get_sink_info_list_ = nullptr;
     FnCtxGetSinkInfoByName fn_ctx_get_sink_info_by_name_ = nullptr;
     FnCtxSetSinkVolumeByName fn_ctx_set_sink_volume_by_name_ = nullptr;
     FnCtxSetSinkMuteByName fn_ctx_set_sink_mute_by_name_ = nullptr;
@@ -138,7 +140,7 @@ private:
 
 class LinuxAudio : public PlatformAudio {
 public:
-    LinuxAudio() = default;
+    explicit LinuxAudio(bool prefer_hdmi_sink = false) : prefer_hdmi_sink_(prefer_hdmi_sink) {}
     ~LinuxAudio() override = default;
 
     bool init(uint32_t sample_rate) override;
@@ -155,6 +157,7 @@ private:
     LinuxPulseAudio pulse_;
     LinuxAlsaAudio alsa_;
     ActiveBackend active_ = ActiveBackend::Inactive;
+    bool prefer_hdmi_sink_ = false;
 };
 
 }  // namespace czx::platform

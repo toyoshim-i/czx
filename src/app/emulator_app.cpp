@@ -488,9 +488,10 @@ void EmulatorApp::apply_target_prefs(int target_index) {
     const bool can_native =
         !cfg_.platform.headless && !cfg_.force_lcd_sim &&
         platform_.display && platform_.display->supports_native_present();
+    const bool force_native = can_native && platform_.display->is_fullscreen();
 
     if (st && st->has_display_prefs) {
-        desktop_native_mode_ = can_native && st->desktop_native;
+        desktop_native_mode_ = force_native ? true : (can_native && st->desktop_native);
         desktop_scale_ = std::clamp(st->desktop_scale, 1, 3);
         scaler_cfg_.mode = st->display_mode;
         scaler_cfg_.aspect_policy = st->aspect_policy;
@@ -498,7 +499,7 @@ void EmulatorApp::apply_target_prefs(int target_index) {
         scaler_cfg_.margin_fill = st->margin_fill;
         router_.set_input_mode(static_cast<czx::input::InputMode>(std::clamp(st->input_mode, 0, 3)));
     } else {
-        desktop_native_mode_ = can_native && default_desktop_native_;
+        desktop_native_mode_ = force_native ? true : (can_native && default_desktop_native_);
         desktop_scale_ = std::clamp(default_desktop_scale_, 1, 3);
         scaler_cfg_.mode = cfg_.display_mode;
         scaler_cfg_.aspect_policy = cfg_.aspect_policy;
@@ -527,9 +528,15 @@ void EmulatorApp::capture_current_prefs_to_target(int target_index, bool include
         return;
     }
     TargetSavedState& st = target_saved_state(target_index);
+    const bool had_prefs = st.has_display_prefs;
     st.has_display_prefs = true;
     st.display_mode = scaler_cfg_.mode;
-    st.desktop_native = desktop_native_mode_;
+    if (platform_.display && platform_.display->supports_native_present() &&
+        !platform_.display->is_fullscreen()) {
+        st.desktop_native = desktop_native_mode_;
+    } else if (!had_prefs) {
+        st.desktop_native = true;
+    }
     st.desktop_scale = std::clamp(desktop_scale_, 1, 3);
     st.aspect_policy = scaler_cfg_.aspect_policy;
     st.show_borders = scaler_cfg_.show_borders;
@@ -1074,7 +1081,8 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media, con
     host.initial_media2 = initial_media2.empty() ? nullptr : initial_media2.c_str();
     host.initial_region = (pre_id.rfind("vice", 0) == 0) ? c64_region_.c_str() : nullptr;
     if (cfg_.headless_frames == 0 && platform_.display &&
-        platform_.display->supports_hw_gles2() && desktop_native_mode_) {
+        platform_.display->supports_hw_gles2() &&
+        (desktop_native_mode_ || platform_.display->is_fullscreen())) {
         host.hw_gles2_enable = cb_hw_gles2_enable;
         host.hw_make_current = cb_hw_make_current;
         host.hw_get_proc_address = cb_hw_get_proc_address;
@@ -1204,6 +1212,14 @@ void EmulatorApp::show_toast(const char* text) {
 }
 
 void EmulatorApp::set_display_mode(czx::video::DisplayMode mode) {
+    if (platform_.display && platform_.display->is_fullscreen()) {
+        desktop_native_mode_ = true;
+        hud_.desktop_native = true;
+        sync_core_gpu_scale_option();
+        force_present_ = true;
+        show_toast("HDMI NATIVE");
+        return;
+    }
     desktop_native_mode_ = false;
     hud_.desktop_native = false;
     sync_desktop_window_size(false);
@@ -1367,6 +1383,14 @@ void EmulatorApp::cycle_preset(int delta) {
 }
 
 void EmulatorApp::cycle_display_mode(int delta) {
+    if (platform_.display && platform_.display->is_fullscreen()) {
+        desktop_native_mode_ = true;
+        hud_.desktop_native = true;
+        sync_core_gpu_scale_option();
+        force_present_ = true;
+        show_toast("HDMI NATIVE");
+        return;
+    }
     const bool allow_desktop = platform_.display && platform_.display->supports_native_present();
     if (allow_desktop) {
         const int cur = desktop_native_mode_ ? (2 + desktop_scale_) : static_cast<int>(scaler_cfg_.mode);
@@ -2826,9 +2850,11 @@ int EmulatorApp::run() {
     if (platform_.display && platform_.display->supports_vsync_toggle()) {
         vsync_enabled_ = platform_.display->is_vsync_enabled();
     }
-    default_desktop_native_ = !cfg_.platform.headless && platform_.display &&
+    const bool hdmi_fullscreen = platform_.display && platform_.display->is_fullscreen();
+    default_desktop_native_ = !cfg_.platform.headless && !cfg_.force_lcd_sim &&
+                              platform_.display &&
                               platform_.display->supports_native_present() &&
-                              cfg_.platform.desktop_native;
+                              (hdmi_fullscreen || cfg_.platform.desktop_native);
     default_desktop_scale_ = std::clamp(cfg_.desktop_scale, 1, 3);
     desktop_native_mode_ = default_desktop_native_;
     desktop_scale_ = default_desktop_scale_;

@@ -1,6 +1,7 @@
 #include "platform/linux_audio.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -29,6 +30,26 @@ template <typename Fn>
 bool resolve_sym(void* dl, const char* name, Fn& out) {
     out = reinterpret_cast<Fn>(dlsym(dl, name));
     return out != nullptr;
+}
+
+bool contains_icase(const char* haystack, const char* needle) {
+    if (!haystack || !needle) return false;
+    const size_t nlen = std::strlen(needle);
+    if (nlen == 0) return true;
+    const size_t hlen = std::strlen(haystack);
+    if (hlen < nlen) return false;
+    for (size_t i = 0; i + nlen <= hlen; ++i) {
+        bool match = true;
+        for (size_t j = 0; j < nlen; ++j) {
+            if (std::tolower(static_cast<unsigned char>(haystack[i + j])) !=
+                std::tolower(static_cast<unsigned char>(needle[j]))) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return true;
+    }
+    return false;
 }
 
 }  // namespace
@@ -160,6 +181,7 @@ void LinuxPulseAudio::cleanup() {
     fn_stream_write_ = nullptr;
     fn_strerror_ = nullptr;
     fn_ctx_get_server_info_ = nullptr;
+    fn_ctx_get_sink_info_list_ = nullptr;
     fn_ctx_get_sink_info_by_name_ = nullptr;
     fn_ctx_set_sink_volume_by_name_ = nullptr;
     fn_ctx_set_sink_mute_by_name_ = nullptr;
@@ -170,10 +192,10 @@ void LinuxPulseAudio::cleanup() {
 }
 
 bool LinuxPulseAudio::init(uint32_t sample_rate) {
-    return init_with_sink(sample_rate, nullptr);
+    return init_with_sink(sample_rate, nullptr, false);
 }
 
-bool LinuxPulseAudio::init_with_sink(uint32_t sample_rate, const char* sink_dev) {
+bool LinuxPulseAudio::init_with_sink(uint32_t sample_rate, const char* sink_dev, bool prefer_hdmi_sink) {
     if (active_ && sample_rate_ == sample_rate) {
         return true;
     }
@@ -214,6 +236,7 @@ bool LinuxPulseAudio::init_with_sink(uint32_t sample_rate, const char* sink_dev)
         resolve_sym(dl_, "pa_stream_write", fn_stream_write_);
     resolve_sym(dl_, "pa_strerror", fn_strerror_);
     resolve_sym(dl_, "pa_context_get_server_info", fn_ctx_get_server_info_);
+    resolve_sym(dl_, "pa_context_get_sink_info_list", fn_ctx_get_sink_info_list_);
     resolve_sym(dl_, "pa_context_get_sink_info_by_name", fn_ctx_get_sink_info_by_name_);
     resolve_sym(dl_, "pa_context_set_sink_volume_by_name", fn_ctx_set_sink_volume_by_name_);
     resolve_sym(dl_, "pa_context_set_sink_mute_by_name", fn_ctx_set_sink_mute_by_name_);
@@ -267,6 +290,44 @@ bool LinuxPulseAudio::init_with_sink(uint32_t sample_rate, const char* sink_dev)
         fn_ml_wait_(ml_);
     }
 
+    if (prefer_hdmi_sink && target_sink_.empty() && fn_ctx_get_sink_info_list_) {
+        struct SinkListQuery {
+            PaThreadedMainloop* ml = nullptr;
+            FnMlSignal signal = nullptr;
+            std::string hdmi_sink;
+            std::string seen_sinks;
+        } slq{ml_, fn_ml_signal_, {}, {}};
+
+        auto on_sink_list = [](PaContext*, const PaSinkInfo* info, int eol, void* userdata) {
+            auto* q = static_cast<SinkListQuery*>(userdata);
+            if (!q) return;
+            if (!eol && info && info->name && info->name[0] != '\0') {
+                if (!q->seen_sinks.empty()) {
+                    q->seen_sinks += ", ";
+                }
+                q->seen_sinks += info->name;
+                if (q->hdmi_sink.empty() &&
+                    (contains_icase(info->name, "hdmi") ||
+                     contains_icase(info->description, "hdmi"))) {
+                    q->hdmi_sink = info->name;
+                }
+            }
+            if (eol && q->ml && q->signal) {
+                q->signal(q->ml, 0);
+            }
+        };
+
+        PaOperation* op = fn_ctx_get_sink_info_list_(ctx_, on_sink_list, &slq);
+        if (wait_operation_locked(op)) {
+            if (!slq.hdmi_sink.empty()) {
+                target_sink_ = std::move(slq.hdmi_sink);
+            } else if (!slq.seen_sinks.empty()) {
+                std::fprintf(stderr, "czx: HDMI audio sink not found (available: %s)\n",
+                             slq.seen_sinks.c_str());
+            }
+        }
+    }
+
     const PaSampleSpec ss{kPaSampleS16Le, sample_rate, 2};
     stream_ = fn_stream_new_(ctx_, "Audio", &ss, nullptr);
     if (!stream_) {
@@ -283,7 +344,8 @@ bool LinuxPulseAudio::init_with_sink(uint32_t sample_rate, const char* sink_dev)
     const uint32_t minreq = std::max<uint32_t>(4u, (bytes_per_sec * 20u / 1000u) & ~3u);
     const PaBufferAttr attr{tlength * 2u, tlength, prebuf, minreq, UINT32_MAX};
 
-    if (fn_stream_connect_playback_(stream_, sink_dev, &attr, 0, nullptr, nullptr) < 0) {
+    const char* connect_sink = target_sink_.empty() ? nullptr : target_sink_.c_str();
+    if (fn_stream_connect_playback_(stream_, connect_sink, &attr, 0, nullptr, nullptr) < 0) {
         const int err = fn_ctx_errno_(ctx_);
         std::fprintf(stderr, "czx: PulseAudio stream connect failed: %s\n",
                      (fn_strerror_ && err) ? fn_strerror_(err) : "stream connect error");
@@ -309,9 +371,15 @@ bool LinuxPulseAudio::init_with_sink(uint32_t sample_rate, const char* sink_dev)
     active_ = true;
     sample_rate_ = sample_rate;
     buffer_tlength_ = tlength;
+    const std::string connected_sink = target_sink_;
     fn_ml_unlock_(ml_);
 
-    std::fprintf(stderr, "czx: PulseAudio/PipeWire audio active (%u Hz)\n", sample_rate);
+    if (!connected_sink.empty()) {
+        std::fprintf(stderr, "czx: PulseAudio/PipeWire audio active (%u Hz, sink=%s)\n",
+                     sample_rate, connected_sink.c_str());
+    } else {
+        std::fprintf(stderr, "czx: PulseAudio/PipeWire audio active (%u Hz)\n", sample_rate);
+    }
     return true;
 }
 
@@ -567,7 +635,7 @@ bool LinuxAudio::init(uint32_t sample_rate) {
         return false;
     }
 
-    if (pulse_.init(sample_rate)) {
+    if (pulse_.init_with_sink(sample_rate, nullptr, prefer_hdmi_sink_)) {
         alsa_.cleanup();
         active_ = ActiveBackend::Pulse;
         return true;

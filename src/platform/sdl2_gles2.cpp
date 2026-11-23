@@ -501,7 +501,7 @@ bool Sdl2Gles2Context::init(const PlatformOptions& opts) {
         vsync_enabled = false;
     }
 
-    if (!presenter.init(sdl->SDL_GL_GetProcAddress)) {
+    if (!presenter.init(sdl->SDL_GL_GetProcAddress, opts.prefer_rgb565)) {
         std::fprintf(stderr, "czx: GLES2 presenter init failed\n");
         cleanup();
         return false;

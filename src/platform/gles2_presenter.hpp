@@ -6,6 +6,13 @@
 
 namespace czx::platform {
 
+void compute_hw_fbo_dimensions(uint32_t base_w,
+                               uint32_t base_h,
+                               uint32_t max_w,
+                               uint32_t max_h,
+                               uint32_t& out_w,
+                               uint32_t& out_h) noexcept;
+
 class Gles2Presenter {
 public:
     using GlGetProcAddressFn = void* (*)(const char* sym);
@@ -16,12 +23,17 @@ public:
     Gles2Presenter(const Gles2Presenter&) = delete;
     Gles2Presenter& operator=(const Gles2Presenter&) = delete;
 
-    bool init(GlGetProcAddressFn get_proc);
+    bool init(GlGetProcAddressFn get_proc, bool prefer_rgb565 = false);
     void cleanup();
 
     void* get_proc_address(const char* sym) const;
     bool hw_ensure_fbo(int width, int height, bool depth, bool stencil);
+    void release_hw_fbo();
+    void release_native_texture();
     uintptr_t hw_fbo() const noexcept { return static_cast<uintptr_t>(hw_fbo_); }
+    int hw_tex_width() const noexcept { return hw_tex_w_; }
+    int hw_tex_height() const noexcept { return hw_tex_h_; }
+    bool hw_is_rgb565() const noexcept { return hw_is_rgb565_; }
 
     void present_lcd(int out_w, int out_h, const uint16_t* rgb565);
     void present_native(int out_w, int out_h, const NativeFrameView& view);
@@ -82,6 +94,8 @@ private:
     int hw_tex_w_ = 0;
     int hw_tex_h_ = 0;
     bool hw_has_depth_ = false;
+    bool prefer_rgb565_ = false;
+    bool hw_is_rgb565_ = false;
 };
 
 }  // namespace czx::platform

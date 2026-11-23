@@ -24,6 +24,7 @@ using GLsizeiptr = ptrdiff_t;
 
 constexpr GLenum kGlFalse = 0;
 constexpr GLenum kGlTrue = 1;
+constexpr GLenum kGlNoError = 0;
 constexpr GLenum kGlTriangleStrip = 0x0005;
 constexpr GLenum kGlUnsignedByte = 0x1401;
 constexpr GLenum kGlUnsignedShort565 = 0x8363;
@@ -153,6 +154,7 @@ struct Gles2Presenter::Procs {
     void (*glGenFramebuffers)(GLsizei, GLuint*) = nullptr;
     void (*glGenRenderbuffers)(GLsizei, GLuint*) = nullptr;
     void (*glGenTextures)(GLsizei, GLuint*) = nullptr;
+    GLenum (*glGetError)() = nullptr;
     void (*glGetIntegerv)(GLenum, GLint*) = nullptr;
     void (*glGetProgramInfoLog)(GLuint, GLsizei, GLsizei*, char*) = nullptr;
     void (*glGetProgramiv)(GLuint, GLenum, GLint*) = nullptr;
@@ -175,13 +177,28 @@ struct Gles2Presenter::Procs {
     void (*glViewport)(GLint, GLint, GLsizei, GLsizei) = nullptr;
 };
 
+void compute_hw_fbo_dimensions(uint32_t base_w,
+                               uint32_t base_h,
+                               uint32_t max_w,
+                               uint32_t max_h,
+                               uint32_t& out_w,
+                               uint32_t& out_h) noexcept {
+    uint32_t rw = (base_w > 0u) ? base_w : max_w;
+    uint32_t rh = (base_h > 0u) ? base_h : max_h;
+    if (rw == 0u) rw = 320u;
+    if (rh == 0u) rh = 240u;
+    out_w = std::clamp<uint32_t>(rw, 64u, 2048u);
+    out_h = std::clamp<uint32_t>(rh, 64u, 2048u);
+}
+
 Gles2Presenter::~Gles2Presenter() {
     cleanup();
 }
 
-bool Gles2Presenter::init(GlGetProcAddressFn get_proc) {
+bool Gles2Presenter::init(GlGetProcAddressFn get_proc, bool prefer_rgb565) {
     cleanup();
     get_proc_ = get_proc;
+    prefer_rgb565_ = prefer_rgb565;
     fallback_gles_dl_ = dlopen("libGLESv2.so.2", RTLD_LAZY);
     if (!fallback_gles_dl_) {
         fallback_gles_dl_ = dlopen("libGLESv2.so", RTLD_LAZY);
@@ -222,6 +239,7 @@ bool Gles2Presenter::init(GlGetProcAddressFn get_proc) {
         load_proc(get_proc_, fallback_gles_dl_, "glGenFramebuffers", p->glGenFramebuffers) &&
         load_proc(get_proc_, fallback_gles_dl_, "glGenRenderbuffers", p->glGenRenderbuffers) &&
         load_proc(get_proc_, fallback_gles_dl_, "glGenTextures", p->glGenTextures) &&
+        load_proc(get_proc_, fallback_gles_dl_, "glGetError", p->glGetError) &&
         load_proc(get_proc_, fallback_gles_dl_, "glGetIntegerv", p->glGetIntegerv) &&
         load_proc(get_proc_, fallback_gles_dl_, "glGetProgramInfoLog", p->glGetProgramInfoLog) &&
         load_proc(get_proc_, fallback_gles_dl_, "glGetProgramiv", p->glGetProgramiv) &&
@@ -264,13 +282,35 @@ bool Gles2Presenter::init(GlGetProcAddressFn get_proc) {
     return true;
 }
 
-void Gles2Presenter::cleanup() {
+void Gles2Presenter::release_hw_fbo() {
     if (gl_ && initialized_) {
         if (hw_depth_rbo_) gl_->glDeleteRenderbuffers(1, &hw_depth_rbo_);
         if (hw_fbo_) gl_->glDeleteFramebuffers(1, &hw_fbo_);
         if (hw_tex_) gl_->glDeleteTextures(1, &hw_tex_);
+    }
+    hw_depth_rbo_ = 0;
+    hw_fbo_ = 0;
+    hw_tex_ = 0;
+    hw_tex_w_ = 0;
+    hw_tex_h_ = 0;
+    hw_has_depth_ = false;
+    hw_is_rgb565_ = false;
+}
+
+void Gles2Presenter::release_native_texture() {
+    if (gl_ && initialized_ && tex_native_) {
+        gl_->glDeleteTextures(1, &tex_native_);
+    }
+    tex_native_ = 0;
+    native_tex_w_ = 0;
+    native_tex_h_ = 0;
+}
+
+void Gles2Presenter::cleanup() {
+    if (gl_ && initialized_) {
+        release_hw_fbo();
+        release_native_texture();
         if (tex_lcd_) gl_->glDeleteTextures(1, &tex_lcd_);
-        if (tex_native_) gl_->glDeleteTextures(1, &tex_native_);
         if (tex_overlay_) gl_->glDeleteTextures(1, &tex_overlay_);
         if (vbo_quad_) gl_->glDeleteBuffers(1, &vbo_quad_);
         if (prog_tex_) gl_->glDeleteProgram(prog_tex_);
@@ -282,6 +322,8 @@ void Gles2Presenter::cleanup() {
     hw_tex_w_ = 0;
     hw_tex_h_ = 0;
     hw_has_depth_ = false;
+    prefer_rgb565_ = false;
+    hw_is_rgb565_ = false;
     tex_lcd_ = 0;
     tex_native_ = 0;
     native_tex_w_ = 0;
@@ -382,6 +424,7 @@ bool Gles2Presenter::compile_shaders() {
 void Gles2Presenter::ensure_lcd_texture() {
     if (tex_lcd_) return;
     gl_->glGenTextures(1, &tex_lcd_);
+    gl_->glActiveTexture(kGlTexture0);
     gl_->glBindTexture(kGlTexture2d, tex_lcd_);
     gl_->glTexParameteri(kGlTexture2d, kGlTextureMinFilter, kGlNearest);
     gl_->glTexParameteri(kGlTexture2d, kGlTextureMagFilter, kGlNearest);
@@ -395,6 +438,7 @@ void Gles2Presenter::ensure_lcd_texture() {
 void Gles2Presenter::ensure_overlay_texture() {
     if (tex_overlay_) return;
     gl_->glGenTextures(1, &tex_overlay_);
+    gl_->glActiveTexture(kGlTexture0);
     gl_->glBindTexture(kGlTexture2d, tex_overlay_);
     gl_->glTexParameteri(kGlTexture2d, kGlTextureMinFilter, kGlNearest);
     gl_->glTexParameteri(kGlTexture2d, kGlTextureMagFilter, kGlNearest);
@@ -406,11 +450,13 @@ void Gles2Presenter::ensure_overlay_texture() {
 }
 
 void Gles2Presenter::ensure_native_texture(int width, int height) {
+    release_hw_fbo();
     const int cw = std::clamp(width, 1, max_tex_size_);
     const int ch = std::clamp(height, 1, max_tex_size_);
     if (!tex_native_) {
         gl_->glGenTextures(1, &tex_native_);
     }
+    gl_->glActiveTexture(kGlTexture0);
     gl_->glBindTexture(kGlTexture2d, tex_native_);
     if (native_tex_w_ != cw || native_tex_h_ != ch) {
         gl_->glTexParameteri(kGlTexture2d, kGlTextureMinFilter, kGlNearest);
@@ -429,53 +475,113 @@ bool Gles2Presenter::hw_ensure_fbo(int width, int height, bool depth, bool /*ste
     if (!gl_ || !initialized_) return false;
     const int cw = std::clamp(width, 1, max_tex_size_);
     const int ch = std::clamp(height, 1, max_tex_size_);
-    if (hw_fbo_ && hw_tex_ && hw_tex_w_ >= cw && hw_tex_h_ >= ch && hw_has_depth_ == depth) {
+    if (hw_fbo_ && hw_tex_ && hw_tex_w_ == cw && hw_tex_h_ == ch && hw_has_depth_ == depth) {
         return true;
     }
 
-    const int nw = std::max(cw, hw_tex_w_);
-    const int nh = std::max(ch, hw_tex_h_);
-    if (!hw_tex_) {
-        gl_->glGenTextures(1, &hw_tex_);
-    }
-    if (!hw_fbo_) {
-        gl_->glGenFramebuffers(1, &hw_fbo_);
-    }
-
-    gl_->glBindTexture(kGlTexture2d, hw_tex_);
-    gl_->glTexParameteri(kGlTexture2d, kGlTextureMinFilter, kGlNearest);
-    gl_->glTexParameteri(kGlTexture2d, kGlTextureMagFilter, kGlNearest);
-    gl_->glTexParameteri(kGlTexture2d, kGlTextureWrapS, kGlClampToEdge);
-    gl_->glTexParameteri(kGlTexture2d, kGlTextureWrapT, kGlClampToEdge);
-    gl_->glTexImage2D(kGlTexture2d, 0, static_cast<GLint>(kGlRgba), nw, nh, 0,
-                      kGlRgba, kGlUnsignedByte, nullptr);
-    gl_->glBindTexture(kGlTexture2d, 0);
-
-    gl_->glBindFramebuffer(kGlFramebuffer, hw_fbo_);
-    gl_->glFramebufferTexture2D(kGlFramebuffer, kGlColorAttachment0, kGlTexture2d, hw_tex_, 0);
-
-    if (depth) {
-        if (!hw_depth_rbo_) {
-            gl_->glGenRenderbuffers(1, &hw_depth_rbo_);
-        }
-        gl_->glBindRenderbuffer(kGlRenderbuffer, hw_depth_rbo_);
-        gl_->glRenderbufferStorage(kGlRenderbuffer, kGlDepthComponent16, nw, nh);
-        gl_->glBindRenderbuffer(kGlRenderbuffer, 0);
-        gl_->glFramebufferRenderbuffer(kGlFramebuffer, kGlDepthAttachment, kGlRenderbuffer, hw_depth_rbo_);
-    } else if (hw_depth_rbo_) {
+    release_native_texture();
+    if (hw_fbo_) {
+        gl_->glBindFramebuffer(kGlFramebuffer, hw_fbo_);
+        gl_->glFramebufferTexture2D(kGlFramebuffer, kGlColorAttachment0, kGlTexture2d, 0, 0);
         gl_->glFramebufferRenderbuffer(kGlFramebuffer, kGlDepthAttachment, kGlRenderbuffer, 0);
+        gl_->glBindFramebuffer(kGlFramebuffer, 0);
+    }
+    if (hw_depth_rbo_) {
         gl_->glDeleteRenderbuffers(1, &hw_depth_rbo_);
         hw_depth_rbo_ = 0;
     }
+    if (hw_tex_) {
+        gl_->glDeleteTextures(1, &hw_tex_);
+        hw_tex_ = 0;
+    }
+    hw_tex_w_ = 0;
+    hw_tex_h_ = 0;
+    hw_has_depth_ = false;
+    hw_is_rgb565_ = false;
 
-    const GLenum status = gl_->glCheckFramebufferStatus(kGlFramebuffer);
-    gl_->glBindFramebuffer(kGlFramebuffer, 0);
-    if (status != kGlFramebufferComplete) {
+    if (!hw_fbo_) {
+        gl_->glGenFramebuffers(1, &hw_fbo_);
+    }
+    gl_->glGenTextures(1, &hw_tex_);
+
+    auto try_alloc = [&](bool use_rgb565, GLenum& out_err, GLenum& out_status) -> bool {
+        out_err = kGlNoError;
+        out_status = kGlFramebufferComplete;
+        while (gl_->glGetError() != kGlNoError) {}
+
+        gl_->glActiveTexture(kGlTexture0);
+        gl_->glBindTexture(kGlTexture2d, hw_tex_);
+        gl_->glTexParameteri(kGlTexture2d, kGlTextureMinFilter, kGlNearest);
+        gl_->glTexParameteri(kGlTexture2d, kGlTextureMagFilter, kGlNearest);
+        gl_->glTexParameteri(kGlTexture2d, kGlTextureWrapS, kGlClampToEdge);
+        gl_->glTexParameteri(kGlTexture2d, kGlTextureWrapT, kGlClampToEdge);
+        gl_->glPixelStorei(kGlUnpackAlignment, 1);
+        if (use_rgb565) {
+            gl_->glTexImage2D(kGlTexture2d, 0, static_cast<GLint>(kGlRgb), cw, ch, 0,
+                              kGlRgb, kGlUnsignedShort565, nullptr);
+        } else {
+            gl_->glTexImage2D(kGlTexture2d, 0, static_cast<GLint>(kGlRgba), cw, ch, 0,
+                              kGlRgba, kGlUnsignedByte, nullptr);
+        }
+        out_err = gl_->glGetError();
+        gl_->glBindTexture(kGlTexture2d, 0);
+        if (out_err != kGlNoError) {
+            return false;
+        }
+
+        gl_->glBindFramebuffer(kGlFramebuffer, hw_fbo_);
+        gl_->glFramebufferTexture2D(kGlFramebuffer, kGlColorAttachment0, kGlTexture2d, hw_tex_, 0);
+
+        if (depth) {
+            if (!hw_depth_rbo_) {
+                gl_->glGenRenderbuffers(1, &hw_depth_rbo_);
+            }
+            gl_->glBindRenderbuffer(kGlRenderbuffer, hw_depth_rbo_);
+            gl_->glRenderbufferStorage(kGlRenderbuffer, kGlDepthComponent16, cw, ch);
+            gl_->glBindRenderbuffer(kGlRenderbuffer, 0);
+            out_err = gl_->glGetError();
+            if (out_err != kGlNoError) {
+                gl_->glBindFramebuffer(kGlFramebuffer, 0);
+                return false;
+            }
+            gl_->glFramebufferRenderbuffer(kGlFramebuffer, kGlDepthAttachment, kGlRenderbuffer, hw_depth_rbo_);
+        }
+
+        out_status = gl_->glCheckFramebufferStatus(kGlFramebuffer);
+        if (out_status == kGlFramebufferComplete) {
+            gl_->glDisable(kGlScissorTest);
+            gl_->glColorMask(static_cast<GLboolean>(kGlTrue), static_cast<GLboolean>(kGlTrue),
+                             static_cast<GLboolean>(kGlTrue), static_cast<GLboolean>(kGlTrue));
+            gl_->glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+            gl_->glClear(kGlColorBufferBit);
+            out_err = gl_->glGetError();
+        }
+        gl_->glBindFramebuffer(kGlFramebuffer, 0);
+        return out_status == kGlFramebufferComplete && out_err == kGlNoError;
+    };
+
+    GLenum err = kGlNoError;
+    GLenum status = kGlFramebufferComplete;
+    bool used_rgb565 = prefer_rgb565_;
+    bool allocated = try_alloc(used_rgb565, err, status);
+    if (!allocated) {
+        used_rgb565 = !prefer_rgb565_;
+        allocated = try_alloc(used_rgb565, err, status);
+    }
+    if (!allocated) {
+        release_hw_fbo();
+        std::fprintf(stderr,
+                     "czx: HW GLES2 FBO %dx%d allocation failed (err=0x%x status=0x%x)\n",
+                     cw, ch, static_cast<unsigned>(err), static_cast<unsigned>(status));
         return false;
     }
-    hw_tex_w_ = nw;
-    hw_tex_h_ = nh;
+
+    hw_tex_w_ = cw;
+    hw_tex_h_ = ch;
     hw_has_depth_ = depth;
+    hw_is_rgb565_ = used_rgb565;
+    std::fprintf(stderr, "czx: HW GLES2 FBO ready (%dx%d %s)\n",
+                 cw, ch, used_rgb565 ? "RGB565" : "RGBA8");
     return true;
 }
 

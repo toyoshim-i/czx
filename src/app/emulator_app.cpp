@@ -1023,6 +1023,9 @@ void EmulatorApp::destroy_active_core() {
     core_inst_ = nullptr;
     hw_render_active_ = false;
     hw_bottom_left_ = false;
+    if (platform_.display) {
+        platform_.display->hw_release_fbo();
+    }
 }
 
 bool EmulatorApp::activate_core(int index, const std::string& initial_media, const std::string& initial_media2) {
@@ -2619,6 +2622,9 @@ void EmulatorApp::cb_video_frame(void* user_data, const czx_frame_t* frame) {
         ++self->native_seq_;
         return;
     }
+
+    self->hw_render_active_ = false;
+    self->hw_bottom_left_ = false;
 
     if (self->has_last_frame_meta_ && self->cfg_.headless_frames == 0 &&
         self->platform_.display && self->platform_.display->supports_native_present()) {

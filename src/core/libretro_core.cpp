@@ -1984,20 +1984,27 @@ private:
         }
     }
 
-    void ensure_hw_fbo_for_av_info() {
-        if (!hw_render_active_ || !host_.hw_make_current || !host_.hw_ensure_fbo) return;
-        const uint32_t w = std::clamp<uint32_t>(
-            std::max(av_info_.geometry.max_width, av_info_.geometry.base_width), 256u, 2048u);
-        const uint32_t h = std::clamp<uint32_t>(
-            std::max(av_info_.geometry.max_height, av_info_.geometry.base_height), 256u, 2048u);
-        if (host_.hw_make_current(host_.user_data)) {
-            (void)host_.hw_ensure_fbo(host_.user_data, w, h, hw_render_.depth, hw_render_.stencil);
+    bool ensure_hw_fbo_for_av_info() {
+        if (!hw_render_active_ || !host_.hw_make_current || !host_.hw_ensure_fbo) return false;
+        uint32_t rw = (av_info_.geometry.base_width > 0u)
+                          ? av_info_.geometry.base_width
+                          : av_info_.geometry.max_width;
+        uint32_t rh = (av_info_.geometry.base_height > 0u)
+                          ? av_info_.geometry.base_height
+                          : av_info_.geometry.max_height;
+        if (rw == 0u) rw = 320u;
+        if (rh == 0u) rh = 240u;
+        const uint32_t w = std::clamp<uint32_t>(rw, 64u, 2048u);
+        const uint32_t h = std::clamp<uint32_t>(rh, 64u, 2048u);
+        if (!host_.hw_make_current(host_.user_data)) {
+            return false;
         }
+        return host_.hw_ensure_fbo(host_.user_data, w, h, hw_render_.depth, hw_render_.stencil);
     }
 
     void init_hw_context_if_needed() {
         if (!hw_render_active_ || hw_context_ready_) return;
-        ensure_hw_fbo_for_av_info();
+        (void)ensure_hw_fbo_for_av_info();
         if (host_.hw_make_current) {
             (void)host_.hw_make_current(host_.user_data);
         }
@@ -2557,14 +2564,14 @@ private:
                 if (data) {
                     av_info_ = *static_cast<const retro_system_av_info*>(data);
                     loader_->update_av_timing(av_info_.timing.fps, av_info_.timing.sample_rate);
-                    ensure_hw_fbo_for_av_info();
+                    (void)ensure_hw_fbo_for_av_info();
                 }
                 return true;
 
             case RETRO_ENVIRONMENT_SET_GEOMETRY:
                 if (data) {
                     av_info_.geometry = *static_cast<const retro_game_geometry*>(data);
-                    ensure_hw_fbo_for_av_info();
+                    (void)ensure_hw_fbo_for_av_info();
                 }
                 return true;
 

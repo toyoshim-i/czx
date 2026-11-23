@@ -94,6 +94,11 @@ public:
         return ctx_ && ctx_->make_current() &&
                ctx_->presenter.hw_ensure_fbo(width, height, depth, stencil);
     }
+    void hw_release_fbo() override {
+        if (ctx_ && ctx_->make_current()) {
+            ctx_->presenter.release_hw_fbo();
+        }
+    }
     uintptr_t hw_get_current_framebuffer() const override {
         return ctx_ ? ctx_->presenter.hw_fbo() : 0;
     }

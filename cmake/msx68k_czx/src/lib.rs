@@ -594,7 +594,11 @@ thread_local! {
 
 unsafe extern "C" fn hw_context_reset() {
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        let hw_get_proc = CALLBACKS.lock().ok().and_then(|c| c.hw_get_proc);
+        let (hw_get_fbo, hw_get_proc) = CALLBACKS
+            .lock()
+            .ok()
+            .map(|c| (c.hw_get_fbo, c.hw_get_proc))
+            .unwrap_or((None, None));
         let perf_detail = CORE_STATE
             .lock()
             .ok()
@@ -607,16 +611,32 @@ unsafe extern "C" fn hw_context_reset() {
             }
         });
 
-        let ext_comp = unsafe {
-            ViconCompositor::new_gles2_external(
-                RendererConfig {
-                    generation: ShaderGeneration::Gles2,
-                    max_width: 1024,
-                    max_height: 1024,
-                    output_format: PixelFormat::Rgba8,
-                },
-                hw_get_proc,
-            )
+        let hw_fbo = hw_get_fbo.map(|f| unsafe { f() }).unwrap_or(0);
+        let ext_comp = if hw_fbo != 0 {
+            let comp = unsafe {
+                ViconCompositor::new_gles2_external(
+                    RendererConfig {
+                        generation: ShaderGeneration::Gles2,
+                        max_width: 1024,
+                        max_height: 1024,
+                        output_format: PixelFormat::Rgba8,
+                    },
+                    hw_get_proc,
+                )
+            };
+            if comp.is_none() {
+                log_msg(
+                    RETRO_LOG_WARN,
+                    "VICON HW GLES2 external context unavailable, falling back to CPU compositor",
+                );
+            }
+            comp
+        } else {
+            log_msg(
+                RETRO_LOG_WARN,
+                "VICON HW GLES2 frontend FBO unavailable, falling back to CPU compositor",
+            );
+            None
         };
 
         if let Some(mut comp) = ext_comp {
@@ -640,10 +660,6 @@ unsafe extern "C" fn hw_context_reset() {
                 }
             }
         } else {
-            log_msg(
-                RETRO_LOG_WARN,
-                "VICON HW GLES2 external context unavailable, falling back to CPU compositor",
-            );
             let fallback = ViconCompositor::new(RendererConfig {
                 generation: ShaderGeneration::Cpu,
                 max_width: 1024,
@@ -2043,28 +2059,42 @@ pub unsafe extern "C" fn retro_run() {
 
         let (timing, t2, t3): (Option<FrameTimingStats>, Option<Instant>, Option<Instant>) =
             if st.hw_render_enabled {
+                let (crtc_w, crtc_h) = st.vm.bus.crtc.active_resolution();
+                let pre_w = crtc_w.clamp(1, 1024);
+                let pre_h = crtc_h.clamp(1, 1024);
+                notify_geometry_and_fps(
+                    st,
+                    pre_w,
+                    pre_h,
+                    aspect_for_resolution(pre_w, pre_h),
+                    next_fps,
+                );
                 let fbo = hw_get_fbo.map(|f| unsafe { f() } as u32).unwrap_or(0);
-                let (hw_dims, timing, t_a, t_b) = COMPOSITOR.with(|cell| {
-                    let mut borrow = cell.borrow_mut();
-                    if let Some(comp) = borrow.as_mut() {
-                        let dims = if st.need_full_vram_upload {
-                            st.need_full_vram_upload = false;
-                            let _ = st.vm.bus.take_written_vram_pages();
-                            comp.render_frame_to_fbo_readonly(&st.vm.bus, fbo, false)
+                let (hw_dims, timing, t_a, t_b) = if fbo != 0 {
+                    COMPOSITOR.with(|cell| {
+                        let mut borrow = cell.borrow_mut();
+                        if let Some(comp) = borrow.as_mut() {
+                            let dims = if st.need_full_vram_upload {
+                                st.need_full_vram_upload = false;
+                                let _ = st.vm.bus.take_written_vram_pages();
+                                comp.render_frame_to_fbo_readonly(&st.vm.bus, fbo, false)
+                            } else {
+                                comp.render_frame_to_fbo(&mut st.vm.bus, fbo, false)
+                            };
+                            let timing = if dims.is_some() && st.perf_detail {
+                                comp.last_timing()
+                            } else {
+                                None
+                            };
+                            let t_end = st.perf_log.then(Instant::now);
+                            (dims, timing, t_vicon0, t_end)
                         } else {
-                            comp.render_frame_to_fbo(&mut st.vm.bus, fbo, false)
-                        };
-                        let timing = if dims.is_some() && st.perf_detail {
-                            comp.last_timing()
-                        } else {
-                            None
-                        };
-                        let t_end = st.perf_log.then(Instant::now);
-                        (dims, timing, t_vicon0, t_end)
-                    } else {
-                        (None, None, t_vicon0, t_vicon0)
-                    }
-                });
+                            (None, None, t_vicon0, t_vicon0)
+                        }
+                    })
+                } else {
+                    (None, None, t_vicon0, t_vicon0)
+                };
                 if let Some((raw_w, raw_h)) = hw_dims {
                     let w = raw_w.max(1);
                     let h = raw_h.max(1);

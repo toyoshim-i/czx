@@ -24,10 +24,31 @@ int main() {
         czx::platform::Gles2Presenter presenter;
         CHECK(presenter.hw_fbo() == 0);
         CHECK(!presenter.hw_ensure_fbo(640, 480, false, false));
+        presenter.release_hw_fbo();
+        presenter.release_native_texture();
+        CHECK(presenter.hw_tex_width() == 0);
+        CHECK(presenter.hw_tex_height() == 0);
+        CHECK(!presenter.hw_is_rgb565());
         CHECK(presenter.get_proc_address("glClear") == nullptr);
         presenter.cleanup();
         presenter.cleanup();
         CHECK(presenter.hw_fbo() == 0);
+    }
+
+    // HW FBO dimension selection prefers active base size before max geometry.
+    {
+        uint32_t w = 0;
+        uint32_t h = 0;
+        czx::platform::compute_hw_fbo_dimensions(768, 512, 1024, 1024, w, h);
+        CHECK(w == 768 && h == 512);
+        czx::platform::compute_hw_fbo_dimensions(256, 256, 1024, 1024, w, h);
+        CHECK(w == 256 && h == 256);
+        czx::platform::compute_hw_fbo_dimensions(0, 0, 512, 448, w, h);
+        CHECK(w == 512 && h == 448);
+        czx::platform::compute_hw_fbo_dimensions(0, 0, 0, 0, w, h);
+        CHECK(w == 320 && h == 240);
+        czx::platform::compute_hw_fbo_dimensions(32, 4096, 0, 0, w, h);
+        CHECK(w == 64 && h == 2048);
     }
 
     // Uninitialized Sdl2Gles2Context and wrapper classes must behave safely without a display server.

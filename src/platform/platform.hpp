@@ -78,6 +78,7 @@ public:
     virtual bool hw_make_current() { return false; }
     virtual void* hw_get_proc_address(const char* /*sym*/) const { return nullptr; }
     virtual bool hw_ensure_fbo(int /*width*/, int /*height*/, bool /*depth*/, bool /*stencil*/) { return false; }
+    virtual void hw_release_fbo() {}
     virtual uintptr_t hw_get_current_framebuffer() const { return 0; }
     virtual void present_hw(const NativeHwFrameView&) {}
     virtual const char* backend_name() const = 0;

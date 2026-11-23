@@ -251,6 +251,8 @@ void test_quasi88_hot_swap() {
 int main() {
     CHECK(czx::core::is_d88_ext("foo/ゲーム.D88"));
     CHECK(czx::core::is_d88_ext("bar.88d"));
+    CHECK(czx::core::is_d88_ext("foo/ゲーム.D77"));
+    CHECK(czx::core::is_d88_ext("bar.77d"));
     CHECK(!czx::core::is_d88_ext("bar.d64"));
 
     const fs::path tmp_dir = fs::temp_directory_path() / "czx_test_d88";

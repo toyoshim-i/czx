@@ -79,6 +79,18 @@ make -f "$ROOT_DIR/cmake/emuz700_czx/Makefile.czx" -j"$(nproc)" \
     OUT_SO="$OUT_DIR/emuz700_libretro.so" \
     OPT_FLAGS="-O3"
 
+echo "Building eFM-7 / eFM77AV / eFM77AV40 (libretro, x86_64, external ROMs)..."
+for fm7_spec in "FM7:efm7" "FM77AV:efm77av" "FM77AV40:efm77av40"; do
+    fm7_model="${fm7_spec%%:*}"
+    fm7_name="${fm7_spec#*:}"
+    make -f "$ROOT_DIR/cmake/efm7_czx/Makefile.czx" -j"$(nproc)" \
+        FM7_MODEL="$fm7_model" \
+        ROOT_DIR="$ROOT_DIR" \
+        OBJ_DIR="$ROOT_DIR/build/cores-${fm7_name}" \
+        OUT_SO="$OUT_DIR/${fm7_name}_libretro.so" \
+        OPT_FLAGS="-O3"
+done
+
 if command -v cargo >/dev/null 2>&1; then
     echo "Building msx68k (experimental libretro, host)..."
     cargo build --release --manifest-path "$ROOT_DIR/cmake/msx68k_czx/Cargo.toml" \

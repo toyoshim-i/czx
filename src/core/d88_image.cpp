@@ -84,7 +84,8 @@ const char* D88SubDisk::media_type_label() const noexcept {
 
 bool is_d88_ext(const std::string& path) {
     const std::string ext = to_lower_copy(fs::path(path).extension().string());
-    return ext == ".d88" || ext == ".88d" || ext == ".d98" || ext == ".98d";
+    return ext == ".d88" || ext == ".88d" || ext == ".d98" || ext == ".98d" ||
+           ext == ".d77" || ext == ".77d";
 }
 
 bool inspect_d88(const std::string& path, std::vector<D88SubDisk>& out_disks) {

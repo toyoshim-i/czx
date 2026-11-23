@@ -78,8 +78,11 @@ int core_sort_priority(const std::string& id) {
     if (id == "np2kai") return 4;
     if (id == "bluemsx") return 5;
     if (id == "emuz700") return 6;
-    if (id == "msx68k") return 7;
-    return 10;
+    if (id == "efm7") return 7;
+    if (id == "efm77av") return 8;
+    if (id == "efm77av40") return 9;
+    if (id == "msx68k") return 10;
+    return 15;
 }
 
 }  // namespace
@@ -124,8 +127,20 @@ std::vector<std::string> candidate_core_ids_for_media(const std::string& media_p
         append_unique(out, "g800");
         return out;
     }
-    if (ext == ".mzt" || ext == ".mzf" || ext == ".m12" || ext == ".q20" ||
-        ext == ".2d" || ext == ".t77" || ext == ".wav") {
+    if (ext == ".d77" || ext == ".77d") {
+        append_unique(out, "efm77av40");
+        append_unique(out, "efm77av");
+        append_unique(out, "efm7");
+        return out;
+    }
+    if (ext == ".t77") {
+        append_unique(out, "efm77av40");
+        append_unique(out, "efm77av");
+        append_unique(out, "efm7");
+        append_unique(out, "emuz700");
+        return out;
+    }
+    if (ext == ".mzt" || ext == ".mzf" || ext == ".m12" || ext == ".q20") {
         append_unique(out, "emuz700");
         return out;
     }
@@ -176,6 +191,11 @@ std::vector<std::string> candidate_core_ids_for_media(const std::string& media_p
     if (has_dir_hint({"c64", "vice"})) {
         append_unique(out, "vice_x64");
         append_unique(out, "vice_x64sc");
+    }
+    if (has_dir_hint({"fm7", "fm77", "efm7"})) {
+        append_unique(out, "efm77av40");
+        append_unique(out, "efm77av");
+        append_unique(out, "efm7");
     }
     if (has_dir_hint({"mz700", "emuz700"})) {
         append_unique(out, "emuz700");
@@ -232,6 +252,14 @@ std::vector<std::string> candidate_core_ids_for_media(const std::string& media_p
         append_unique(out, "quasi88");
         append_unique(out, "np2kai");
         append_unique(out, "emuz700");
+        append_unique(out, "efm77av40");
+        append_unique(out, "efm77av");
+        append_unique(out, "efm7");
+    } else if (ext == ".2d" || ext == ".wav") {
+        append_unique(out, "emuz700");
+        append_unique(out, "efm77av40");
+        append_unique(out, "efm77av");
+        append_unique(out, "efm7");
     } else if (ext == ".img") {
         append_unique(out, "msx68k");
         append_unique(out, "np2kai");

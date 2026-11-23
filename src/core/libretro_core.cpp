@@ -108,6 +108,9 @@ std::string derive_display_name(const std::string& id, const char* lib_name) {
     if (id == "bluemsx") return "MSX (blueMSX)";
     if (id == "emuz700") return "MZ-700 (EmuZ-700)";
     if (id == "msx68k") return "X68000 (msx68k)";
+    if (id == "efm7") return "FM-7 (eFM-7)";
+    if (id == "efm77av") return "FM77AV (eFM77AV)";
+    if (id == "efm77av40") return "FM77AV40 (eFM77AV40)";
     if (lib_name && lib_name[0] != '\0') return lib_name;
     return id;
 }
@@ -163,7 +166,8 @@ bool is_floppy_disk_ext(const std::string& path) {
            ext == ".d88" || ext == ".88d" || ext == ".d98" || ext == ".98d" ||
            ext == ".fdi" || ext == ".xdf" || ext == ".hdm" || ext == ".dup" ||
            ext == ".2hd" || ext == ".tfd" || ext == ".nfd" || ext == ".fdd" ||
-           ext == ".dim" || ext == ".2dd";
+           ext == ".dim" || ext == ".2dd" || ext == ".d77" || ext == ".77d" ||
+           ext == ".2d";
 }
 
 bool is_tape_ext(const std::string& path) {
@@ -179,6 +183,16 @@ bool is_mz700_tape_ext(const std::string& path) {
 bool is_mz700_media_ext(const std::string& path) {
     const std::string ext = to_lower_copy(fs::path(path).extension().string());
     return is_mz700_tape_ext(path) || ext == ".q20" || ext == ".d88" || ext == ".2d";
+}
+
+bool is_fm7_tape_ext(const std::string& path) {
+    const std::string ext = to_lower_copy(fs::path(path).extension().string());
+    return ext == ".t77" || ext == ".wav";
+}
+
+bool is_fm7_floppy_ext(const std::string& path) {
+    const std::string ext = to_lower_copy(fs::path(path).extension().string());
+    return ext == ".d77" || ext == ".77d" || ext == ".d88" || ext == ".2d";
 }
 
 bool is_pc98_hdd_ext(const std::string& path) {
@@ -561,6 +575,7 @@ public:
         is_bluemsx_ = (loader_->id().find("bluemsx") != std::string::npos);
         is_emuz700_ = (loader_->id().find("emuz700") != std::string::npos);
         is_msx68k_ = (loader_->id().find("msx68k") != std::string::npos);
+        is_efm7_ = (loader_->id() == "efm7" || loader_->id() == "efm77av" || loader_->id() == "efm77av40");
         if (const char* dd = std::getenv("CZX_DATA_DIR"); dd && dd[0] != '\0') {
             set_data_dir(dd);
         } else if (const char* home = std::getenv("HOME"); home && home[0] != '\0') {
@@ -620,7 +635,7 @@ public:
         }
         if (has_m1) {
             const std::string init_path = host_.initial_media;
-            if (get_drive_count() >= 2u && (is_quasi88_ || is_np2kai_) && is_d88_ext(init_path)) {
+            if (get_drive_count() >= 2u && (is_quasi88_ || is_np2kai_ || is_efm7_) && is_d88_ext(init_path)) {
                 std::vector<D88SubDisk> disks;
                 if (inspect_d88(init_path, disks) && disks.size() >= 2u) {
                     const std::string cache_dir = (fs::path(save_dir_) / "d88_cache").string();
@@ -687,6 +702,9 @@ public:
         } else if (is_msx68k_) {
             system_dir_ = (fs::path(data_dir_) / "roms" / "x68000").string();
             fs::create_directories(system_dir_, ec);
+        } else if (is_efm7_) {
+            system_dir_ = (fs::path(data_dir_) / "roms" / "fm7").string();
+            fs::create_directories(system_dir_, ec);
         } else {
             system_dir_ = (fs::path(data_dir_) / "roms").string();
             fs::create_directories(system_dir_, ec);
@@ -739,7 +757,7 @@ public:
             return false;
         }
 
-        if (is_vice_ || is_quasi88_ || is_np2kai_ || is_bluemsx_ || is_emuz700_ || is_msx68k_) {
+        if (is_vice_ || is_quasi88_ || is_np2kai_ || is_bluemsx_ || is_emuz700_ || is_msx68k_ || is_efm7_) {
             std::error_code ec;
             if (!fs::is_regular_file(path, ec)) {
                 return false;
@@ -805,7 +823,8 @@ public:
     bool eject_media() {
         g_active_instance = this;
         if ((is_vice_ && has_media_ && is_tape_ext(media_path_)) ||
-            (is_emuz700_ && has_media_ && is_mz700_tape_ext(media_path_))) {
+            (is_emuz700_ && has_media_ && is_mz700_tape_ext(media_path_)) ||
+            (is_efm7_ && has_media_ && is_fm7_tape_ext(media_path_))) {
             pulsed_retrok_ = RETROK_KP_PLUS;
             pulsed_frames_ = 2;
             pulsed_emitted_ = false;
@@ -1120,6 +1139,67 @@ public:
             return !target.empty() && reload_core_with_media(target);
         }
 
+        if (is_efm7_) {
+            if (ext == ".m3u") {
+                drive_paths_[1].clear();
+                drive_labels_[1] = "Empty";
+                drive_paths_[0] = path;
+                drive_labels_[0] = lbl;
+                return reload_core_with_media(path);
+            }
+            if (is_fm7_tape_ext(path)) {
+                const bool has_floppy = is_fm7_floppy_ext(drive_paths_[0]) ||
+                                        is_fm7_floppy_ext(drive_paths_[1]);
+                if (!has_floppy && game_loaded_ && has_disk_control()) {
+                    options_["efm7_drive"] = "CMT";
+                    option_dirty_ = true;
+                    if (hot_swap_disk(path)) {
+                        has_media_ = true;
+                        ejected_ = false;
+                        drive_paths_[0] = path;
+                        drive_labels_[0] = lbl;
+                        media_path_ = path;
+                        media_label_ = lbl;
+                        return true;
+                    }
+                }
+                drive_paths_[1].clear();
+                drive_labels_[1] = "Empty";
+                drive_paths_[0] = path;
+                drive_labels_[0] = lbl;
+                return reload_core_with_media(path);
+            }
+            if (is_fm7_floppy_ext(path)) {
+                const bool had_floppy_boot = has_media_ &&
+                                             (is_fm7_floppy_ext(drive_paths_[0]) ||
+                                              is_fm7_floppy_ext(drive_paths_[1]));
+                if (is_fm7_tape_ext(drive_paths_[0])) {
+                    drive_paths_[0].clear();
+                    drive_labels_[0] = "Empty";
+                }
+                drive_paths_[drive] = path;
+                drive_labels_[drive] = lbl;
+                if (had_floppy_boot && game_loaded_ && has_disk_control()) {
+                    options_["efm7_drive"] = (drive == 0u) ? "FDD0" : "FDD1";
+                    option_dirty_ = true;
+                    if (hot_swap_disk(path)) {
+                        has_media_ = true;
+                        ejected_ = false;
+                        if (drive == 0u) {
+                            media_path_ = path;
+                            media_label_ = lbl;
+                        }
+                        return true;
+                    }
+                }
+                const std::string target = (!drive_paths_[0].empty() && !drive_paths_[1].empty())
+                                               ? build_dual_boot_file()
+                                               : (!drive_paths_[0].empty() ? drive_paths_[0] : drive_paths_[1]);
+                return !target.empty() && reload_core_with_media(target);
+            }
+            return false;
+        }
+
         return false;
     }
 
@@ -1143,8 +1223,24 @@ public:
         if (drive == 0u && is_np2kai_ && drive_paths_[0].empty() && !hdd_path_.empty()) {
             hdd_path_.clear();
         }
+        const bool was_efm7_tape = is_efm7_ && is_fm7_tape_ext(drive_paths_[drive]);
         drive_paths_[drive].clear();
         drive_labels_[drive] = "Empty";
+
+        if (is_efm7_) {
+            if (game_loaded_ && has_disk_control()) {
+                options_["efm7_drive"] = was_efm7_tape ? "CMT" : ((drive == 0u) ? "FDD0" : "FDD1");
+                option_dirty_ = true;
+                return disk_set_eject_(true);
+            }
+            if (!drive_paths_[0].empty() || !drive_paths_[1].empty()) {
+                const std::string target = (!drive_paths_[0].empty() && !drive_paths_[1].empty())
+                                               ? build_dual_boot_file()
+                                               : (!drive_paths_[0].empty() ? drive_paths_[0] : drive_paths_[1]);
+                return !target.empty() && reload_core_with_media(target);
+            }
+            return !has_media_ || reload_core_with_media("");
+        }
 
         if (is_quasi88_) {
             if (game_loaded_ && has_disk_control()) {
@@ -1195,10 +1291,10 @@ public:
         out->drive_mask = 0u;
 
         if (led_tape_ != 0) {
-            if (is_emuz700_ && led_tape_ >= 100 && led_tape_ <= 200) {
+            if ((is_emuz700_ || is_efm7_) && led_tape_ >= 100 && led_tape_ <= 200) {
                 out->flags |= CZX_ACTIVITY_TAPE_READ;
                 out->tape_percent = static_cast<int8_t>(led_tape_ - 100);
-            } else if (is_emuz700_ && led_tape_ >= 300 && led_tape_ <= 400) {
+            } else if ((is_emuz700_ || is_efm7_) && led_tape_ >= 300 && led_tape_ <= 400) {
                 out->flags |= CZX_ACTIVITY_TAPE_WRITE;
                 out->tape_percent = static_cast<int8_t>(led_tape_ - 300);
             } else {
@@ -1211,7 +1307,7 @@ public:
         }
         if (led_fdd_ != 0) {
             out->flags |= CZX_ACTIVITY_DISK;
-            if (is_emuz700_ || is_msx68k_) {
+            if (is_emuz700_ || is_msx68k_ || is_efm7_) {
                 out->drive_mask = static_cast<uint8_t>(led_fdd_ & 0x0F);
             }
         }
@@ -1245,6 +1341,7 @@ private:
     bool is_bluemsx_ = false;
     bool is_emuz700_ = false;
     bool is_msx68k_ = false;
+    bool is_efm7_ = false;
 
     std::string data_dir_;
     std::string system_dir_;
@@ -1292,6 +1389,13 @@ private:
             if (!drive_paths_[0].empty()) body += drive_paths_[0] + "\n";
             if (!drive_paths_[1].empty()) body += drive_paths_[1] + "\n";
             if (!hdd_path_.empty()) body += hdd_path_ + "\n";
+            return write_text_file(p, body) ? p.string() : std::string{};
+        }
+        if (is_efm7_) {
+            const fs::path p = fs::path(save_dir_) / "czx_efm7.m3u";
+            std::string body;
+            if (!drive_paths_[0].empty()) body += drive_paths_[0] + "\n";
+            if (!drive_paths_[1].empty()) body += drive_paths_[1] + "\n";
             return write_text_file(p, body) ? p.string() : std::string{};
         }
         const std::string fname = is_applewin_ ? "czx_applewin (MD).m3u" : "czx_quasi88.m3u";
@@ -1548,6 +1652,43 @@ private:
                 }
                 return false;
             }
+        } else if (is_efm7_) {
+            const fs::path fm7_dir(system_dir_);
+            static constexpr std::array<const char*, 4> kFbasicAliases = {
+                "FBASIC30.ROM", "FBASIC300.ROM", "FBASIC301.ROM", "FBASIC302.ROM",
+            };
+            static constexpr std::array<const char*, 3> kFm7BootAliases = {
+                "BOOT_BAS.ROM", "BOOT_DOS.ROM", "BOOT_TL11_11.ROM",
+            };
+            auto any_exists = [&](const auto& list) {
+                for (const char* f : list) {
+                    if (rom_file_exists(fm7_dir, f, true)) return true;
+                }
+                return false;
+            };
+            const bool has_subsys_c = rom_file_exists(fm7_dir, "SUBSYS_C.ROM", true);
+            const bool has_fbasic = any_exists(kFbasicAliases);
+            if (loader_->id() == "efm7") {
+                const bool has_boot = any_exists(kFm7BootAliases);
+                if (!has_subsys_c || !has_fbasic || !has_boot) {
+                    err_out = "Place FM-7 ROMs in:\n" + system_dir_ + "/\nMissing:";
+                    if (!has_subsys_c) err_out += "\n  SUBSYS_C.ROM";
+                    if (!has_fbasic) err_out += "\n  FBASIC30.ROM (or 300/301/302)";
+                    if (!has_boot) err_out += "\n  BOOT_BAS.ROM / BOOT_DOS.ROM";
+                    return false;
+                }
+            } else {
+                const bool has_initiate = rom_file_exists(fm7_dir, "INITIATE.ROM", true);
+                const bool has_subsyscg = rom_file_exists(fm7_dir, "SUBSYSCG.ROM", true);
+                if (!has_initiate || !has_subsys_c || !has_subsyscg || !has_fbasic) {
+                    err_out = "Place FM-7 ROMs in:\n" + system_dir_ + "/\nMissing:";
+                    if (!has_initiate) err_out += "\n  INITIATE.ROM";
+                    if (!has_subsys_c) err_out += "\n  SUBSYS_C.ROM";
+                    if (!has_subsyscg) err_out += "\n  SUBSYSCG.ROM";
+                    if (!has_fbasic) err_out += "\n  FBASIC30.ROM (or 300/301/302)";
+                    return false;
+                }
+            }
         }
         return true;
     }
@@ -1783,6 +1924,11 @@ private:
             options_["msx68k_drive"] = "FDD0";
             options_["msx68k_renderer"] = "auto";
             options_["msx68k_gpu_scale"] = "off";
+        } else if (is_efm7_) {
+            options_["efm7_boot_mode"] = "auto";
+            options_["efm7_tape_turbo"] = host_.disable_tape_warp ? "disabled" : "enabled";
+            options_["efm7_tape_sound"] = "disabled";
+            options_["efm7_drive"] = "FDD0";
         }
     }
 
@@ -2046,6 +2192,14 @@ private:
         } else if (is_emuz700_) {
             frame.par_num = 1;
             frame.par_den = 1;
+        } else if (is_efm7_) {
+            if (frame.width == 640 && frame.height == 200) {
+                frame.par_num = 1;
+                frame.par_den = 2;
+            } else {
+                frame.par_num = 1;
+                frame.par_den = 1;
+            }
         } else if (av_info_.geometry.aspect_ratio > 0.0f && frame.height > 0) {
             const double par = static_cast<double>(av_info_.geometry.aspect_ratio) *
                                static_cast<double>(frame.height) / static_cast<double>(frame.width);
@@ -2118,7 +2272,7 @@ private:
             if (port >= joy_state_.size()) return 0;
             const uint32_t b = joy_state_[port];
             uint16_t mask = 0;
-            if (is_applewin_ || is_quasi88_ || is_bluemsx_ || is_emuz700_ || is_msx68k_) {
+            if (is_applewin_ || is_quasi88_ || is_bluemsx_ || is_emuz700_ || is_msx68k_ || is_efm7_) {
                 if (b & CZX_JOY_FIRE1) mask |= (1u << RETRO_DEVICE_ID_JOYPAD_A);
                 if (b & CZX_JOY_FIRE2) mask |= (1u << RETRO_DEVICE_ID_JOYPAD_B);
             } else if (is_np2kai_) {
@@ -2612,14 +2766,18 @@ uint32_t LibretroCoreLoader::drive_count() const noexcept {
     const bool dual = (id_.find("quasi88") != std::string::npos) ||
                       (id_.find("np2kai") != std::string::npos) ||
                       (id_.find("applewin") != std::string::npos) ||
-                      (id_.find("msx68k") != std::string::npos);
+                      (id_.find("msx68k") != std::string::npos) ||
+                      (id_ == "efm7" || id_ == "efm77av" || id_ == "efm77av40");
     return dual ? 2u : 1u;
 }
 
 const char* LibretroCoreLoader::drive_name(uint32_t drive) const noexcept {
     if (drive_count() < 2u) return "Media";
     if (id_.find("np2kai") != std::string::npos) return (drive == 0u) ? "FDD 1" : "FDD 2";
-    if (id_.find("msx68k") != std::string::npos) return (drive == 0u) ? "FDD 0" : "FDD 1";
+    if (id_.find("msx68k") != std::string::npos ||
+        id_ == "efm7" || id_ == "efm77av" || id_ == "efm77av40") {
+        return (drive == 0u) ? "FDD 0" : "FDD 1";
+    }
     return (drive == 0u) ? "Drive 1" : "Drive 2";
 }
 

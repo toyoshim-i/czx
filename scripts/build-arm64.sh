@@ -100,6 +100,19 @@ docker run --rm \
             OPT_FLAGS="-O3 -mcpu=cortex-a53" \
             LDFLAGS="-static-libgcc -static-libstdc++"
 
+        for fm7_spec in "FM7:efm7" "FM77AV:efm77av" "FM77AV40:efm77av40"; do
+            fm7_model="${fm7_spec%%:*}"
+            fm7_name="${fm7_spec#*:}"
+            make -f /workspace/cmake/efm7_czx/Makefile.czx -j"$NPROC" \
+                FM7_MODEL="$fm7_model" \
+                ROOT_DIR=/workspace \
+                OBJ_DIR="/workspace/build-arm64-${fm7_name}" \
+                OUT_SO="/workspace/dist-arm64/cores/${fm7_name}_libretro.so" \
+                CXX=aarch64-linux-gnu-g++ \
+                OPT_FLAGS="-O3 -mcpu=cortex-a53" \
+                LDFLAGS="-static-libgcc -static-libstdc++"
+        done
+
         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
         RUSTFLAGS="-C target-cpu=cortex-a53 -C link-arg=-static-libgcc" \
         cargo build --release --target aarch64-unknown-linux-gnu \

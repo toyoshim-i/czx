@@ -51,6 +51,9 @@ void test_unambiguous_extensions() {
     CHECK(first_candidate("game.MZT") == "emuz700");
     CHECK(first_candidate("qd.q20") == "emuz700");
     CHECK(first_candidate("disk.2d") == "emuz700");
+    CHECK(first_candidate("disk.d77") == "efm77av40");
+    CHECK(first_candidate("disk.77D") == "efm77av40");
+    CHECK(first_candidate("tape.t77") == "efm77av40");
     CHECK(first_candidate("boot.dim") == "msx68k");
     CHECK(first_candidate("SXWIN31.HDS") == "msx68k");
     CHECK(first_candidate("disk.2DD") == "msx68k");
@@ -60,6 +63,9 @@ void test_ambiguous_dir_hints() {
     CHECK(first_candidate("/home/user/czx/media/pc88/game.d88") == "quasi88");
     CHECK(first_candidate("/home/user/czx/media/pc98/game.d88") == "np2kai");
     CHECK(first_candidate("/home/user/czx/media/mz700/game.d88") == "emuz700");
+    CHECK(first_candidate("/home/user/czx/media/fm7/game.d88") == "efm77av40");
+    CHECK(first_candidate("/home/user/czx/media/fm7/game.2d") == "efm77av40");
+    CHECK(first_candidate("/home/user/czx/media/fm7/tape.wav") == "efm77av40");
     CHECK(first_candidate("/home/user/czx/media/pc98/disk.xdf") == "np2kai");
     CHECK(first_candidate("/home/user/czx/media/x68000/HUMAN302.XDF") == "msx68k");
     CHECK(first_candidate("/home/user/czx/media/x68000/plin.2hd") == "msx68k");

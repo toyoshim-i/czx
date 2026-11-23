@@ -132,5 +132,9 @@ cp -f "$ROOT_DIR/packaging/applaunch/run-czx" "$DIST_DIR/"
 cp -f "$ROOT_DIR/packaging/applaunch/install-on-device.sh" "$DIST_DIR/"
 chmod +x "$DIST_DIR/czx" "$DIST_DIR/run-czx" "$DIST_DIR/install-on-device.sh"
 
+if command -v dpkg-deb >/dev/null 2>&1 && [ -x "$ROOT_DIR/scripts/build-deb-arm64.sh" ]; then
+    "$ROOT_DIR/scripts/build-deb-arm64.sh"
+fi
+
 echo "ARM64 distribution staged in $DIST_DIR:"
 ls -lh "$DIST_DIR" "$DIST_DIR/cores"

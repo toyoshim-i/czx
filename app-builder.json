@@ -1,0 +1,44 @@
+{
+  "package_name": "czx",
+  "version": "0.1.0",
+  "app_name": "CZX Emulator",
+  "bin_name": "czx",
+  "description": "Retro computer multi-emulator platform for Cardputer Zero",
+  "store": {
+    "summary": "Retro computer multi-emulator (Apple II, C64, PC-88/98, MSX, MZ, FM-7, X68k)",
+    "description": "CZX is a lightweight C++20 multi-emulator frontend tailored for the M5Stack Cardputer Zero (320x170 SPI LCD and TCA8418 I2C keyboard, plus automatic fullscreen GLES2 HDMI output when connected).\n\nSupported targets:\n- Apple II (applewin)\n- Commodore 64 (VICE x64sc / x64, PAL/NTSC selectable)\n- NEC PC-8801 (QUASI88)\n- NEC PC-9801 (NP2kai)\n- MSX / MSX2 / MSX2+ (blueMSX with bundled open-source C-BIOS)\n- SHARP PC-G850 / G815 / E200 (g800 with built-in compat BASIC)\n- SHARP MZ-700 (EmuZ-700)\n- Fujitsu FM-7 / FM77AV / FM77AV40 (eFM7)\n- SHARP X68000 (msx68k, GLES2 VICON GPU compositor)\n\nKey features:\n- Startup carousel launcher with pixel-art hardware icons and Alt+4..8 quick controls\n- 1:1 Pan, Axis Fit, Aspect Fit scaling plus PAR / 4:3 CRT aspect selection\n- Pitch-preserving audio sync pacing with HUD FPS% readout\n- No copyrighted ROMs bundled (put optional/required dumps under ~/czx/roms/)",
+    "categories": ["Emulators", "Games"],
+    "screenshots": [
+      "packaging/store/screenshots/01-launcher.png",
+      "packaging/store/screenshots/02-g800-hud.png",
+      "packaging/store/screenshots/03-menu.png"
+    ],
+    "icon": "packaging/store/icon.png",
+    "license": "GPL-3.0-or-later",
+    "source_repo": "https://github.com/toyoshim-i/czx",
+    "author": {
+      "github": "toyoshim-i",
+      "display_name": "Takashi Toyoshima"
+    },
+    "share_code": "CZX0",
+    "permissions": {
+      "camera": false,
+      "microphone": false,
+      "imu": false,
+      "network": false,
+      "additional_hardware": false,
+      "background_service": false,
+      "external_display": true
+    },
+    "locales": {
+      "en": {
+        "title": "CZX Emulator",
+        "summary": "Retro computer multi-emulator (Apple II, C64, PC-88/98, MSX, MZ, FM-7, X68k)"
+      },
+      "ja": {
+        "title": "CZX Emulator",
+        "summary": "レトロPCマルチエミュレータ (Apple II/C64/PC-88/PC-98/MSX/MZ-700/FM-7/X68000)"
+      }
+    }
+  }
+}

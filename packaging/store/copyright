@@ -1,0 +1,50 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: czx
+Upstream-Contact: Takashi Toyoshima <toyoshim@gmail.com>
+Source: https://github.com/toyoshim-i/czx
+
+Disclaimer:
+ No copyrighted machine ROMs, BIOSes, or commercial disk/tape images are
+ bundled in this package or source repository. End users supply their own
+ legitimately owned system ROM dumps where required. Targets with open-source
+ or clean-room fallback firmware (such as MSX C-BIOS, HLE PC-9801, pseudo
+ PC-8801, and compat PC-G850 BASIC) operate out of the box.
+
+Files: *
+Copyright: 2026 Takashi Toyoshima
+License: GPL-3.0-or-later
+
+Files: src/video/font_jp_data.cpp
+Copyright: 2002-2021 Num Kadoma (Misaki Font / 美咲フォント 2021-05-05)
+License: permissive
+ These fonts are free software. Unlimited permission is granted to use,
+ copy, and distribute them, with or without modification, either
+ commercially or noncommercially. THESE FONTS ARE PROVIDED "AS IS"
+ WITHOUT WARRANTY.
+
+Bundled Libretro / Emulation Cores:
+ - AppleWin (applewin_libretro.so):
+     Upstream: https://github.com/AppleWin/AppleWin
+     License: GPL-2.0
+ - VICE (vice_x64_libretro.so, vice_x64sc_libretro.so):
+     Upstream: https://github.com/libretro/vice-libretro
+     License: GPL-2.0
+ - QUASI88 (quasi88_libretro.so):
+     Upstream: https://github.com/libretro/quasi88-libretro
+     License: BSD-3-Clause
+ - Neko Project II kai (np2kai_libretro.so):
+     Upstream: https://github.com/AZO234/NP2kai
+     License: MIT (with component licenses in third_party/NP2kai/LICENSES/)
+ - blueMSX + C-BIOS (bluemsx_libretro.so, share/czx/bluemsx/):
+     Upstream: https://github.com/libretro/blueMSX-libretro
+     License: BSD-style / GPL / C-BIOS BSD-2-Clause (see license.txt)
+ - Common Source Code Project (emuz700_libretro.so, efm7_libretro.so,
+   efm77av_libretro.so, efm77av40_libretro.so):
+     Upstream: Common Source Code Project (Takeda Toshiya)
+     License: GPL-2.0
+ - g800 built-in core:
+     Upstream: g800src.0.11.4.tgz
+     License: BSD-2-Clause (plus permissive k6x8 font)
+ - msx68k (msx68k_libretro.so):
+     Upstream: https://github.com/toyoshim-i/msx68k
+     License: Apache-2.0

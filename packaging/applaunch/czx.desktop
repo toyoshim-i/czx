@@ -1,6 +1,7 @@
 [Desktop Entry]
 Name=CZX Emulator
-Exec=bin/run-czx
+Exec=/usr/share/APPLaunch/bin/run-czx
 Icon=share/images/czx.png
 Terminal=false
 Type=Application
+Categories=Game;Emulator;

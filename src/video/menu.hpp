@@ -14,6 +14,8 @@ enum class MenuAction {
     CycleCorePrev,
     CycleCoreNext,
     ApplyCore,
+    CycleVariantPrev,
+    CycleVariantNext,
     OpenMediaBrowser,
     OpenDrive1Browser,
     OpenDrive2Browser,
@@ -37,6 +39,11 @@ enum class MenuAction {
 struct MenuViewModel {
     std::string core_name;
     bool core_pending = false;
+    bool from_launcher = false;
+    bool core_is_launcher = false;
+    bool has_variant_option = false;
+    std::string variant_option_label;
+    std::string variant_value_label;
     std::string preset_or_media_label;
     bool has_media_browser = false;
     bool can_eject = false;
@@ -64,12 +71,12 @@ public:
     bool is_open() const noexcept { return open_; }
     void set_open(bool open) noexcept { open_ = open; }
     void toggle() noexcept { open_ = !open_; }
+    void reset_cursor() noexcept { cursor_ = 0; }
 
     MenuAction handle_key(const czx_key_event_t& ev, const MenuViewModel& vm);
     void render(uint16_t* fb_rgb565, const MenuViewModel& vm) const;
 
 private:
-    static constexpr int kItemCount = 12;
     bool open_ = false;
     int cursor_ = 0;
 };

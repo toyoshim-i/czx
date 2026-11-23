@@ -3,10 +3,52 @@
 #include "video/font6x8.hpp"
 #include "video/pixel.hpp"
 
-#include <array>
+#include <algorithm>
 #include <cstdio>
+#include <vector>
 
 namespace czx::video {
+
+namespace {
+
+enum class MenuRow {
+    Core = 0,
+    Variant,
+    Drive1OrMediaOrPreset,
+    Drive2OrEject,
+    Display,
+    Aspect,
+    Borders,
+    Margin,
+    AccessLed,
+    TapeWarp,
+    Input,
+    ResetOrLaunch,
+    Quit,
+};
+
+std::vector<MenuRow> build_rows(const MenuViewModel& vm) {
+    std::vector<MenuRow> rows;
+    rows.reserve(13);
+    rows.push_back(MenuRow::Core);
+    if (vm.has_variant_option) {
+        rows.push_back(MenuRow::Variant);
+    }
+    rows.push_back(MenuRow::Drive1OrMediaOrPreset);
+    rows.push_back(MenuRow::Drive2OrEject);
+    rows.push_back(MenuRow::Display);
+    rows.push_back(MenuRow::Aspect);
+    rows.push_back(MenuRow::Borders);
+    rows.push_back(MenuRow::Margin);
+    rows.push_back(MenuRow::AccessLed);
+    rows.push_back(MenuRow::TapeWarp);
+    rows.push_back(MenuRow::Input);
+    rows.push_back(MenuRow::ResetOrLaunch);
+    rows.push_back(MenuRow::Quit);
+    return rows;
+}
+
+}  // namespace
 
 MenuAction OverlayMenu::handle_key(const czx_key_event_t& ev, const MenuViewModel& vm) {
     if (!open_ || !ev.pressed) {
@@ -18,12 +60,16 @@ MenuAction OverlayMenu::handle_key(const czx_key_event_t& ev, const MenuViewMode
         return MenuAction::Close;
     }
 
+    const auto rows = build_rows(vm);
+    const int count = static_cast<int>(rows.size());
+    cursor_ = std::clamp(cursor_, 0, count - 1);
+
     if (ev.key == CZX_KEY_UP || ev.key == CZX_KEY_F) {
-        cursor_ = (cursor_ + kItemCount - 1) % kItemCount;
+        cursor_ = (cursor_ + count - 1) % count;
         return MenuAction::None;
     }
     if (ev.key == CZX_KEY_DOWN || ev.key == CZX_KEY_X) {
-        cursor_ = (cursor_ + 1) % kItemCount;
+        cursor_ = (cursor_ + 1) % count;
         return MenuAction::None;
     }
 
@@ -35,16 +81,18 @@ MenuAction OverlayMenu::handle_key(const czx_key_event_t& ev, const MenuViewMode
         return MenuAction::None;
     }
 
-    switch (cursor_) {
-        case 0:
+    switch (rows[static_cast<size_t>(cursor_)]) {
+        case MenuRow::Core:
             if (left) return MenuAction::CycleCorePrev;
             if (right) return MenuAction::CycleCoreNext;
-            if (ok && vm.core_pending) {
+            if (ok && (vm.core_pending || vm.from_launcher)) {
                 open_ = false;
                 return MenuAction::ApplyCore;
             }
             return MenuAction::None;
-        case 1:
+        case MenuRow::Variant:
+            return left ? MenuAction::CycleVariantPrev : MenuAction::CycleVariantNext;
+        case MenuRow::Drive1OrMediaOrPreset:
             if (vm.drive_count >= 2u && vm.has_media_browser) {
                 if (left) return MenuAction::EjectDrive1;
                 return MenuAction::OpenDrive1Browser;
@@ -53,40 +101,39 @@ MenuAction OverlayMenu::handle_key(const czx_key_event_t& ev, const MenuViewMode
                 return (ok || right) ? MenuAction::OpenMediaBrowser : MenuAction::None;
             }
             return left ? MenuAction::CyclePresetPrev : MenuAction::CyclePresetNext;
-        case 2:
+        case MenuRow::Drive2OrEject:
             if (vm.drive_count >= 2u && vm.has_media_browser) {
                 if (left) return MenuAction::EjectDrive2;
                 return MenuAction::OpenDrive2Browser;
             }
             return (ok && vm.can_eject) ? MenuAction::EjectMedia : MenuAction::None;
-        case 3:
+        case MenuRow::Display:
             return left ? MenuAction::CycleDisplayModePrev : MenuAction::CycleDisplayModeNext;
-        case 4:
+        case MenuRow::Aspect:
             return MenuAction::ToggleAspectPolicy;
-        case 5:
+        case MenuRow::Borders:
             return MenuAction::ToggleBorders;
-        case 6:
+        case MenuRow::Margin:
             return MenuAction::ToggleMarginFill;
-        case 7:
+        case MenuRow::AccessLed:
             return MenuAction::ToggleActivityIndicator;
-        case 8:
+        case MenuRow::TapeWarp:
             return MenuAction::ToggleTapeWarp;
-        case 9:
+        case MenuRow::Input:
             return MenuAction::ToggleInputMode;
-        case 10:
+        case MenuRow::ResetOrLaunch:
             if (ok) {
                 open_ = false;
                 return MenuAction::ResetCore;
             }
             return MenuAction::None;
-        case 11:
+        case MenuRow::Quit:
             if (ok) {
                 return MenuAction::Quit;
             }
             return MenuAction::None;
-        default:
-            return MenuAction::None;
     }
+    return MenuAction::None;
 }
 
 void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
@@ -106,10 +153,19 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
     // Header
     canvas.fill_rect(kBoxX + 1, kBoxY + 1, kBoxW - 2, 14, pack_rgb565(26, 44, 68));
     char header[64];
-    std::snprintf(header, sizeof(header), "CZX SYSTEM MENU  %dx%d", vm.src_width, vm.src_height);
+    if (vm.from_launcher) {
+        std::snprintf(header, sizeof(header), "CZX LAUNCHER MENU");
+    } else if (vm.src_width > 0 && vm.src_height > 0) {
+        std::snprintf(header, sizeof(header), "CZX SYSTEM MENU  %dx%d", vm.src_width, vm.src_height);
+    } else {
+        std::snprintf(header, sizeof(header), "CZX SYSTEM MENU");
+    }
     canvas.draw_text(kBoxX + 8, kBoxY + 4, header, pack_rgb565(255, 255, 255));
 
-    const std::string raw_core_name = vm.core_pending ? ("* " + vm.core_name) : vm.core_name;
+    const bool core_amber = vm.core_pending || vm.core_is_launcher;
+    const std::string raw_core_name =
+        (vm.core_pending && !vm.core_is_launcher && !vm.from_launcher) ? ("* " + vm.core_name)
+                                                                       : vm.core_name;
     const std::string core_val = truncate_tail_px(raw_core_name, 178, 1);
     const std::string media_val = truncate_tail_px(vm.preset_or_media_label, 178, 1);
     const std::string d1_val = truncate_tail_px(vm.drive1_label, 178, 1);
@@ -118,59 +174,117 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
                             : ((vm.input_mode == 2) ? "Joy P2 (FZXC)"
                             : ((vm.input_mode == 1) ? "Joy P1 (FZXC)" : "Keyboard"));
 
-    struct Row {
-        const char* label;
-        const char* value;
-    };
-
     const char* desktop_label = (vm.desktop_scale <= 1) ? "Desktop 1x"
                                                         : ((vm.desktop_scale == 2) ? "Desktop 2x"
                                                                                    : "Desktop 3x");
     const bool dual = (vm.drive_count >= 2u && vm.has_media_browser);
-    const std::array<Row, kItemCount> rows = {{
-        {"Core", core_val.c_str()},
-        {dual ? vm.drive1_name.c_str() : (vm.has_media_browser ? "Load Media" : "Preset"),
-         dual ? d1_val.c_str() : media_val.c_str()},
-        {dual ? vm.drive2_name.c_str() : (vm.is_tape_media ? "Tape Play" : "Eject/Swap"),
-         dual ? d2_val.c_str() : (vm.can_eject ? "[Enter]" : "(N/A)")},
-        {"Display", vm.desktop_native_active ? desktop_label : display_mode_name(vm.display_mode)},
-        {"Aspect", aspect_policy_name(vm.aspect_policy)},
-        {"Borders", vm.show_borders ? "Show Full" : "Crop Active"},
-        {"Margin", margin_fill_name(vm.margin_fill)},
-        {"Access LED", vm.show_activity_indicator ? "On" : "Off"},
-        {"Tape Warp", vm.tape_warp_enabled ? "On" : "Off"},
-        {"Input", input_label},
-        {"Reset Core", "[Enter]"},
-        {"Quit App", "[Enter]"},
-    }};
+
+    const auto row_types = build_rows(vm);
+    const int count = static_cast<int>(row_types.size());
+    const int sel = std::clamp(cursor_, 0, count - 1);
 
     constexpr int kListY = kBoxY + 17;
-    constexpr int kRowH = 11;
+    const int row_h = (count > 12) ? 10 : 11;
 
-    for (int i = 0; i < kItemCount; ++i) {
-        const int ry = kListY + i * kRowH;
-        const bool selected = (i == cursor_);
+    for (int i = 0; i < count; ++i) {
+        const MenuRow kind = row_types[static_cast<size_t>(i)];
+        const char* label = "";
+        const char* val = "";
+        switch (kind) {
+            case MenuRow::Core:
+                label = "Core";
+                val = core_val.c_str();
+                break;
+            case MenuRow::Variant:
+                label = !vm.variant_option_label.empty() ? vm.variant_option_label.c_str() : "Model";
+                val = vm.variant_value_label.c_str();
+                break;
+            case MenuRow::Drive1OrMediaOrPreset:
+                label = dual ? vm.drive1_name.c_str() : (vm.has_media_browser ? "Load Media" : "Preset");
+                val = dual ? d1_val.c_str() : media_val.c_str();
+                break;
+            case MenuRow::Drive2OrEject:
+                if (dual) {
+                    label = vm.drive2_name.c_str();
+                    val = d2_val.c_str();
+                } else if (vm.from_launcher && vm.has_media_browser) {
+                    label = "Clear Media";
+                    val = vm.can_eject ? "[Enter]" : "(Empty)";
+                } else {
+                    label = vm.is_tape_media ? "Tape Play" : "Eject/Swap";
+                    val = vm.can_eject ? "[Enter]" : "(N/A)";
+                }
+                break;
+            case MenuRow::Display:
+                label = "Display";
+                val = vm.desktop_native_active ? desktop_label : display_mode_name(vm.display_mode);
+                break;
+            case MenuRow::Aspect:
+                label = "Aspect";
+                val = aspect_policy_name(vm.aspect_policy);
+                break;
+            case MenuRow::Borders:
+                label = "Borders";
+                val = vm.show_borders ? "Show Full" : "Crop Active";
+                break;
+            case MenuRow::Margin:
+                label = "Margin";
+                val = margin_fill_name(vm.margin_fill);
+                break;
+            case MenuRow::AccessLed:
+                label = "Access LED";
+                val = vm.show_activity_indicator ? "On" : "Off";
+                break;
+            case MenuRow::TapeWarp:
+                label = "Tape Warp";
+                val = vm.tape_warp_enabled ? "On" : "Off";
+                break;
+            case MenuRow::Input:
+                label = "Input";
+                val = input_label;
+                break;
+            case MenuRow::ResetOrLaunch:
+                label = vm.from_launcher
+                            ? "Launch Core"
+                            : (vm.core_is_launcher ? "Go Launcher"
+                                                   : (vm.core_pending ? "Launch Core" : "Reset Core"));
+                val = "[Enter]";
+                break;
+            case MenuRow::Quit:
+                label = "Quit App";
+                val = "[Enter]";
+                break;
+        }
+
+        const int ry = kListY + i * row_h;
+        const bool selected = (i == sel);
         if (selected) {
-            canvas.fill_rect(kBoxX + 6, ry, kBoxW - 12, kRowH - 1, pack_rgb565(30, 86, 124));
+            canvas.fill_rect(kBoxX + 6, ry, kBoxW - 12, row_h - 1, pack_rgb565(30, 86, 124));
         }
 
         const uint16_t label_col = selected ? pack_rgb565(255, 240, 140) : pack_rgb565(195, 205, 220);
         uint16_t val_col = selected ? pack_rgb565(255, 255, 255) : pack_rgb565(130, 210, 245);
-        if (i == 0 && vm.core_pending) {
+        if (kind == MenuRow::Core && core_amber) {
             val_col = selected ? pack_rgb565(255, 230, 120) : pack_rgb565(255, 200, 90);
         }
 
         canvas.draw_char(kBoxX + 10, ry + 1, selected ? '>' : ' ', label_col);
-        canvas.draw_text(kBoxX + 20, ry + 1, rows[static_cast<size_t>(i)].label, label_col);
+        canvas.draw_text(kBoxX + 20, ry + 1, label, label_col);
 
-        const char* val = rows[static_cast<size_t>(i)].value;
         const int vw = Rgb565Canvas::text_width(val);
         canvas.draw_text(kBoxX + kBoxW - 10 - vw, ry + 1, val, val_col);
     }
 
     canvas.draw_hline(kBoxX + 6, kBoxY + kBoxH - 14, kBoxW - 12, pack_rgb565(56, 74, 98));
+    const MenuRow cur_row = row_types[static_cast<size_t>(sel)];
     const char* footer = nullptr;
-    if (dual && (cursor_ == 1 || cursor_ == 2)) {
+    if (vm.from_launcher) {
+        footer = (dual && (cur_row == MenuRow::Drive1OrMediaOrPreset || cur_row == MenuRow::Drive2OrEject))
+                     ? "F/X:Move  Z:Clear  OK:Pick  ESC:Save"
+                     : "F/X:Move  Z/C:Edit  OK:Go  ESC:Save";
+    } else if (vm.core_is_launcher) {
+        footer = "F/X:Move  Z/C:Change  OK/ESC:Launcher";
+    } else if (dual && (cur_row == MenuRow::Drive1OrMediaOrPreset || cur_row == MenuRow::Drive2OrEject)) {
         footer = vm.core_pending ? "F/X:Move  OK:Load+Boot  ESC:Launch"
                                  : "F/X:Move  Z:Eject  OK:Load  ESC:Back";
     } else if (vm.core_pending) {

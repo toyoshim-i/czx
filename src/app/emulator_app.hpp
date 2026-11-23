@@ -1,10 +1,12 @@
 #pragma once
 
+#include "app/launcher_state.hpp"
 #include "core/core_registry.hpp"
 #include "input/input_router.hpp"
 #include "platform/platform.hpp"
 #include "video/file_browser.hpp"
 #include "video/hud.hpp"
+#include "video/launcher.hpp"
 #include "video/menu.hpp"
 #include "video/scaler.hpp"
 
@@ -53,8 +55,25 @@ public:
 private:
     AppConfig cfg_;
     czx::core::CoreRegistry registry_;
-    int core_index_ = 0;
-    int pending_core_index_ = 0;
+    std::vector<MachineTarget> targets_;
+    LauncherState launcher_state_;
+    std::string launcher_state_path_;
+    czx::video::LauncherView launcher_;
+    bool in_launcher_ = false;
+    bool menu_from_launcher_ = false;
+    int launcher_index_ = 0;
+    int active_target_index_ = -1;
+    int pending_target_index_ = -1;  // -1 = "Launcher" when in-game
+    int active_variant_index_ = 0;
+    int pending_variant_index_ = 0;
+    bool default_desktop_native_ = false;
+    int default_desktop_scale_ = 2;
+    std::string active_media1_;
+    std::string active_media2_;
+    std::string active_media1_label_;
+    std::string active_media2_label_;
+    int core_index_ = -1;
+    int pending_core_index_ = -1;
     uint64_t core_epoch_ = 0;
     const czx_core_api_t* core_api_ = nullptr;
     czx_core_instance_t* core_inst_ = nullptr;
@@ -144,8 +163,24 @@ private:
     void save_app_config() const;
     void sync_core_warp_option();
     void sync_core_gpu_scale_option();
+    void sync_router_menu_open();
     void clear_activity_state() noexcept;
     void poll_core_activity();
+    const czx_core_api_t* target_core_api(int target_index, int variant_index) const noexcept;
+    int resolve_target_variant_index(int target_index) const noexcept;
+    const TargetSavedState* find_target_saved_state(int target_index) const noexcept;
+    TargetSavedState& target_saved_state(int target_index);
+    void apply_target_prefs(int target_index);
+    void capture_current_prefs_to_target(int target_index, bool include_active_media);
+    void persist_launcher_state() const;
+    std::vector<czx::video::LauncherItemView> build_launcher_items() const;
+    bool launch_target(int target_index,
+                       bool use_saved_media = true,
+                       const std::string& override_m1 = {},
+                       const std::string& override_m2 = {},
+                       const std::string& override_disp_label = {});
+    void enter_launcher(int focus_target_index);
+    void handle_launcher_key(const czx_key_event_t& ev);
     const czx_core_api_t* displayed_menu_core_api() const noexcept;
     bool has_pending_core_change() const noexcept;
     std::string default_media_dir_for_core(const czx_core_api_t* api = nullptr) const;

@@ -88,10 +88,12 @@ target_compile_options(czx_g800_upstream PRIVATE
 
 # Core-agnostic runtime library (scaler, HUD, menu, browser, input router, cores, app)
 add_library(czx_runtime STATIC
+    src/video/core_icons.cpp
     src/video/scaler.cpp
     src/video/font6x8.cpp
     src/video/font_jp_data.cpp
     src/video/hud.cpp
+    src/video/launcher.cpp
     src/video/menu.cpp
     src/video/file_browser.cpp
     src/input/tca8418_keymap.cpp
@@ -102,6 +104,7 @@ add_library(czx_runtime STATIC
     src/core/libretro_keys.cpp
     src/core/libretro_core.cpp
     src/core/test_core.cpp
+    src/app/launcher_state.cpp
     src/app/emulator_app.cpp
 )
 target_include_directories(czx_runtime PUBLIC
@@ -208,4 +211,8 @@ if(CZX_BUILD_TESTS)
     add_executable(test_core_detect tests/test_core_detect.cpp)
     target_link_libraries(test_core_detect PRIVATE czx_runtime)
     add_test(NAME test_core_detect COMMAND test_core_detect)
+
+    add_executable(test_launcher tests/test_launcher.cpp)
+    target_link_libraries(test_launcher PRIVATE czx_runtime)
+    add_test(NAME test_launcher COMMAND test_launcher)
 endif()

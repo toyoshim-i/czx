@@ -13,6 +13,7 @@ namespace czx::video {
 
 struct HudState {
     bool alt_held = false;
+    bool force_alt_bar = false;
     bool panning_active = false;
     uint32_t pan_hint_frames = 0;
     uint32_t toast_frames = 0;

@@ -1,6 +1,7 @@
 #include "czx/core.h"
 #include "video/hud.hpp"
 #include "video/menu.hpp"
+#include "video/pixel.hpp"
 #include "video/scaler.hpp"
 
 #include <algorithm>
@@ -135,6 +136,33 @@ void test_render_hud_activity_overlay() {
     hud.volume_osd_frames = 0;
     czx::video::render_hud(fb.data(), hud, layout);
     CHECK(count_nonzero_in_rect(fb, 0, 0, czx::video::kLcdWidth, czx::video::kLcdHeight) == 0);
+
+    // force_alt_bar draws the amber ALT+ tab and bottom bar even when alt_held is false,
+    // and suppresses top-left FPS indicator.
+    std::fill(fb.begin(), fb.end(), 0);
+    hud.alt_held = false;
+    hud.force_alt_bar = true;
+    hud.fps_x10 = 600;
+    czx::video::render_hud(fb.data(), hud, layout);
+    CHECK(count_nonzero_in_rect(fb, 4, 132, 46, 144) > 100);
+    CHECK(count_nonzero_in_rect(fb, 0, 144, czx::video::kLcdWidth, czx::video::kLcdHeight) > 400);
+    CHECK(count_nonzero_in_rect(fb, 4, 4, 70, 18) == 0);
+
+    // NativePan horizontal scrollbar with alt_held=true starts at x=50, never overlapping ALT+ tab.
+    std::fill(fb.begin(), fb.end(), 0);
+    hud.force_alt_bar = false;
+    hud.alt_held = true;
+    hud.fps_x10 = 0;
+    hud.display_mode = czx::video::DisplayMode::NativePan;
+    czx::video::ViewportLayout pan_layout{};
+    pan_layout.max_pan_x = 100;
+    pan_layout.active_w = 420;
+    pan_layout.pan_x = 0;
+    czx::video::render_hud(fb.data(), hud, pan_layout);
+    const uint16_t amber = czx::video::pack_rgb565(245, 200, 66);
+    CHECK(fb[140u * czx::video::kLcdWidth + 6u] == amber);
+    CHECK(fb[140u * czx::video::kLcdWidth + 45u] == amber);
+    CHECK(count_nonzero_in_rect(fb, 50, 140, 120, 143) > 10);
 }
 
 void test_overlay_menu() {
@@ -195,6 +223,72 @@ void test_overlay_menu() {
     vm.desktop_scale = 3;
     menu.render(fb.data(), vm);
     CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
+
+    // Variant option (13 rows) right after Core row (C64 Accuracy + FM-7 Model).
+    czx::video::MenuViewModel c64_vm{};
+    c64_vm.core_name = "C64 (VICE x64)";
+    c64_vm.has_variant_option = true;
+    c64_vm.variant_option_label = "Accuracy";
+    c64_vm.variant_value_label = "Fast";
+    c64_vm.has_media_browser = true;
+    menu.set_open(true);
+    menu.reset_cursor();
+    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), c64_vm) == czx::video::MenuAction::None);
+    CHECK(menu.handle_key(key_press(CZX_KEY_LEFT), c64_vm) == czx::video::MenuAction::CycleVariantPrev);
+    CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), c64_vm) == czx::video::MenuAction::CycleVariantNext);
+    CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), c64_vm) == czx::video::MenuAction::CycleVariantNext);
+    std::fill(fb.begin(), fb.end(), 0);
+    menu.render(fb.data(), c64_vm);
+    CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
+    for (int i = 0; i < 12; ++i) {
+        CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), c64_vm) == czx::video::MenuAction::None);
+    }
+    CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), c64_vm) == czx::video::MenuAction::CycleCoreNext);
+
+    czx::video::MenuViewModel fm7_vm{};
+    fm7_vm.core_name = "FM77AV40 (eFM77AV40)";
+    fm7_vm.has_variant_option = true;
+    fm7_vm.variant_option_label = "Model";
+    fm7_vm.variant_value_label = "FM77AV40";
+    fm7_vm.has_media_browser = true;
+    fm7_vm.drive_count = 2u;
+    fm7_vm.drive1_name = "FDD 0";
+    fm7_vm.drive2_name = "FDD 1";
+    menu.set_open(true);
+    menu.reset_cursor();
+    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), fm7_vm) == czx::video::MenuAction::None);
+    CHECK(menu.handle_key(key_press(CZX_KEY_LEFT), fm7_vm) == czx::video::MenuAction::CycleVariantPrev);
+    CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), fm7_vm) == czx::video::MenuAction::CycleVariantNext);
+    std::fill(fb.begin(), fb.end(), 0);
+    menu.render(fb.data(), fm7_vm);
+    CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
+
+    // Launcher pre-launch menu mode (from_launcher = true).
+    czx::video::MenuViewModel launch_vm = c64_vm;
+    launch_vm.from_launcher = true;
+    menu.set_open(true);
+    menu.reset_cursor();
+    std::fill(fb.begin(), fb.end(), 0);
+    menu.render(fb.data(), launch_vm);
+    CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
+    CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), launch_vm) == czx::video::MenuAction::ApplyCore);
+    CHECK(!menu.is_open());
+    menu.set_open(true);
+    CHECK(menu.handle_key(key_press(CZX_KEY_ESC), launch_vm) == czx::video::MenuAction::Close);
+    CHECK(!menu.is_open());
+
+    // Core row set to Launcher (core_is_launcher = true).
+    czx::video::MenuViewModel ret_vm{};
+    ret_vm.core_name = "Launcher";
+    ret_vm.core_is_launcher = true;
+    ret_vm.core_pending = true;
+    menu.set_open(true);
+    menu.reset_cursor();
+    std::fill(fb.begin(), fb.end(), 0);
+    menu.render(fb.data(), ret_vm);
+    CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
+    CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), ret_vm) == czx::video::MenuAction::ApplyCore);
+    CHECK(!menu.is_open());
 }
 
 }  // namespace

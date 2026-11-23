@@ -623,11 +623,15 @@ void g800_on_joystick(czx_core_instance_t* inst, uint32_t port, uint32_t buttons
 }
 
 uint32_t g800_get_preset_count(const czx_core_instance_t* inst) {
-    return inst ? reinterpret_cast<const G800CoreInstance*>(inst)->get_preset_count() : 0u;
+    return inst ? reinterpret_cast<const G800CoreInstance*>(inst)->get_preset_count()
+                : static_cast<uint32_t>(kPresetNames.size());
 }
 
 const char* g800_get_preset_name(const czx_core_instance_t* inst, uint32_t index) {
-    return inst ? reinterpret_cast<const G800CoreInstance*>(inst)->get_preset_name(index) : nullptr;
+    if (inst) {
+        return reinterpret_cast<const G800CoreInstance*>(inst)->get_preset_name(index);
+    }
+    return (index < kPresetNames.size()) ? kPresetNames[index] : nullptr;
 }
 
 bool g800_select_preset(czx_core_instance_t* inst, uint32_t index) {

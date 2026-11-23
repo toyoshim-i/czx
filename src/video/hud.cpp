@@ -96,6 +96,7 @@ constexpr uint16_t kIconMenu[10] = {
 
 void draw_scrollbars(Rgb565Canvas& canvas, const HudState& hud, const ViewportLayout& layout) {
     if (hud.display_mode != DisplayMode::NativePan) return;
+    if (hud.force_alt_bar && !hud.alt_held) return;
     if (!hud.alt_held && !hud.panning_active && hud.pan_hint_frames == 0) return;
 
     const int bottom_reserved = hud.alt_held ? 26 : 0;
@@ -103,8 +104,10 @@ void draw_scrollbars(Rgb565Canvas& canvas, const HudState& hud, const ViewportLa
     const uint16_t thumb_col = pack_rgb565(96, 224, 255);
 
     if (layout.max_pan_x > 0 && layout.active_w > 0) {
-        const int track_x = 4;
-        const int track_w = kLcdWidth - (layout.max_pan_y > 0 ? 12 : 8);
+        const int track_x = hud.alt_held ? 50 : 4;
+        const int track_w = hud.alt_held
+                                ? (kLcdWidth - 50 - (layout.max_pan_y > 0 ? 8 : 4))
+                                : (kLcdWidth - (layout.max_pan_y > 0 ? 12 : 8));
         const int track_y = kLcdHeight - bottom_reserved - 4;
         const int thumb_w = std::max(14, track_w * kLcdWidth / layout.active_w);
         const int thumb_x = track_x + (track_w - thumb_w) * layout.pan_x / layout.max_pan_x;
@@ -155,11 +158,13 @@ void draw_activity_indicator(Rgb565Canvas& canvas, const HudState& hud, const Vi
     const int box_w = 4 + 5 + 4 + tw + 4;
     constexpr int box_h = 13;
 
+    const bool show_alt_bar = hud.alt_held || hud.force_alt_bar;
     const bool scrollbars_shown =
         (hud.display_mode == DisplayMode::NativePan) &&
+        !(hud.force_alt_bar && !hud.alt_held) &&
         (hud.alt_held || hud.panning_active || hud.pan_hint_frames > 0);
     const int right_margin = (scrollbars_shown && layout.max_pan_y > 0) ? 8 : 4;
-    int bottom_edge = hud.alt_held ? (144 - 3) : (kLcdHeight - 4);
+    int bottom_edge = show_alt_bar ? (144 - 3) : (kLcdHeight - 4);
     if (scrollbars_shown && layout.max_pan_x > 0) {
         bottom_edge -= 6;
     }
@@ -326,7 +331,14 @@ void render_hud(uint16_t* fb_rgb565, const HudState& hud, const ViewportLayout& 
         canvas.draw_text(bx + 7, by + 3, toast.c_str(), pack_rgb565(245, 250, 255));
     }
 
-    if (!hud.alt_held) return;
+    const bool show_alt_bar = hud.alt_held || hud.force_alt_bar;
+    if (!show_alt_bar) return;
+
+    // Amber "ALT +" folder tab perched on top-left of the y=144 bottom HUD bar.
+    canvas.fill_rect(5, 132, 40, 12, pack_rgb565(245, 200, 66));
+    canvas.fill_rect(4, 133, 42, 11, pack_rgb565(245, 200, 66));
+    canvas.draw_hline(5, 132, 40, pack_rgb565(255, 232, 140));
+    canvas.draw_text(10, 135, "ALT +", pack_rgb565(16, 20, 30), 1);
 
     // Bottom Alt + [4..8] HUD bar
     constexpr int kBarY = 144;
@@ -334,8 +346,12 @@ void render_hud(uint16_t* fb_rgb565, const HudState& hud, const ViewportLayout& 
     constexpr int kPillH = 23;
     constexpr int kPillY = 145;
 
-    canvas.fill_rect_alpha(0, kBarY, kLcdWidth, kLcdHeight - kBarY, pack_rgb565(10, 14, 22), 215);
-    canvas.draw_hline(0, kBarY, kLcdWidth, pack_rgb565(64, 92, 128));
+    if (hud.force_alt_bar && !hud.alt_held) {
+        canvas.fill_rect(0, kBarY, kLcdWidth, kLcdHeight - kBarY, pack_rgb565(12, 16, 24));
+    } else {
+        canvas.fill_rect_alpha(0, kBarY, kLcdWidth, kLcdHeight - kBarY, pack_rgb565(10, 14, 22), 215);
+    }
+    canvas.draw_hline(0, kBarY, kLcdWidth, pack_rgb565(245, 200, 66));
 
     struct Slot {
         char key;

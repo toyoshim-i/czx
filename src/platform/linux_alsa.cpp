@@ -8,6 +8,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
+#include <fstream>
+#include <sstream>
 #include <type_traits>
 #include <vector>
 
@@ -42,7 +44,42 @@ int mixer_priority(const std::string& lower_name) {
     return -1;
 }
 
+void push_unique_device(std::vector<std::string>& out, const std::string& dev) {
+    if (dev.empty()) return;
+    if (std::find(out.begin(), out.end(), dev) == out.end()) {
+        out.push_back(dev);
+    }
+}
+
 }  // namespace
+
+std::vector<std::string> parse_alsa_hdmi_devices_from_proc_cards(const std::string& proc_cards_text) {
+    std::vector<std::string> out;
+    std::istringstream iss(proc_cards_text);
+    std::string line;
+    while (std::getline(iss, line)) {
+        const auto lb = line.find('[');
+        if (lb == std::string::npos) continue;
+        const auto rb = line.find(']', lb + 1);
+        if (rb == std::string::npos) continue;
+        std::string id = line.substr(lb + 1, rb - lb - 1);
+        while (!id.empty() && (id.front() == ' ' || id.front() == '\t')) {
+            id.erase(id.begin());
+        }
+        while (!id.empty() && (id.back() == ' ' || id.back() == '\t')) {
+            id.pop_back();
+        }
+        if (id.empty()) continue;
+        const std::string lower_line = to_lower_copy(line.c_str());
+        const std::string lower_id = to_lower_copy(id.c_str());
+        if (lower_line.find("hdmi") != std::string::npos ||
+            lower_id.find("hdmi") != std::string::npos) {
+            push_unique_device(out, "hdmi:CARD=" + id + ",DEV=0");
+            push_unique_device(out, "plughw:CARD=" + id + ",DEV=0");
+        }
+    }
+    return out;
+}
 
 LinuxAlsaAudio::~LinuxAlsaAudio() {
     cleanup();
@@ -58,6 +95,7 @@ void LinuxAlsaAudio::cleanup() {
         dl_ = nullptr;
     }
     active_ = false;
+    direct_hdmi_ = false;
     sample_rate_ = 0;
     buffer_frames_ = 0;
     soft_muted_ = false;
@@ -103,8 +141,14 @@ bool LinuxAlsaAudio::open_device(const char* device, uint32_t sample_rate, std::
         return false;
     }
 
-    const int param_rc = fn_set_params_(pcm_, kSndPcmFormatS16Le, kSndPcmAccessRwInterleaved,
-                                        2, sample_rate, 1, 100000);
+    unsigned int latency_us = 100000;
+    int param_rc = fn_set_params_(pcm_, kSndPcmFormatS16Le, kSndPcmAccessRwInterleaved,
+                                 2, sample_rate, 1, latency_us);
+    if (param_rc < 0) {
+        latency_us = 200000;
+        param_rc = fn_set_params_(pcm_, kSndPcmFormatS16Le, kSndPcmAccessRwInterleaved,
+                                  2, sample_rate, 1, latency_us);
+    }
     if (param_rc < 0) {
         last_err = std::string(device) + ": snd_pcm_set_params failed (" + format_err(param_rc) + ")";
         fn_close_(pcm_);
@@ -112,12 +156,21 @@ bool LinuxAlsaAudio::open_device(const char* device, uint32_t sample_rate, std::
         return false;
     }
 
-    buffer_frames_ = std::max<uint32_t>(1u, sample_rate / 10u);
+    buffer_frames_ = std::max<uint32_t>(
+        1u, static_cast<uint32_t>(static_cast<uint64_t>(sample_rate) * latency_us / 1000000u));
     return true;
 }
 
 bool LinuxAlsaAudio::init(uint32_t sample_rate) {
-    if (active_ && sample_rate_ == sample_rate) {
+    return init_internal(sample_rate, false);
+}
+
+bool LinuxAlsaAudio::init_hdmi(uint32_t sample_rate) {
+    return init_internal(sample_rate, true);
+}
+
+bool LinuxAlsaAudio::init_internal(uint32_t sample_rate, bool prefer_hdmi) {
+    if (active_ && sample_rate_ == sample_rate && direct_hdmi_ == prefer_hdmi) {
         return true;
     }
     cleanup();
@@ -144,25 +197,52 @@ bool LinuxAlsaAudio::init(uint32_t sample_rate) {
         return false;
     }
 
-    std::vector<const char*> candidates;
-    const char* env_device = std::getenv("CZX_AUDIO_DEVICE");
-    if (env_device && env_device[0] != '\0') {
-        candidates.push_back(env_device);
+    std::vector<std::string> candidates;
+    if (prefer_hdmi) {
+        std::ifstream ifs("/proc/asound/cards");
+        if (ifs.is_open()) {
+            std::ostringstream oss;
+            oss << ifs.rdbuf();
+            candidates = parse_alsa_hdmi_devices_from_proc_cards(oss.str());
+        }
+        for (const char* fallback : {
+                 "hdmi:CARD=vc4hdmi,DEV=0",
+                 "hdmi:CARD=vc4hdmi0,DEV=0",
+                 "hdmi:CARD=vc4hdmi1,DEV=0",
+                 "hdmi:0,0",
+                 "plughw:CARD=vc4hdmi,DEV=0",
+             }) {
+            push_unique_device(candidates, fallback);
+        }
     } else {
-        candidates = {"pipewire", "pulse", "default"};
+        const char* env_device = std::getenv("CZX_AUDIO_DEVICE");
+        if (env_device && env_device[0] != '\0') {
+            candidates.emplace_back(env_device);
+        } else {
+            candidates = {"pipewire", "pulse", "default"};
+        }
     }
 
-    std::string last_err = "no audio devices tried";
-    for (const char* device : candidates) {
-        if (open_device(device, sample_rate, last_err)) {
+    std::string last_err = prefer_hdmi ? "no HDMI ALSA devices tried" : "no audio devices tried";
+    for (const std::string& device : candidates) {
+        if (open_device(device.c_str(), sample_rate, last_err)) {
             active_ = true;
+            direct_hdmi_ = prefer_hdmi;
             sample_rate_ = sample_rate;
-            std::fprintf(stderr, "czx: ALSA audio active on '%s' (%u Hz)\n", device, sample_rate);
+            if (prefer_hdmi) {
+                std::fprintf(stderr, "czx: ALSA HDMI audio active on '%s' (%u Hz)\n",
+                             device.c_str(), sample_rate);
+            } else {
+                std::fprintf(stderr, "czx: ALSA audio active on '%s' (%u Hz)\n",
+                             device.c_str(), sample_rate);
+            }
             return true;
         }
     }
 
-    std::fprintf(stderr, "czx: ALSA open failed: %s\n", last_err.c_str());
+    std::fprintf(stderr, "%s: %s\n",
+                 prefer_hdmi ? "czx: ALSA HDMI open failed" : "czx: ALSA open failed",
+                 last_err.c_str());
     cleanup();
     return false;
 }
@@ -171,6 +251,21 @@ void LinuxAlsaAudio::write_samples(const int16_t* stereo_s16, size_t frame_count
     if (!active_ || !pcm_ || !stereo_s16 || frame_count == 0) return;
 
     const int16_t* ptr = stereo_s16;
+    if (direct_hdmi_ && (hdmi_soft_muted_ || hdmi_soft_vol_pct_ < 100)) {
+        const size_t total = frame_count * 2u;
+        gain_buf_.resize(total);
+        if (hdmi_soft_muted_ || hdmi_soft_vol_pct_ <= 0) {
+            std::fill(gain_buf_.begin(), gain_buf_.end(), int16_t{0});
+        } else {
+            const int32_t gain_q15 = static_cast<int32_t>(std::lround(
+                std::pow(static_cast<double>(hdmi_soft_vol_pct_) / 100.0, 1.5) * 32768.0));
+            for (size_t i = 0; i < total; ++i) {
+                const int32_t scaled = (static_cast<int32_t>(stereo_s16[i]) * gain_q15) >> 15;
+                gain_buf_[i] = static_cast<int16_t>(std::clamp<int32_t>(scaled, -32768, 32767));
+            }
+        }
+        ptr = gain_buf_.data();
+    }
     size_t remaining = frame_count;
     while (remaining > 0) {
         const long written = fn_writei_(pcm_, ptr, static_cast<unsigned long>(remaining));
@@ -334,6 +429,11 @@ bool run_with_alsa_mixer(
 }  // namespace
 
 bool LinuxAlsaAudio::get_system_volume(SystemVolumeState& out) {
+    if (direct_hdmi_) {
+        out.percent = hdmi_soft_vol_pct_;
+        out.muted = hdmi_soft_muted_;
+        return true;
+    }
     if (!ensure_dl_and_mixer_syms()) return false;
     return run_with_alsa_mixer(
         std::getenv("CZX_AUDIO_DEVICE"),
@@ -369,6 +469,15 @@ bool LinuxAlsaAudio::get_system_volume(SystemVolumeState& out) {
 }
 
 bool LinuxAlsaAudio::adjust_system_volume(int delta_percent, SystemVolumeState& out) {
+    if (direct_hdmi_) {
+        hdmi_soft_vol_pct_ = std::clamp(hdmi_soft_vol_pct_ + delta_percent, 0, 100);
+        if (delta_percent > 0 && hdmi_soft_muted_) {
+            hdmi_soft_muted_ = false;
+        }
+        out.percent = hdmi_soft_vol_pct_;
+        out.muted = hdmi_soft_muted_;
+        return true;
+    }
     if (!ensure_dl_and_mixer_syms()) return false;
     return run_with_alsa_mixer(
         std::getenv("CZX_AUDIO_DEVICE"),
@@ -433,6 +542,12 @@ bool LinuxAlsaAudio::adjust_system_volume(int delta_percent, SystemVolumeState& 
 }
 
 bool LinuxAlsaAudio::toggle_system_mute(SystemVolumeState& out) {
+    if (direct_hdmi_) {
+        hdmi_soft_muted_ = !hdmi_soft_muted_;
+        out.percent = hdmi_soft_vol_pct_;
+        out.muted = hdmi_soft_muted_;
+        return true;
+    }
     if (!ensure_dl_and_mixer_syms()) return false;
     return run_with_alsa_mixer(
         std::getenv("CZX_AUDIO_DEVICE"),

@@ -1,4 +1,5 @@
 #include "platform/gles2_presenter.hpp"
+#include "platform/linux_alsa.hpp"
 #include "platform/linux_audio.hpp"
 #include "platform/sdl2_gles2.hpp"
 
@@ -127,6 +128,34 @@ int main() {
                   {"off", 0, 0, true},
               })
                   .empty());
+    }
+
+    // ALSA /proc/asound/cards HDMI device parser finds Cardputer Zero vc4-hdmi and ignores non-HDMI cards.
+    {
+        using czx::platform::parse_alsa_hdmi_devices_from_proc_cards;
+
+        const auto cz_devs = parse_alsa_hdmi_devices_from_proc_cards(
+            " 0 [vc4hdmi        ]: vc4-hdmi - vc4-hdmi\n"
+            "                      vc4-hdmi\n"
+            " 1 [ES8389Audio    ]: ES8389-Audio - ES8389-Audio\n"
+            "                      ES8389-Audio\n");
+        CHECK(cz_devs.size() == 2);
+        CHECK(cz_devs[0] == "hdmi:CARD=vc4hdmi,DEV=0");
+        CHECK(cz_devs[1] == "plughw:CARD=vc4hdmi,DEV=0");
+
+        const auto dual_devs = parse_alsa_hdmi_devices_from_proc_cards(
+            " 0 [vc4hdmi0       ]: vc4-hdmi - vc4-hdmi-0\n"
+            " 1 [vc4hdmi1       ]: vc4-hdmi - vc4-hdmi-1\n");
+        CHECK(dual_devs.size() == 4);
+        CHECK(dual_devs[0] == "hdmi:CARD=vc4hdmi0,DEV=0");
+        CHECK(dual_devs[1] == "plughw:CARD=vc4hdmi0,DEV=0");
+        CHECK(dual_devs[2] == "hdmi:CARD=vc4hdmi1,DEV=0");
+        CHECK(dual_devs[3] == "plughw:CARD=vc4hdmi1,DEV=0");
+
+        const auto no_hdmi = parse_alsa_hdmi_devices_from_proc_cards(
+            " 0 [Headphones     ]: bcm2835_headpho - bcm2835 Headphones\n"
+            " 1 [ES8389Audio    ]: ES8389-Audio - ES8389-Audio\n");
+        CHECK(no_hdmi.empty());
     }
 
     std::printf("test_platform_gles2: OK\n");

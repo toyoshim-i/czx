@@ -272,10 +272,13 @@ void LinuxPulseAudio::cleanup() {
 }
 
 bool LinuxPulseAudio::init(uint32_t sample_rate) {
-    return init_with_sink(sample_rate, nullptr, false);
+    return init_with_sink(sample_rate, nullptr, false, false);
 }
 
-bool LinuxPulseAudio::init_with_sink(uint32_t sample_rate, const char* sink_dev, bool prefer_hdmi_sink) {
+bool LinuxPulseAudio::init_with_sink(uint32_t sample_rate,
+                                     const char* sink_dev,
+                                     bool prefer_hdmi_sink,
+                                     bool require_hdmi_sink) {
     if (active_ && sample_rate_ == sample_rate) {
         return true;
     }
@@ -408,6 +411,12 @@ bool LinuxPulseAudio::init_with_sink(uint32_t sample_rate, const char* sink_dev,
             std::fprintf(stderr, "czx: HDMI audio sink not found (available: %s)\n",
                          seen_sinks.c_str());
         }
+    }
+    if (prefer_hdmi_sink && target_sink_.empty() && require_hdmi_sink) {
+        restore_hdmi_card_profile_locked();
+        fn_ml_unlock_(ml_);
+        cleanup();
+        return false;
     }
 
     const PaSampleSpec ss{kPaSampleS16Le, sample_rate, 2};
@@ -900,7 +909,24 @@ bool LinuxAudio::init(uint32_t sample_rate) {
         return false;
     }
 
-    if (pulse_.init_with_sink(sample_rate, nullptr, prefer_hdmi_sink_)) {
+    if (prefer_hdmi_sink_) {
+        if (!pulse_hdmi_unavailable_) {
+            if (pulse_.init_with_sink(sample_rate, nullptr, true, true)) {
+                alsa_.cleanup();
+                active_ = ActiveBackend::Pulse;
+                return true;
+            }
+            pulse_hdmi_unavailable_ = true;
+            pulse_.cleanup();
+        }
+        if (alsa_.init_hdmi(sample_rate)) {
+            pulse_.cleanup();
+            active_ = ActiveBackend::Alsa;
+            return true;
+        }
+    }
+
+    if (pulse_.init_with_sink(sample_rate, nullptr, false, false)) {
         alsa_.cleanup();
         active_ = ActiveBackend::Pulse;
         return true;

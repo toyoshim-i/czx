@@ -8,12 +8,15 @@
 
 namespace czx::platform {
 
+std::vector<std::string> parse_alsa_hdmi_devices_from_proc_cards(const std::string& proc_cards_text);
+
 class LinuxAlsaAudio : public PlatformAudio {
 public:
     LinuxAlsaAudio() = default;
     ~LinuxAlsaAudio() override;
 
     bool init(uint32_t sample_rate) override;
+    bool init_hdmi(uint32_t sample_rate);
     void write_samples(const int16_t* stereo_s16, size_t frame_count) override;
     double get_buffer_fill_ratio() const override;
     const char* backend_name() const override { return active_ ? "linux-alsa" : "null-audio"; }
@@ -54,10 +57,14 @@ private:
     void* dl_ = nullptr;
     PcmHandle pcm_ = nullptr;
     bool active_ = false;
+    bool direct_hdmi_ = false;
     uint32_t sample_rate_ = 0;
     uint32_t buffer_frames_ = 0;
     bool soft_muted_ = false;
     int soft_mute_prev_pct_ = 60;
+    int hdmi_soft_vol_pct_ = 100;
+    bool hdmi_soft_muted_ = false;
+    std::vector<int16_t> gain_buf_;
 
     FnPcmOpen fn_open_ = nullptr;
     FnPcmSetParams fn_set_params_ = nullptr;
@@ -85,6 +92,7 @@ private:
     FnMixerSelemSetSwitchAll fn_mixer_selem_set_switch_all_ = nullptr;
 
     bool ensure_dl_and_mixer_syms();
+    bool init_internal(uint32_t sample_rate, bool prefer_hdmi);
     bool open_device(const char* device, uint32_t sample_rate, std::string& last_err);
 };
 

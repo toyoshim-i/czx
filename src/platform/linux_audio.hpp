@@ -24,7 +24,10 @@ public:
     ~LinuxPulseAudio() override;
 
     bool init(uint32_t sample_rate) override;
-    bool init_with_sink(uint32_t sample_rate, const char* sink_dev, bool prefer_hdmi_sink = false);
+    bool init_with_sink(uint32_t sample_rate,
+                        const char* sink_dev,
+                        bool prefer_hdmi_sink = false,
+                        bool require_hdmi_sink = false);
     void write_samples(const int16_t* stereo_s16, size_t frame_count) override;
     double get_buffer_fill_ratio() const override;
     const char* backend_name() const override { return active_ ? "linux-pulse" : "null-audio"; }
@@ -190,6 +193,7 @@ private:
     LinuxAlsaAudio alsa_;
     ActiveBackend active_ = ActiveBackend::Inactive;
     bool prefer_hdmi_sink_ = false;
+    bool pulse_hdmi_unavailable_ = false;
 };
 
 }  // namespace czx::platform

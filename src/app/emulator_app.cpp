@@ -228,7 +228,6 @@ void EmulatorApp::ensure_data_dirs() {
 }
 
 void EmulatorApp::load_app_config() {
-    if (cfg_.activity_indicator_override && cfg_.tape_warp_override && cfg_.vsync_override) return;
     const fs::path cfg_path = fs::path(cfg_.data_dir) / "config" / "czx.cfg";
     std::ifstream ifs(cfg_path);
     if (!ifs.is_open()) return;
@@ -264,6 +263,8 @@ void EmulatorApp::load_app_config() {
             parse_bool(tape_warp_enabled_);
         } else if (key == "vsync" && !cfg_.vsync_override) {
             parse_bool(vsync_enabled_);
+        } else if (key == "adpcm_lpf") {
+            parse_bool(adpcm_lpf_enabled_);
         }
     }
 }
@@ -277,6 +278,7 @@ void EmulatorApp::save_app_config() const {
     bool updated_led = false;
     bool updated_warp = false;
     bool updated_vsync = false;
+    bool updated_adpcm_lpf = false;
     {
         std::ifstream ifs(cfg_path);
         std::string line;
@@ -299,6 +301,9 @@ void EmulatorApp::save_app_config() const {
                 } else if (key == "vsync") {
                     line = std::string("vsync = ") + (vsync_enabled_ ? "on" : "off");
                     updated_vsync = true;
+                } else if (key == "adpcm_lpf") {
+                    line = std::string("adpcm_lpf = ") + (adpcm_lpf_enabled_ ? "on" : "off");
+                    updated_adpcm_lpf = true;
                 }
             }
             lines.push_back(std::move(line));
@@ -312,6 +317,9 @@ void EmulatorApp::save_app_config() const {
     }
     if (!updated_vsync) {
         lines.emplace_back(std::string("vsync = ") + (vsync_enabled_ ? "on" : "off"));
+    }
+    if (!updated_adpcm_lpf) {
+        lines.emplace_back(std::string("adpcm_lpf = ") + (adpcm_lpf_enabled_ ? "on" : "off"));
     }
 
     std::ofstream ofs(cfg_path, std::ios::trunc);
@@ -385,6 +393,14 @@ void EmulatorApp::sync_core_gpu_scale_option() {
         }
     }
     core_api_->set_option(core_inst_, "msx68k_gpu_scale", val);
+}
+
+void EmulatorApp::sync_core_adpcm_lpf_option() {
+    if (!core_api_ || !core_inst_ || !core_api_->set_option || !core_api_->get_desc) return;
+    const czx_core_desc_t* desc = core_api_->get_desc(core_api_);
+    const std::string id = (desc && desc->id) ? desc->id : "";
+    if (id != "msx68k") return;
+    core_api_->set_option(core_inst_, "msx68k_adpcm_lpf", adpcm_lpf_enabled_ ? "on" : "off");
 }
 
 void EmulatorApp::clear_activity_state() noexcept {
@@ -1120,6 +1136,7 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media, con
     sync_core_warp_option();
     sync_core_region_option();
     sync_core_gpu_scale_option();
+    sync_core_adpcm_lpf_option();
 
     if (core_api_->select_preset && core_api_->get_preset_count) {
         const uint32_t count = core_api_->get_preset_count(core_inst_);
@@ -1507,13 +1524,18 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
     vm.core_pending = core_pending;
 
     bool is_c64 = false;
+    bool is_msx68k = false;
     if (!targets_.empty() && pending_target_index_ >= 0 &&
         static_cast<size_t>(pending_target_index_) < targets_.size()) {
-        is_c64 = (targets_[static_cast<size_t>(pending_target_index_)].id == "c64");
+        const std::string& tid = targets_[static_cast<size_t>(pending_target_index_)].id;
+        is_c64 = (tid == "c64");
+        is_msx68k = (tid == "msx68k");
     } else if (menu_api && menu_api->get_desc) {
         const auto* desc = menu_api->get_desc(menu_api);
         if (desc && desc->id) {
-            is_c64 = (std::string(desc->id).rfind("vice", 0) == 0);
+            const std::string did(desc->id);
+            is_c64 = (did.rfind("vice", 0) == 0);
+            is_msx68k = (did == "msx68k");
         }
     }
     if (is_c64) {
@@ -1523,6 +1545,10 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
                 ? resolve_target_region_id(pending_target_index_)
                 : normalize_c64_region(c64_region_);
         vm.region_value_label = region_display_label(reg);
+    }
+    if (is_msx68k) {
+        vm.has_adpcm_lpf_option = true;
+        vm.adpcm_lpf_enabled = adpcm_lpf_enabled_;
     }
 
     const char* exts = (menu_api && menu_api->get_extensions) ? menu_api->get_extensions(menu_api) : nullptr;
@@ -2281,6 +2307,13 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
             }
             force_present_ = true;
             show_toast(tape_warp_enabled_ ? "TAPE WARP: ON" : "TAPE WARP: OFF");
+            break;
+        case czx::video::MenuAction::ToggleAdpcmLpf:
+            adpcm_lpf_enabled_ = !adpcm_lpf_enabled_;
+            save_app_config();
+            sync_core_adpcm_lpf_option();
+            force_present_ = true;
+            show_toast(adpcm_lpf_enabled_ ? "ADPCM LPF: ON" : "ADPCM LPF: OFF");
             break;
         case czx::video::MenuAction::ToggleInputMode:
             handle_host_command(czx::input::HostCommand::ToggleInputMode);

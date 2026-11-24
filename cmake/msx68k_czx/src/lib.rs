@@ -11,8 +11,8 @@ use std::thread;
 use std::time::Instant;
 
 use msx68k_bus::{
-    AdpcmSampleEvent, CpuModel, CpuSpeedMode, Crtc, FrameBudget, Opm, OpmRegEvent, OpmSynthMode,
-    VmConfig, X68kVm,
+    AdpcmLpf, AdpcmSampleEvent, CpuModel, CpuSpeedMode, Crtc, FrameBudget, Opm, OpmRegEvent,
+    OpmSynthMode, VmConfig, X68kVm,
 };
 use msx68k_vicon::{
     FrameTimingStats, PixelFormat, RenderedFrame565, RendererConfig, ShaderGeneration,
@@ -328,6 +328,7 @@ struct CoreState {
     audio_events: Vec<OpmRegEvent>,
     adpcm_events: Vec<AdpcmSampleEvent>,
     opm_mode: OpmAudioMode,
+    adpcm_lpf: bool,
     opm_worker: Option<OpmOffloadWorker>,
     perf_log: bool,
     perf_detail: bool,
@@ -368,6 +369,7 @@ enum OpmWorkerReq {
         adpcm_events: Vec<AdpcmSampleEvent>,
         target_clock: u64,
         pcm_buf: Vec<i16>,
+        adpcm_lpf: bool,
     },
     Reset,
     Shutdown,
@@ -403,6 +405,9 @@ impl OpmOffloadWorker {
                 let mut pending_events: VecDeque<OpmRegEvent> = VecDeque::with_capacity(1024);
                 let mut pending_adpcm: VecDeque<AdpcmSampleEvent> = VecDeque::with_capacity(1024);
                 let mut adpcm_lr: (i16, i16) = (0, 0);
+                let mut adpcm_lpf_l = AdpcmLpf::new();
+                let mut adpcm_lpf_r = AdpcmLpf::new();
+                let mut prev_lpf = true;
 
                 while let Ok(req) = req_rx.recv() {
                     match req {
@@ -411,12 +416,18 @@ impl OpmOffloadWorker {
                             mut adpcm_events,
                             target_clock,
                             mut pcm_buf,
+                            adpcm_lpf,
                         } => {
                             let t_start = Instant::now();
                             let event_count = events.len();
                             let adpcm_event_count = adpcm_events.len();
                             pending_events.extend(events.drain(..));
                             pending_adpcm.extend(adpcm_events.drain(..));
+                            if adpcm_lpf != prev_lpf {
+                                prev_lpf = adpcm_lpf;
+                                adpcm_lpf_l.reset();
+                                adpcm_lpf_r.reset();
+                            }
                             if target_clock < synth_clock {
                                 synth_clock = target_clock;
                             }
@@ -443,8 +454,16 @@ impl OpmOffloadWorker {
                                     }
                                 }
                                 let (ol, or) = synth_opm.next_sample();
-                                pcm_buf.push(ol.saturating_add(adpcm_lr.0));
-                                pcm_buf.push(or.saturating_add(adpcm_lr.1));
+                                let (al, ar) = if adpcm_lpf {
+                                    (
+                                        adpcm_lpf_l.process(adpcm_lr.0),
+                                        adpcm_lpf_r.process(adpcm_lr.1),
+                                    )
+                                } else {
+                                    adpcm_lr
+                                };
+                                pcm_buf.push((ol >> 1).saturating_add(al));
+                                pcm_buf.push((or >> 1).saturating_add(ar));
                                 synth_clock += 1;
                             }
                             let synth_ns = t_start.elapsed().as_nanos() as u64;
@@ -468,6 +487,8 @@ impl OpmOffloadWorker {
                             pending_events.clear();
                             pending_adpcm.clear();
                             adpcm_lr = (0, 0);
+                            adpcm_lpf_l.reset();
+                            adpcm_lpf_r.reset();
                             synth_clock = 0;
                             let _ = resp_tx.send(OpmWorkerResp {
                                 pcm_buf: Vec::new(),
@@ -497,6 +518,7 @@ impl OpmOffloadWorker {
         events: &mut Vec<OpmRegEvent>,
         adpcm_events: &mut Vec<AdpcmSampleEvent>,
         target_clock: u64,
+        adpcm_lpf: bool,
     ) -> Option<(Vec<i16>, u64, usize, usize)> {
         let send_events = std::mem::take(events);
         let send_adpcm = std::mem::take(adpcm_events);
@@ -524,6 +546,7 @@ impl OpmOffloadWorker {
                 adpcm_events: send_adpcm,
                 target_clock,
                 pcm_buf,
+                adpcm_lpf,
             })
             .is_ok()
         {
@@ -721,6 +744,8 @@ const VAR_GPU_SCALE_K: &[u8] = b"msx68k_gpu_scale\0";
 const VAR_GPU_SCALE_V: &[u8] = b"GPU Downscale; off|fit_par|fit_4x3|axis\0";
 const VAR_OPM_THREAD_K: &[u8] = b"msx68k_opm_thread\0";
 const VAR_OPM_THREAD_V: &[u8] = b"OPM Synth Thread; offload|inline|off\0";
+const VAR_ADPCM_LPF_K: &[u8] = b"msx68k_adpcm_lpf\0";
+const VAR_ADPCM_LPF_V: &[u8] = b"ADPCM LPF; on|off\0";
 
 fn log_msg(level: c_uint, msg: &str) {
     let cb = CALLBACKS.lock().ok().and_then(|c| c.log);
@@ -844,6 +869,13 @@ fn resolve_opm_audio_mode() -> OpmAudioMode {
     get_variable(VAR_OPM_THREAD_K)
         .map(|s| parse_opm_mode_str(&s))
         .unwrap_or(OpmAudioMode::Offload)
+}
+
+fn parse_adpcm_lpf_option(s: Option<&str>) -> bool {
+    !matches!(
+        s.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("off") | Some("0") | Some("false") | Some("disabled")
+    )
 }
 
 fn compute_gpu_scale_target(mode: GpuScaleMode, native_w: u32, native_h: u32) -> Option<(u32, u32)> {
@@ -1424,7 +1456,16 @@ fn load_game_inner(game: *const RetroGameInfo) -> bool {
         &mut audio_events,
         &mut adpcm_events,
     );
-    log_msg(RETRO_LOG_INFO, &format!("YM2151 OPM synth mode: {}", opm_mode.label()));
+    let adpcm_lpf = parse_adpcm_lpf_option(get_variable(VAR_ADPCM_LPF_K).as_deref());
+    vm.set_adpcm_lpf_enabled(adpcm_lpf);
+    log_msg(
+        RETRO_LOG_INFO,
+        &format!(
+            "YM2151 OPM synth mode: {} (ADPCM LPF: {})",
+            opm_mode.label(),
+            if adpcm_lpf { "on" } else { "off" }
+        ),
+    );
 
     let (cur_w, cur_h) = vm.bus.crtc.active_resolution();
     let fd_accesses = [
@@ -1544,6 +1585,7 @@ fn load_game_inner(game: *const RetroGameInfo) -> bool {
         audio_events,
         adpcm_events,
         opm_mode,
+        adpcm_lpf,
         opm_worker,
         perf_log,
         perf_detail,
@@ -1618,6 +1660,10 @@ pub unsafe extern "C" fn retro_set_environment(cb: Option<RetroEnvironmentFn>) {
             RetroVariable {
                 key: VAR_OPM_THREAD_K.as_ptr() as *const c_char,
                 value: VAR_OPM_THREAD_V.as_ptr() as *const c_char,
+            },
+            RetroVariable {
+                key: VAR_ADPCM_LPF_K.as_ptr() as *const c_char,
+                value: VAR_ADPCM_LPF_V.as_ptr() as *const c_char,
             },
             RetroVariable {
                 key: std::ptr::null(),
@@ -1938,6 +1984,7 @@ pub unsafe extern "C" fn retro_run() {
             let next_drive = parse_drive_option();
             let next_gpu_scale = parse_gpu_scale_option(get_variable(VAR_GPU_SCALE_K).as_deref());
             let next_opm_mode = resolve_opm_audio_mode();
+            let next_adpcm_lpf = parse_adpcm_lpf_option(get_variable(VAR_ADPCM_LPF_K).as_deref());
             if let Ok(mut guard) = CORE_STATE.lock() {
                 if let Some(st) = guard.as_mut() {
                     if st.vm.speed_mode() != next_speed {
@@ -1945,6 +1992,10 @@ pub unsafe extern "C" fn retro_run() {
                     }
                     st.swap_drive = next_drive;
                     st.gpu_scale = next_gpu_scale;
+                    if st.adpcm_lpf != next_adpcm_lpf {
+                        st.adpcm_lpf = next_adpcm_lpf;
+                        st.vm.set_adpcm_lpf_enabled(next_adpcm_lpf);
+                    }
                     if st.opm_mode != next_opm_mode {
                         st.audio_opm.clear();
                         st.audio_pcm.clear();
@@ -2043,7 +2094,7 @@ pub unsafe extern "C" fn retro_run() {
             let target_clock = st.vm.take_audio_events(&mut st.audio_events);
             st.vm.take_adpcm_events(&mut st.adpcm_events);
             st.opm_worker.as_mut().and_then(|worker| {
-                worker.exchange(&mut st.audio_events, &mut st.adpcm_events, target_clock)
+                worker.exchange(&mut st.audio_events, &mut st.adpcm_events, target_clock, st.adpcm_lpf)
             })
         } else {
             None

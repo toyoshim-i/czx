@@ -15,6 +15,7 @@ enum class MenuRow {
     Core = 0,
     Variant,
     Region,
+    AdpcmLpf,
     Drive1OrMediaOrPreset,
     Drive2OrEject,
     Display,
@@ -38,6 +39,9 @@ std::vector<MenuRow> build_rows(const MenuViewModel& vm) {
     }
     if (vm.has_region_option) {
         rows.push_back(MenuRow::Region);
+    }
+    if (vm.has_adpcm_lpf_option) {
+        rows.push_back(MenuRow::AdpcmLpf);
     }
     rows.push_back(MenuRow::Drive1OrMediaOrPreset);
     rows.push_back(MenuRow::Drive2OrEject);
@@ -109,6 +113,8 @@ MenuAction OverlayMenu::handle_key(const czx_key_event_t& ev, const MenuViewMode
             return left ? MenuAction::CycleVariantPrev : MenuAction::CycleVariantNext;
         case MenuRow::Region:
             return left ? MenuAction::CycleRegionPrev : MenuAction::CycleRegionNext;
+        case MenuRow::AdpcmLpf:
+            return MenuAction::ToggleAdpcmLpf;
         case MenuRow::Drive1OrMediaOrPreset:
             if (vm.drive_count >= 2u && vm.has_media_browser) {
                 if (left) return MenuAction::EjectDrive1;
@@ -240,6 +246,10 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
             case MenuRow::Region:
                 label = "Region";
                 val = vm.region_value_label.c_str();
+                break;
+            case MenuRow::AdpcmLpf:
+                label = "ADPCM LPF";
+                val = vm.adpcm_lpf_enabled ? "On" : "Off";
                 break;
             case MenuRow::Drive1OrMediaOrPreset:
                 label = dual ? vm.drive1_name.c_str() : (vm.has_media_browser ? "Load Media" : "Preset");

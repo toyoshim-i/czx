@@ -147,6 +147,7 @@ private:
     std::string last_window_title_;
     bool show_activity_indicator_ = true;
     bool tape_warp_enabled_ = true;
+    bool adpcm_lpf_enabled_ = true;
     bool vsync_enabled_ = true;
     bool hw_render_active_ = false;
     bool hw_bottom_left_ = false;
@@ -179,6 +180,7 @@ private:
     void sync_core_region_option();
     std::string resolve_target_region_id(int target_index) const;
     void sync_core_gpu_scale_option();
+    void sync_core_adpcm_lpf_option();
     void sync_router_menu_open();
     void clear_activity_state() noexcept;
     void poll_core_activity();

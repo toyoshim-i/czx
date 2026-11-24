@@ -35,6 +35,7 @@ enum class MenuAction {
     ToggleMarginFill,
     ToggleActivityIndicator,
     ToggleTapeWarp,
+    ToggleAdpcmLpf,
     ToggleInputMode,
     ResetCore,
     Quit,
@@ -50,6 +51,8 @@ struct MenuViewModel {
     std::string variant_value_label;
     bool has_region_option = false;
     std::string region_value_label;
+    bool has_adpcm_lpf_option = false;
+    bool adpcm_lpf_enabled = true;
     std::string preset_or_media_label;
     bool has_media_browser = false;
     bool can_eject = false;

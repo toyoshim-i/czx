@@ -411,6 +411,20 @@ void test_overlay_menu() {
         menu.render(fb.data(), fs_vm);
         CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
     }
+
+    // X68000 ADPCM LPF toggle row right after Core.
+    czx::video::MenuViewModel x68_vm = fs_vm;
+    x68_vm.has_adpcm_lpf_option = true;
+    x68_vm.adpcm_lpf_enabled = true;
+    menu.set_open(true);
+    menu.reset_cursor();
+    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), x68_vm) == czx::video::MenuAction::None);  // 1: ADPCM LPF
+    CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), x68_vm) == czx::video::MenuAction::ToggleAdpcmLpf);
+    CHECK(menu.handle_key(key_press(CZX_KEY_LEFT), x68_vm) == czx::video::MenuAction::ToggleAdpcmLpf);
+    CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), x68_vm) == czx::video::MenuAction::ToggleAdpcmLpf);
+    std::fill(fb.begin(), fb.end(), 0);
+    menu.render(fb.data(), x68_vm);
+    CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
 }
 
 }  // namespace

@@ -1954,6 +1954,7 @@ private:
             options_["msx68k_renderer"] = "auto";
             options_["msx68k_gpu_scale"] = "off";
             options_["msx68k_opm_thread"] = "offload";
+            options_["msx68k_adpcm_lpf"] = "on";
         } else if (is_efm7_) {
             options_["efm7_boot_mode"] = "auto";
             options_["efm7_tape_turbo"] = host_.disable_tape_warp ? "disabled" : "enabled";

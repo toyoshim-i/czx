@@ -11,8 +11,8 @@ use std::thread;
 use std::time::Instant;
 
 use msx68k_bus::{
-    AdpcmLpf, AdpcmSampleEvent, CpuModel, CpuSpeedMode, Crtc, FrameBudget, Opm, OpmRegEvent,
-    OpmSynthMode, VmConfig, X68kVm,
+    AdpcmLpf, AdpcmSampleEvent, CpuModel, CpuSpeedMode, Crtc, FrameBudget, MidiCallbackPort, Opm,
+    OpmRegEvent, OpmSynthMode, VmConfig, X68kVm,
 };
 use msx68k_vicon::{
     FrameTimingStats, PixelFormat, RenderedFrame565, RendererConfig, ShaderGeneration,
@@ -61,6 +61,7 @@ const RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY: c_uint = 31;
 const RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO: c_uint = 32;
 const RETRO_ENVIRONMENT_SET_GEOMETRY: c_uint = 37;
 const RETRO_ENVIRONMENT_GET_LED_INTERFACE: c_uint = 46 | RETRO_ENVIRONMENT_EXPERIMENTAL;
+const RETRO_ENVIRONMENT_GET_MIDI_INTERFACE: c_uint = 48 | RETRO_ENVIRONMENT_EXPERIMENTAL;
 
 const RETROK_BACKSPACE: u32 = 8;
 const RETROK_TAB: u32 = 9;
@@ -249,6 +250,21 @@ pub struct RetroLedInterface {
     pub set_led_state: Option<RetroSetLedStateFn>,
 }
 
+type RetroMidiInputEnabledFn = unsafe extern "C" fn() -> bool;
+type RetroMidiOutputEnabledFn = unsafe extern "C" fn() -> bool;
+type RetroMidiReadFn = unsafe extern "C" fn(*mut u8) -> bool;
+type RetroMidiWriteFn = unsafe extern "C" fn(u8, u32) -> bool;
+type RetroMidiFlushFn = unsafe extern "C" fn() -> bool;
+
+#[repr(C)]
+pub struct RetroMidiInterface {
+    pub input_enabled: Option<RetroMidiInputEnabledFn>,
+    pub output_enabled: Option<RetroMidiOutputEnabledFn>,
+    pub read: Option<RetroMidiReadFn>,
+    pub write: Option<RetroMidiWriteFn>,
+    pub flush: Option<RetroMidiFlushFn>,
+}
+
 const RETRO_HW_CONTEXT_OPENGLES2: c_uint = 2;
 const RETRO_HW_FRAME_BUFFER_VALID: *const c_void = (-1isize) as *const c_void;
 
@@ -289,6 +305,8 @@ struct Callbacks {
     input_state: Option<RetroInputStateFn>,
     log: Option<RetroLogPrintfFn>,
     led: Option<RetroSetLedStateFn>,
+    midi_output_enabled: Option<RetroMidiOutputEnabledFn>,
+    midi_write: Option<RetroMidiWriteFn>,
     hw_get_fbo: Option<RetroHwGetCurrentFramebufferFn>,
     hw_get_proc: Option<RetroHwGetProcAddressFn>,
 }
@@ -607,6 +625,8 @@ static CALLBACKS: Mutex<Callbacks> = Mutex::new(Callbacks {
     led: None,
     hw_get_fbo: None,
     hw_get_proc: None,
+    midi_output_enabled: None,
+    midi_write: None,
 });
 
 static CORE_STATE: Mutex<Option<CoreState>> = Mutex::new(None);
@@ -1446,6 +1466,34 @@ fn load_game_inner(game: *const RetroGameInfo) -> bool {
         return false;
     }
 
+    let midi_cbs = CALLBACKS
+        .lock()
+        .ok()
+        .map(|c| (c.midi_output_enabled, c.midi_write))
+        .unwrap_or((None, None));
+    if let (Some(out_en_fn), Some(write_fn)) = midi_cbs {
+        if unsafe { out_en_fn() } {
+            let mut prev_tick_10mhz: Option<u64> = None;
+            vm.attach_midi_port(
+                0,
+                Box::new(MidiCallbackPort::new(move |byte: u8, tick_10mhz: u64| {
+                    let delta_us = match prev_tick_10mhz {
+                        Some(prev) => (tick_10mhz.saturating_sub(prev) / 10).min(u32::MAX as u64) as u32,
+                        None => 0,
+                    };
+                    prev_tick_10mhz = Some(tick_10mhz);
+                    unsafe {
+                        let _ = write_fn(byte, delta_us);
+                    }
+                })),
+            );
+            log_msg(
+                RETRO_LOG_INFO,
+                "CZ-6BM1 MIDI board 0 ($EAFA00, IRQ4) attached to host MIDI output",
+            );
+        }
+    }
+
     let mut audio_events = Vec::with_capacity(256);
     let mut adpcm_events = Vec::with_capacity(256);
     let mut opm_worker = None;
@@ -1699,6 +1747,20 @@ pub unsafe extern "C" fn retro_set_environment(cb: Option<RetroEnvironmentFn>) {
         if env_call(RETRO_ENVIRONMENT_GET_LED_INTERFACE, &mut led_if) {
             if let Ok(mut cbs) = CALLBACKS.lock() {
                 cbs.led = led_if.set_led_state;
+            }
+        }
+
+        let mut midi_if = RetroMidiInterface {
+            input_enabled: None,
+            output_enabled: None,
+            read: None,
+            write: None,
+            flush: None,
+        };
+        if env_call(RETRO_ENVIRONMENT_GET_MIDI_INTERFACE, &mut midi_if) {
+            if let Ok(mut cbs) = CALLBACKS.lock() {
+                cbs.midi_output_enabled = midi_if.output_enabled;
+                cbs.midi_write = midi_if.write;
             }
         }
     }));

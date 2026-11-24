@@ -107,7 +107,7 @@ bool DesktopSdl2Context::init(const PlatformOptions& opts) {
     }
     if (!renderer) return false;
 
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
 
     texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING,
                                 video::kLcdWidth, video::kLcdHeight);

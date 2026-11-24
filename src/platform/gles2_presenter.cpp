@@ -36,6 +36,7 @@ constexpr GLenum kGlTextureMinFilter = 0x2801;
 constexpr GLenum kGlTextureWrapS = 0x2802;
 constexpr GLenum kGlTextureWrapT = 0x2803;
 constexpr GLint kGlNearest = 0x2600;
+constexpr GLint kGlLinear = 0x2601;
 constexpr GLint kGlClampToEdge = 0x812F;
 constexpr GLenum kGlBlend = 0x0BE2;
 constexpr GLenum kGlSrcAlpha = 0x0302;
@@ -426,8 +427,8 @@ void Gles2Presenter::ensure_lcd_texture() {
     gl_->glGenTextures(1, &tex_lcd_);
     gl_->glActiveTexture(kGlTexture0);
     gl_->glBindTexture(kGlTexture2d, tex_lcd_);
-    gl_->glTexParameteri(kGlTexture2d, kGlTextureMinFilter, kGlNearest);
-    gl_->glTexParameteri(kGlTexture2d, kGlTextureMagFilter, kGlNearest);
+    gl_->glTexParameteri(kGlTexture2d, kGlTextureMinFilter, kGlLinear);
+    gl_->glTexParameteri(kGlTexture2d, kGlTextureMagFilter, kGlLinear);
     gl_->glTexParameteri(kGlTexture2d, kGlTextureWrapS, kGlClampToEdge);
     gl_->glTexParameteri(kGlTexture2d, kGlTextureWrapT, kGlClampToEdge);
     gl_->glPixelStorei(kGlUnpackAlignment, 1);
@@ -459,8 +460,8 @@ void Gles2Presenter::ensure_native_texture(int width, int height) {
     gl_->glActiveTexture(kGlTexture0);
     gl_->glBindTexture(kGlTexture2d, tex_native_);
     if (native_tex_w_ != cw || native_tex_h_ != ch) {
-        gl_->glTexParameteri(kGlTexture2d, kGlTextureMinFilter, kGlNearest);
-        gl_->glTexParameteri(kGlTexture2d, kGlTextureMagFilter, kGlNearest);
+        gl_->glTexParameteri(kGlTexture2d, kGlTextureMinFilter, kGlLinear);
+        gl_->glTexParameteri(kGlTexture2d, kGlTextureMagFilter, kGlLinear);
         gl_->glTexParameteri(kGlTexture2d, kGlTextureWrapS, kGlClampToEdge);
         gl_->glTexParameteri(kGlTexture2d, kGlTextureWrapT, kGlClampToEdge);
         gl_->glPixelStorei(kGlUnpackAlignment, 1);
@@ -511,8 +512,8 @@ bool Gles2Presenter::hw_ensure_fbo(int width, int height, bool depth, bool /*ste
 
         gl_->glActiveTexture(kGlTexture0);
         gl_->glBindTexture(kGlTexture2d, hw_tex_);
-        gl_->glTexParameteri(kGlTexture2d, kGlTextureMinFilter, kGlNearest);
-        gl_->glTexParameteri(kGlTexture2d, kGlTextureMagFilter, kGlNearest);
+        gl_->glTexParameteri(kGlTexture2d, kGlTextureMinFilter, kGlLinear);
+        gl_->glTexParameteri(kGlTexture2d, kGlTextureMagFilter, kGlLinear);
         gl_->glTexParameteri(kGlTexture2d, kGlTextureWrapS, kGlClampToEdge);
         gl_->glTexParameteri(kGlTexture2d, kGlTextureWrapT, kGlClampToEdge);
         gl_->glPixelStorei(kGlUnpackAlignment, 1);

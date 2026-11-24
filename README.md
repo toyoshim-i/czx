@@ -15,6 +15,7 @@
 | [MSX / MSX2 / MSX2+](docs/msx.md) | `bluemsx` | Cartridges: **No** *(bundled C-BIOS)*<br>BASIC / `.dsk`: **Yes** *(case-insensitive in `Shared Roms/`)* | `bluemsx/Machines/Shared Roms/` | `msx/` — `.rom` `.mx1` `.mx2` `.dsk` `.cas` `.m3u` `.zip` |
 | [SHARP PC-G850 / G815 / E200](docs/g800.md) | `g800` *(built-in)* | Optional *(compat BASIC/IOCS fallback; case-insensitive)* | `g800/` *(or `g850/`, `g815/`, `e200/`)* | `g800/` — `.ihx` `.hex` `.bas` `.txt` |
 | [SHARP MZ-700](docs/mz700.md) | `emuz700` | **Yes** *(case-insensitive + aliases)* | `mz700/` | `mz700/` — `.mzt` `.mzf` `.m12` `.wav` `.tap` `.q20` `.d88` `.2d` |
+| [Fujitsu FM-7 / FM77AV / FM77AV40](docs/fm7.md) | `efm7`, `efm77av`, `efm77av40` | **Yes** *(case-insensitive)* | `fm7/` | `fm7/` — `.d77` `.77d` `.d88` `.2d` `.t77` `.wav` `.m3u` |
 | [SHARP X68000](docs/x68000.md) *(Experimental)* | `msx68k` | **Yes** *(case-insensitive)* | `x68000/` | `x68000/` — `.xdf` `.dim` `.2hd` `.2dd` `.hds` `.hdf` `.img` `.m3u` |
 
 `czx` also includes a built-in `test_pattern` core (requires no ROMs or media) with interactive `280×192`, `560×192`, `320×200`, `384×272`, and `640×400` calibration patterns.
@@ -46,13 +47,23 @@ Holding `Alt` reveals the 5-slot icon bar aligned above physical keys `4 5 6 7 8
 - **Keyboard pass-through**: `SYM` and `Fn` keys pass through intact to the emulated machine (TCA8418 `SYM` scancodes map cleanly to shifted/unshifted US keys).
 - **Media & multi-disk `.d88` support**: Insert, eject, or hot-swap disks anytime via `Alt + 8` (`F/X` move, `Z` up dir / eject drive, `C`/`Enter` open/load, `ESC` back). Apple II, PC-8801, and PC-9801 expose separate **Drive 1 / Drive 2** (`FDD 1 / FDD 2`) slots, and multi-disk `.d88` archives offer sub-disk selection plus `[AUTO] D1:#1 + D2:#2`.
 
+## Roland MT-32 / CM-32L MIDI (`munt`)
+
+`czx` includes a built-in background-threaded **Roland MT-32 / CM-32L** synthesizer (`munt` / `libmt32emu`) exposed to cores via `RETRO_ENVIRONMENT_GET_MIDI_INTERFACE` (used by [SHARP X68000 (`msx68k`)](docs/x68000.md#roland-mt-32--cm-32l-midi-munt--cz-6bm1) via CZ-6BM1 MIDI board emulation).
+
+- Place a user-supplied ROM pair in `~/czx/roms/mt32/` (case-insensitive; **CM-32L** is preferred if both are present):
+  - `CM32L_CONTROL.ROM` + `CM32L_PCM.ROM`
+  - or `MT32_CONTROL.ROM` + `MT32_PCM.ROM`
+- Toggle **MT-32** (`CM-32L` / `MT-32` / `Off` / `No ROM`) anytime in `Alt + 8` (System Menu), persisted in `~/czx/config/czx.cfg` as `mt32 = on|off`.
+
 ## Directory Layout (`$CZX_DATA_DIR`, default `~/czx`)
 
 `czx` (and `install-on-device.sh`) initializes the following directories on startup:
 
 - `~/czx/media/<target>/` — Disk, tape, cartridge, and BASIC/HEX files per machine
-- `~/czx/roms/<target>/` — User-supplied system ROMs (plus bundled open-source blueMSX C-BIOS & `Databases/`)
-- `~/czx/saves/` — Persistent RAM, `vicerc`, dual-drive playlists, and MZ-700 `CMOS.BIN`
+- `~/czx/roms/<target>/` — User-supplied system ROMs (plus bundled open-source blueMSX C-BIOS & `Databases/`), and optional `~/czx/roms/mt32/` for Roland MT-32 / CM-32L ROMs
+- `~/czx/saves/` — Persistent RAM, `vicerc`, dual-drive playlists, MZ-700 `CMOS.BIN`, and FM-7 / X68000 saves
+- `~/czx/config/czx.cfg` — Global settings (`tape_warp`, `vsync`, `adpcm_lpf`, `mt32`, etc.)
 - `~/czx/config/<core_id>.cfg` — Optional per-core libretro `key = value` overrides (see individual guides in [`docs/`](docs/))
 
 ## Build & Run on Linux PC

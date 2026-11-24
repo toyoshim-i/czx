@@ -2815,8 +2815,145 @@ void EmulatorApp::cb_guest_key(void* user_data, const czx_key_event_t& ev) {
     }
 }
 
+void EmulatorApp::sync_guest_joysticks() {
+    if (joy_core_epoch_ != core_epoch_) {
+        joy_core_epoch_ = core_epoch_;
+        last_sent_joy_ = {0u, 0u};
+        kb_joy_buttons_ = {0u, 0u};
+    }
+    if (!core_api_ || !core_inst_ || !core_api_->on_joystick) return;
+    for (uint32_t p = 0; p < 2u; ++p) {
+        const uint32_t merged =
+            kb_joy_buttons_[p] | czx::platform::map_gamepad_to_guest_joystick(pad_buttons_[p]);
+        if (merged != last_sent_joy_[p]) {
+            last_sent_joy_[p] = merged;
+            core_api_->on_joystick(core_inst_, p, merged);
+        }
+    }
+}
+
+void EmulatorApp::handle_gamepads(const std::vector<czx::platform::GamepadState>& pads, double dt_sec) {
+    std::array<uint32_t, 2> now{0u, 0u};
+    for (const auto& st : pads) {
+        if (st.port < 2u) {
+            now[st.port] |= st.buttons;
+        }
+    }
+
+    const uint32_t all_now = now[0] | now[1];
+    const uint32_t all_prev = prev_pad_buttons_[0] | prev_pad_buttons_[1];
+
+    // META / Guide / Home button toggles System Menu in both gameplay and Launcher.
+    if ((all_now & czx::platform::CZX_PAD_META) != 0u &&
+        (all_prev & czx::platform::CZX_PAD_META) == 0u) {
+        handle_host_command(czx::input::HostCommand::ToggleMenu);
+        if (!in_launcher_ && !menu_.is_open() && !browser_.is_open()) {
+            pad_suppress_game_ = {true, true};
+        }
+    }
+
+    const bool ui_active = in_launcher_ || menu_.is_open() || browser_.is_open();
+    if (ui_active) {
+        for (size_t p = 0; p < 2u; ++p) {
+            pad_suppress_game_[p] = (now[p] != 0u);
+            pad_buttons_[p] = 0u;
+        }
+        sync_guest_joysticks();
+
+        const uint32_t pressed = all_now & ~all_prev;
+        auto send_ui_key = [&](czx_key_t key, bool repeat = false) {
+            czx_key_event_t ev{};
+            ev.key = key;
+            ev.pressed = true;
+            ev.repeat = repeat;
+            handle_menu_key(ev);
+        };
+
+        auto dir_to_key = [](uint32_t bit) noexcept -> czx_key_t {
+            switch (bit) {
+                case czx::platform::CZX_PAD_UP:    return CZX_KEY_UP;
+                case czx::platform::CZX_PAD_DOWN:  return CZX_KEY_DOWN;
+                case czx::platform::CZX_PAD_LEFT:  return CZX_KEY_LEFT;
+                case czx::platform::CZX_PAD_RIGHT: return CZX_KEY_RIGHT;
+                default: return CZX_KEY_NONE;
+            }
+        };
+
+        static constexpr uint32_t kDirs[4] = {
+            czx::platform::CZX_PAD_UP,
+            czx::platform::CZX_PAD_DOWN,
+            czx::platform::CZX_PAD_LEFT,
+            czx::platform::CZX_PAD_RIGHT,
+        };
+        uint32_t newly_pressed_dir = 0u;
+        for (uint32_t d : kDirs) {
+            if ((pressed & d) != 0u) {
+                send_ui_key(dir_to_key(d), false);
+                newly_pressed_dir = d;
+            }
+        }
+        if (newly_pressed_dir != 0u) {
+            pad_ui_repeat_dir_ = newly_pressed_dir;
+            pad_ui_repeat_timer_ = 0.35;
+        } else if (pad_ui_repeat_dir_ != 0u) {
+            if ((all_now & pad_ui_repeat_dir_) != 0u) {
+                pad_ui_repeat_timer_ -= std::clamp(dt_sec, 0.0, 0.05);
+                if (pad_ui_repeat_timer_ <= 0.0) {
+                    send_ui_key(dir_to_key(pad_ui_repeat_dir_), true);
+                    pad_ui_repeat_timer_ = 0.10;
+                }
+            } else {
+                pad_ui_repeat_dir_ = 0u;
+            }
+        }
+
+        if ((pressed & (czx::platform::CZX_PAD_SOUTH | czx::platform::CZX_PAD_START)) != 0u) {
+            send_ui_key(CZX_KEY_ENTER, false);
+            if (!in_launcher_ && !menu_.is_open() && !browser_.is_open()) {
+                pad_suppress_game_ = {true, true};
+            }
+        }
+        if ((pressed & czx::platform::CZX_PAD_EAST) != 0u) {
+            send_ui_key(CZX_KEY_ESC, false);
+            if (!in_launcher_ && !menu_.is_open() && !browser_.is_open()) {
+                pad_suppress_game_ = {true, true};
+            }
+        }
+        if ((pressed & czx::platform::CZX_PAD_WEST) != 0u) {
+            send_ui_key(CZX_KEY_BACKSPACE, false);
+        }
+        if ((pressed & czx::platform::CZX_PAD_L1) != 0u) {
+            send_ui_key(CZX_KEY_PAGEUP, false);
+        }
+        if ((pressed & czx::platform::CZX_PAD_R1) != 0u) {
+            send_ui_key(CZX_KEY_PAGEDOWN, false);
+        }
+    } else {
+        pad_ui_repeat_dir_ = 0u;
+        for (size_t p = 0; p < 2u; ++p) {
+            if (pad_suppress_game_[p]) {
+                if (now[p] == 0u) {
+                    pad_suppress_game_[p] = false;
+                } else {
+                    pad_buttons_[p] = 0u;
+                    continue;
+                }
+            }
+            pad_buttons_[p] = now[p];
+        }
+        sync_guest_joysticks();
+    }
+
+    prev_pad_buttons_ = now;
+}
+
 void EmulatorApp::cb_guest_joystick(void* user_data, uint32_t port, uint32_t buttons) {
     auto* self = static_cast<EmulatorApp*>(user_data);
+    if (port < 2u) {
+        self->kb_joy_buttons_[port] = buttons;
+        self->sync_guest_joysticks();
+        return;
+    }
     if (self->core_api_ && self->core_inst_ && self->core_api_->on_joystick) {
         self->core_api_->on_joystick(self->core_inst_, port, buttons);
     }
@@ -3013,6 +3150,7 @@ int EmulatorApp::run() {
     uint64_t seen_core_epoch = core_epoch_;
     std::vector<czx::input::RawKeyEvent> raw_events;
     std::vector<czx::platform::RawMouseEvent> raw_mouse;
+    std::vector<czx::platform::GamepadState> raw_gamepads;
     int frames_done = 0;
 
     while (running_ && !g_signal_quit) {
@@ -3047,13 +3185,16 @@ int EmulatorApp::run() {
 
         raw_events.clear();
         raw_mouse.clear();
+        raw_gamepads.clear();
         if (platform_.input) {
             platform_.input->poll(raw_events);
             platform_.input->poll_mouse(raw_mouse);
+            platform_.input->poll_gamepads(raw_gamepads);
         }
         for (const auto& ev : raw_events) {
             router_.handle_raw_key(ev);
         }
+        handle_gamepads(raw_gamepads, dt_sec);
         if (!in_launcher_ && !browser_.is_open() && !menu_.is_open()) {
             for (const auto& m : raw_mouse) {
                 cb_guest_mouse(this, m.dx, m.dy, m.buttons);

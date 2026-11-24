@@ -156,6 +156,14 @@ private:
     int8_t activity_tape_percent_ = -1;
     uint8_t activity_drive_mask_ = 0;
     uint32_t activity_hold_frames_ = 0;
+    std::array<uint32_t, 2> kb_joy_buttons_{0u, 0u};
+    std::array<uint32_t, 2> pad_buttons_{0u, 0u};
+    std::array<uint32_t, 2> prev_pad_buttons_{0u, 0u};
+    std::array<uint32_t, 2> last_sent_joy_{0u, 0u};
+    std::array<bool, 2> pad_suppress_game_{false, false};
+    uint64_t joy_core_epoch_ = 0;
+    uint32_t pad_ui_repeat_dir_ = 0u;
+    double pad_ui_repeat_timer_ = 0.0;
 
     void start_scale_worker();
     void stop_scale_worker();
@@ -220,6 +228,8 @@ private:
     void cycle_aspect_policy(int delta);
     void handle_host_command(czx::input::HostCommand cmd);
     void handle_menu_key(const czx_key_event_t& ev);
+    void handle_gamepads(const std::vector<czx::platform::GamepadState>& pads, double dt_sec);
+    void sync_guest_joysticks();
 
     static void cb_video_frame(void* user_data, const czx_frame_t* frame);
     static void cb_audio_samples(void* user_data, const int16_t* stereo_s16, size_t frame_count);

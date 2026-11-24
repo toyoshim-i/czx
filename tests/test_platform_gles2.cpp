@@ -1,6 +1,7 @@
 #include "platform/gles2_presenter.hpp"
 #include "platform/linux_alsa.hpp"
 #include "platform/linux_audio.hpp"
+#include "platform/linux_gamepad.hpp"
 #include "platform/sdl2_gles2.hpp"
 
 #include <cstdio>
@@ -156,6 +157,29 @@ int main() {
             " 0 [Headphones     ]: bcm2835_headpho - bcm2835 Headphones\n"
             " 1 [ES8389Audio    ]: ES8389-Audio - ES8389-Audio\n");
         CHECK(no_hdmi.empty());
+    }
+
+    // USB gamepad mapping (XInput / ATARI Select=UP+DOWN, Start=LEFT+RIGHT) and axis deadzone.
+    {
+        using namespace czx::platform;
+        CHECK(map_gamepad_to_guest_joystick(0u) == 0u);
+        CHECK(map_gamepad_to_guest_joystick(CZX_PAD_UP | CZX_PAD_SOUTH) == (CZX_JOY_UP | CZX_JOY_FIRE1));
+        CHECK(map_gamepad_to_guest_joystick(CZX_PAD_RIGHT | CZX_PAD_EAST) == (CZX_JOY_RIGHT | CZX_JOY_FIRE2));
+        CHECK(map_gamepad_to_guest_joystick(CZX_PAD_WEST | CZX_PAD_NORTH) == (CZX_JOY_FIRE1 | CZX_JOY_FIRE2));
+        CHECK(map_gamepad_to_guest_joystick(CZX_PAD_SELECT) == (CZX_JOY_UP | CZX_JOY_DOWN));
+        CHECK(map_gamepad_to_guest_joystick(CZX_PAD_START) == (CZX_JOY_LEFT | CZX_JOY_RIGHT));
+        CHECK(map_gamepad_to_guest_joystick(CZX_PAD_META | CZX_PAD_L1 | CZX_PAD_R1) == 0u);
+
+        // XInput signed 16-bit axis (-32768..32767)
+        CHECK(eval_gamepad_axis_dir(0, -32768, 32767, 128) == 0);
+        CHECK(eval_gamepad_axis_dir(5000, -32768, 32767, 128) == 0);
+        CHECK(eval_gamepad_axis_dir(-20000, -32768, 32767, 128) == -1);
+        CHECK(eval_gamepad_axis_dir(20000, -32768, 32767, 128) == 1);
+
+        // Generic USB HID unsigned 8-bit axis (0..255)
+        CHECK(eval_gamepad_axis_dir(128, 0, 255, 0) == 0);
+        CHECK(eval_gamepad_axis_dir(10, 0, 255, 0) == -1);
+        CHECK(eval_gamepad_axis_dir(245, 0, 255, 0) == 1);
     }
 
     std::printf("test_platform_gles2: OK\n");

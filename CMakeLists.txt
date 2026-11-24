@@ -124,6 +124,7 @@ if(UNIX AND NOT APPLE)
             src/platform/linux_drm.cpp
             src/platform/linux_fbdev.cpp
             src/platform/linux_evdev.cpp
+            src/platform/linux_gamepad.cpp
             src/platform/linux_alsa.cpp
             src/platform/linux_audio.cpp
             src/platform/device_factory.cpp
@@ -149,6 +150,7 @@ elseif(CZX_SELECTED_BACKEND STREQUAL "DESKTOP_SDL2")
         src/platform/gles2_presenter.cpp
         src/platform/sdl2_gles2.cpp
         src/platform/desktop_sdl2.cpp
+        src/platform/linux_gamepad.cpp
         src/platform/linux_alsa.cpp
         src/platform/linux_audio.cpp
         src/platform/desktop_sdl2_factory.cpp
@@ -169,6 +171,7 @@ elseif(CZX_SELECTED_BACKEND STREQUAL "DESKTOP_X11")
         src/platform/gles2_presenter.cpp
         src/platform/sdl2_gles2.cpp
         src/platform/desktop_x11.cpp
+        src/platform/linux_gamepad.cpp
         src/platform/linux_alsa.cpp
         src/platform/linux_audio.cpp
         src/platform/desktop_x11_factory.cpp

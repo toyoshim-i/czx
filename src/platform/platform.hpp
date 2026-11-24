@@ -1,5 +1,6 @@
 #pragma once
 
+#include "czx/core.h"
 #include "input/keycodes.hpp"
 #include "video/scaler.hpp"
 
@@ -57,6 +58,42 @@ struct RawMouseEvent {
     uint32_t buttons = 0;
 };
 
+enum : uint32_t {
+    CZX_PAD_UP     = 1u << 0,
+    CZX_PAD_DOWN   = 1u << 1,
+    CZX_PAD_LEFT   = 1u << 2,
+    CZX_PAD_RIGHT  = 1u << 3,
+    CZX_PAD_SOUTH  = 1u << 4,   // A (XInput) / Cross -> FIRE1 / UI Confirm
+    CZX_PAD_EAST   = 1u << 5,   // B (XInput) / Circle -> FIRE2 / UI Back
+    CZX_PAD_WEST   = 1u << 6,   // X (XInput) / Square -> FIRE1 / Browser Up
+    CZX_PAD_NORTH  = 1u << 7,   // Y (XInput) / Triangle -> FIRE2
+    CZX_PAD_SELECT = 1u << 8,   // Back/View/Select -> ATARI UP+DOWN
+    CZX_PAD_START  = 1u << 9,   // Start/Menu -> ATARI LEFT+RIGHT / UI Confirm
+    CZX_PAD_META   = 1u << 10,  // Guide/Xbox/PS/Home (BTN_MODE) -> Toggle Menu
+    CZX_PAD_L1     = 1u << 11,  // LB / L1
+    CZX_PAD_R1     = 1u << 12,  // RB / R1
+};
+
+struct GamepadState {
+    uint32_t port = 0;     // 0 = P1, 1 = P2
+    uint32_t buttons = 0;  // CZX_PAD_* bitmask
+};
+
+// Maps CZX_PAD_* gamepad state into guest CZX_JOY_* bits, including ATARI
+// opposite-direction conventions (SELECT -> UP+DOWN, START -> LEFT+RIGHT).
+inline uint32_t map_gamepad_to_guest_joystick(uint32_t pad_buttons) noexcept {
+    uint32_t joy = 0u;
+    if ((pad_buttons & CZX_PAD_UP) != 0u) joy |= CZX_JOY_UP;
+    if ((pad_buttons & CZX_PAD_DOWN) != 0u) joy |= CZX_JOY_DOWN;
+    if ((pad_buttons & CZX_PAD_LEFT) != 0u) joy |= CZX_JOY_LEFT;
+    if ((pad_buttons & CZX_PAD_RIGHT) != 0u) joy |= CZX_JOY_RIGHT;
+    if ((pad_buttons & (CZX_PAD_SOUTH | CZX_PAD_WEST)) != 0u) joy |= CZX_JOY_FIRE1;
+    if ((pad_buttons & (CZX_PAD_EAST | CZX_PAD_NORTH)) != 0u) joy |= CZX_JOY_FIRE2;
+    if ((pad_buttons & CZX_PAD_SELECT) != 0u) joy |= (CZX_JOY_UP | CZX_JOY_DOWN);
+    if ((pad_buttons & CZX_PAD_START) != 0u) joy |= (CZX_JOY_LEFT | CZX_JOY_RIGHT);
+    return joy;
+}
+
 class PlatformDisplay {
 public:
     virtual ~PlatformDisplay() = default;
@@ -93,6 +130,7 @@ public:
     virtual bool init() = 0;
     virtual void poll(std::vector<czx::input::RawKeyEvent>& out_events) = 0;
     virtual void poll_mouse(std::vector<RawMouseEvent>&) {}
+    virtual void poll_gamepads(std::vector<GamepadState>&) {}
     virtual const char* backend_name() const = 0;
 };
 

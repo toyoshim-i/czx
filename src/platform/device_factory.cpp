@@ -2,6 +2,7 @@
 #include "platform/linux_drm.hpp"
 #include "platform/linux_evdev.hpp"
 #include "platform/linux_fbdev.hpp"
+#include "platform/linux_gamepad.hpp"
 #include "platform/null_devices.hpp"
 #include "platform/platform.hpp"
 #include "platform/sdl2_gles2.hpp"
@@ -103,10 +104,10 @@ PlatformBundle create_platform_bundle(const PlatformOptions& opts) {
             auto sdl_input = std::make_unique<Sdl2Gles2Input>(ctx);
             auto ev_input = std::make_unique<LinuxEvdevInput>(opts.input_device);
             if (ev_input->init()) {
-                bundle.input = std::make_unique<CompositeDeviceInput>(
-                    std::move(sdl_input), std::move(ev_input));
+                bundle.input = std::make_unique<GamepadAugmentedInput>(
+                    std::make_unique<CompositeDeviceInput>(std::move(sdl_input), std::move(ev_input)));
             } else {
-                bundle.input = std::move(sdl_input);
+                bundle.input = std::make_unique<GamepadAugmentedInput>(std::move(sdl_input));
             }
             bundle.audio = std::make_unique<LinuxAudio>(true);
             return bundle;
@@ -134,7 +135,7 @@ PlatformBundle create_platform_bundle(const PlatformOptions& opts) {
 
     auto ev = std::make_unique<LinuxEvdevInput>(opts.input_device);
     ev->init();
-    bundle.input = std::move(ev);
+    bundle.input = std::make_unique<GamepadAugmentedInput>(std::move(ev));
 
     bundle.audio = std::make_unique<LinuxAudio>();
     return bundle;

@@ -542,6 +542,25 @@ void test_aspect_policy_and_native_present_rect() {
         CHECK(r_par.x == 240 && r_par.y == 0 && r_par.width == 1440 && r_par.height == 1080);
     }
 
+    // 4:3 framebuffer (1024x768) stretched onto a physical 16:9 monitor (display_dar = 16/9)
+    {
+        constexpr double k16x9 = 16.0 / 9.0;
+        const auto r_43 = compute_native_present_rect(256, 256, 1333, 1000, AspectPolicy::Crt4x3, 1024, 768, k16x9);
+        CHECK(r_43.x == 128 && r_43.y == 0 && r_43.width == 768 && r_43.height == 768);
+
+        const auto r_par_32 = compute_native_present_rect(768, 512, 1, 1, AspectPolicy::ParAware, 1024, 768, k16x9);
+        CHECK(r_par_32.x == 80 && r_par_32.y == 0 && r_par_32.width == 864 && r_par_32.height == 768);
+
+        const auto r_par_1610 = compute_native_present_rect(320, 200, 1, 1, AspectPolicy::ParAware, 1024, 768, k16x9);
+        CHECK(r_par_1610.x == 51 && r_par_1610.y == 0 && r_par_1610.width == 922 && r_par_1610.height == 768);
+
+        const auto r_par_wide = compute_native_present_rect(144, 48, 1, 1, AspectPolicy::ParAware, 1024, 768, k16x9);
+        CHECK(r_par_wide.x == 0 && r_par_wide.y == 156 && r_par_wide.width == 1024 && r_par_wide.height == 455);
+
+        const auto r_full = compute_native_present_rect(256, 256, 1333, 1000, AspectPolicy::FullStretch, 1024, 768, k16x9);
+        CHECK(r_full.x == 0 && r_full.y == 0 && r_full.width == 1024 && r_full.height == 768);
+    }
+
     // Invalid dimension guard
     {
         const auto r_bad1 = compute_native_present_rect(0, 512, 1, 1, AspectPolicy::ParAware, 1920, 1080);

@@ -3183,6 +3183,7 @@ int EmulatorApp::run() {
                     view.par_num = native_par_num_;
                     view.par_den = native_par_den_;
                     view.aspect_policy = scaler_cfg_.aspect_policy;
+                    view.display_dar = is_fullscreen_display() ? (16.0 / 9.0) : 0.0;
                     view.bottom_left_origin = hw_bottom_left_;
                     view.margin_xrgb = 0u;
                     if (overlay_active) {
@@ -3202,6 +3203,7 @@ int EmulatorApp::run() {
                     view.par_num = native_par_num_;
                     view.par_den = native_par_den_;
                     view.aspect_policy = scaler_cfg_.aspect_policy;
+                    view.display_dar = is_fullscreen_display() ? (16.0 / 9.0) : 0.0;
                     view.margin_xrgb =
                         (scaler_cfg_.margin_fill == czx::video::MarginFill::Auto) ? native_margin_xrgb_ : 0u;
                     if (overlay_active) {

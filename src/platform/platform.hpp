@@ -32,6 +32,7 @@ struct NativeFrameView {
     int par_num = 1;
     int par_den = 1;
     video::AspectPolicy aspect_policy = video::AspectPolicy::ParAware;
+    double display_dar = 0.0;  // 0.0 = square pixels (out_w/out_h); >0 = minimum physical display DAR (e.g. 16/9)
     uint32_t margin_xrgb = 0;
     const uint32_t* overlay_argb = nullptr;  // 320x170 straight ARGB8888, or nullptr
     bool dim_outside_overlay = false;
@@ -43,6 +44,7 @@ struct NativeHwFrameView {
     int par_num = 1;
     int par_den = 1;
     video::AspectPolicy aspect_policy = video::AspectPolicy::ParAware;
+    double display_dar = 0.0;  // 0.0 = square pixels (out_w/out_h); >0 = minimum physical display DAR (e.g. 16/9)
     bool bottom_left_origin = false;
     uint32_t margin_xrgb = 0;
     const uint32_t* overlay_argb = nullptr;  // 320x170 straight ARGB8888, or nullptr

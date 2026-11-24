@@ -230,8 +230,11 @@ void DesktopSdl2Context::present_native(const NativeFrameView& view) {
         if (native_texture) {
             SDL_UpdateTexture(native_texture, nullptr, view.xrgb,
                               view.width * static_cast<int>(sizeof(uint32_t)));
+            const double dar = (view.display_dar > 0.0)
+                                   ? std::max(view.display_dar, static_cast<double>(out_w) / static_cast<double>(out_h))
+                                   : 0.0;
             const auto r = video::compute_native_present_rect(
-                view.width, view.height, view.par_num, view.par_den, view.aspect_policy, out_w, out_h);
+                view.width, view.height, view.par_num, view.par_den, view.aspect_policy, out_w, out_h, dar);
             const SDL_Rect dst{r.x, r.y, r.width, r.height};
             SDL_RenderCopy(renderer, native_texture, nullptr, &dst);
         }
@@ -271,8 +274,20 @@ void DesktopSdl2Context::present_native(const NativeFrameView& view) {
         }
         SDL_UpdateTexture(overlay_texture, nullptr, view.overlay_argb,
                           video::kLcdWidth * static_cast<int>(sizeof(uint32_t)));
-        const SDL_Rect ov_dst{ov_x, ov_y, ov_w, ov_h};
-        SDL_RenderCopy(renderer, overlay_texture, nullptr, &ov_dst);
+        if (!view.dim_outside_overlay && out_h > ov_h) {
+            constexpr int kHalfSrc = video::kLcdHeight / 2;
+            const int top_h = ov_h / 2;
+            const int bot_h = ov_h - top_h;
+            const SDL_Rect src_top{0, 0, video::kLcdWidth, kHalfSrc};
+            const SDL_Rect dst_top{ov_x, 0, ov_w, top_h};
+            const SDL_Rect src_bot{0, kHalfSrc, video::kLcdWidth, video::kLcdHeight - kHalfSrc};
+            const SDL_Rect dst_bot{ov_x, out_h - bot_h, ov_w, bot_h};
+            SDL_RenderCopy(renderer, overlay_texture, &src_top, &dst_top);
+            SDL_RenderCopy(renderer, overlay_texture, &src_bot, &dst_bot);
+        } else {
+            const SDL_Rect ov_dst{ov_x, ov_y, ov_w, ov_h};
+            SDL_RenderCopy(renderer, overlay_texture, nullptr, &ov_dst);
+        }
     }
 
     SDL_RenderPresent(renderer);

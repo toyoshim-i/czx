@@ -84,10 +84,15 @@ void composite_overlay_xrgb(uint32_t* buf, int win_w, int win_h,
         }
     }
 
+    const bool split_hud = !dim_outside && win_h > ov_h;
     if (ui_scale > 0) {
+        constexpr int kHalfSrc = video::kLcdHeight / 2;
         for (int sy = 0; sy < video::kLcdHeight; ++sy) {
             const uint32_t* ov_row = overlay_argb + static_cast<size_t>(sy) * video::kLcdWidth;
-            const int dy0 = ov_y + sy * ui_scale;
+            const int dy0 = split_hud
+                                ? ((sy < kHalfSrc) ? (sy * ui_scale)
+                                                   : (win_h - (video::kLcdHeight - sy) * ui_scale))
+                                : (ov_y + sy * ui_scale);
             for (int sx = 0; sx < video::kLcdWidth; ++sx) {
                 const uint32_t src = ov_row[sx];
                 const uint32_t a = (src >> 24) & 0xFFu;
@@ -114,11 +119,13 @@ void composite_overlay_xrgb(uint32_t* buf, int win_w, int win_h,
         std::vector<int> ov_y_lut;
         build_nearest_lut(ov_x_lut, ov_w, video::kLcdWidth);
         build_nearest_lut(ov_y_lut, ov_h, video::kLcdHeight);
+        const int top_h = ov_h / 2;
         for (int dy = 0; dy < ov_h; ++dy) {
             const uint32_t* ov_row =
                 overlay_argb + static_cast<size_t>(ov_y_lut[static_cast<size_t>(dy)]) * video::kLcdWidth;
+            const int dst_y = split_hud ? ((dy < top_h) ? dy : (win_h - (ov_h - dy))) : (ov_y + dy);
             uint32_t* dst_row =
-                buf + static_cast<size_t>(ov_y + dy) * static_cast<size_t>(win_w) + ov_x;
+                buf + static_cast<size_t>(dst_y) * static_cast<size_t>(win_w) + ov_x;
             for (int dx = 0; dx < ov_w; ++dx) {
                 const uint32_t src = ov_row[ov_x_lut[static_cast<size_t>(dx)]];
                 if ((src >> 24) == 0u) continue;
@@ -396,8 +403,11 @@ void DesktopX11Context::present_native(const NativeFrameView& view) {
     if (!view.xrgb || view.width <= 0 || view.height <= 0) {
         std::fill(xrgb_buf.begin(), xrgb_buf.end(), view.margin_xrgb);
     } else {
+        const double dar = (view.display_dar > 0.0)
+                               ? std::max(view.display_dar, static_cast<double>(win_w) / static_cast<double>(win_h))
+                               : 0.0;
         const auto dst = video::compute_native_present_rect(
-            view.width, view.height, view.par_num, view.par_den, view.aspect_policy, win_w, win_h);
+            view.width, view.height, view.par_num, view.par_den, view.aspect_policy, win_w, win_h, dar);
         const int dst_w = dst.width;
         const int dst_h = dst.height;
         const int dst_x = dst.x;

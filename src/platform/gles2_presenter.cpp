@@ -628,13 +628,14 @@ void Gles2Presenter::draw_textured_quad(uint32_t tex,
                                           float v_clamp_max,
                                           bool bottom_left_origin,
                                           bool swizzle_rb,
-                                          bool force_opaque) {
+                                          bool force_opaque,
+                                          float v_min) {
     const float x0 = 2.0f * static_cast<float>(dst_x) / static_cast<float>(out_w) - 1.0f;
     const float x1 = 2.0f * static_cast<float>(dst_x + dst_w) / static_cast<float>(out_w) - 1.0f;
     const float y_top = 1.0f - 2.0f * static_cast<float>(dst_y) / static_cast<float>(out_h);
     const float y_bot = 1.0f - 2.0f * static_cast<float>(dst_y + dst_h) / static_cast<float>(out_h);
-    const float v_top = bottom_left_origin ? v_max : 0.0f;
-    const float v_bot = bottom_left_origin ? 0.0f : v_max;
+    const float v_top = bottom_left_origin ? v_max : v_min;
+    const float v_bot = bottom_left_origin ? v_min : v_max;
 
     const float verts[16] = {
         x0, y_top, 0.0f,  v_top,
@@ -737,8 +738,17 @@ void Gles2Presenter::draw_overlay(int out_w,
     gl_->glPixelStorei(kGlUnpackAlignment, 1);
     gl_->glTexSubImage2D(kGlTexture2d, 0, 0, 0, video::kLcdWidth, video::kLcdHeight,
                          kGlRgba, kGlUnsignedByte, overlay_argb);
-    draw_textured_quad(tex_overlay_, ov_x, ov_y, ov_w, ov_h, out_w, out_h,
-                       1.0f, 1.0f, 1.0f, 1.0f, false, true, false);
+    if (!dim_outside && out_h > ov_h) {
+        const int top_h = ov_h / 2;
+        const int bot_h = ov_h - top_h;
+        draw_textured_quad(tex_overlay_, ov_x, 0, ov_w, top_h, out_w, out_h,
+                           1.0f, 0.5f, 1.0f, 1.0f, false, true, false, 0.0f);
+        draw_textured_quad(tex_overlay_, ov_x, out_h - bot_h, ov_w, bot_h, out_w, out_h,
+                           1.0f, 1.0f, 1.0f, 1.0f, false, true, false, 0.5f);
+    } else {
+        draw_textured_quad(tex_overlay_, ov_x, ov_y, ov_w, ov_h, out_w, out_h,
+                           1.0f, 1.0f, 1.0f, 1.0f, false, true, false);
+    }
 }
 
 void Gles2Presenter::present_lcd(int out_w, int out_h, const uint16_t* rgb565) {
@@ -777,8 +787,11 @@ void Gles2Presenter::present_native(int out_w, int out_h, const NativeFrameView&
         gl_->glPixelStorei(kGlUnpackAlignment, 1);
         gl_->glTexSubImage2D(kGlTexture2d, 0, 0, 0, cw, ch, kGlRgba, kGlUnsignedByte, view.xrgb);
 
+        const double dar = (view.display_dar > 0.0)
+                               ? std::max(view.display_dar, static_cast<double>(out_w) / static_cast<double>(out_h))
+                               : 0.0;
         const auto dst = video::compute_native_present_rect(
-            view.width, view.height, view.par_num, view.par_den, view.aspect_policy, out_w, out_h);
+            view.width, view.height, view.par_num, view.par_den, view.aspect_policy, out_w, out_h, dar);
 
         draw_textured_quad(tex_native_, dst.x, dst.y, dst.width, dst.height, out_w, out_h,
                            1.0f, 1.0f, 1.0f, 1.0f, false, true, true);
@@ -795,8 +808,11 @@ void Gles2Presenter::present_hw(int out_w, int out_h, const NativeHwFrameView& v
     if (hw_tex_ && hw_tex_w_ > 0 && hw_tex_h_ > 0 && view.width > 0 && view.height > 0) {
         const int w = std::min(view.width, hw_tex_w_);
         const int h = std::min(view.height, hw_tex_h_);
+        const double dar = (view.display_dar > 0.0)
+                               ? std::max(view.display_dar, static_cast<double>(out_w) / static_cast<double>(out_h))
+                               : 0.0;
         const auto dst = video::compute_native_present_rect(
-            w, h, view.par_num, view.par_den, view.aspect_policy, out_w, out_h);
+            w, h, view.par_num, view.par_den, view.aspect_policy, out_w, out_h, dar);
 
         const float u_max = static_cast<float>(w) / static_cast<float>(hw_tex_w_);
         const float v_max = static_cast<float>(h) / static_cast<float>(hw_tex_h_);

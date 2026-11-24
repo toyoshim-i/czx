@@ -114,7 +114,8 @@ WindowSize compute_desktop_window_size(int src_w, int src_h,
 PresentRect compute_native_present_rect(int src_w, int src_h,
                                         int par_num, int par_den,
                                         AspectPolicy aspect_policy,
-                                        int out_w, int out_h) noexcept;
+                                        int out_w, int out_h,
+                                        double display_dar = 0.0) noexcept;
 
 const char* display_mode_name(DisplayMode mode) noexcept;
 const char* display_mode_short(DisplayMode mode) noexcept;

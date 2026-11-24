@@ -61,7 +61,8 @@ private:
                             float v_clamp_max,
                             bool bottom_left_origin,
                             bool swizzle_rb,
-                            bool force_opaque);
+                            bool force_opaque,
+                            float v_min = 0.0f);
     void draw_solid_rect(int x, int y, int w, int h, int out_w, int out_h, float r, float g, float b, float a);
     void draw_overlay(int out_w, int out_h, const uint32_t* overlay_argb, bool dim_outside);
 

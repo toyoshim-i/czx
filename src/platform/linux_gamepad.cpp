@@ -9,6 +9,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <sys/inotify.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -108,6 +109,7 @@ LinuxGamepadReader::~LinuxGamepadReader() {
 
 void LinuxGamepadReader::init() {
     cleanup();
+    init_inotify();
     scan_devices();
 }
 
@@ -115,7 +117,54 @@ void LinuxGamepadReader::cleanup() {
     for (int i = 0; i < static_cast<int>(kMaxGamepads); ++i) {
         close_slot(i, false);
     }
-    has_scanned_ = false;
+    if (inotify_fd_ >= 0) {
+        close(inotify_fd_);
+        inotify_fd_ = -1;
+        inotify_wd_ = -1;
+    }
+}
+
+void LinuxGamepadReader::init_inotify() {
+    inotify_fd_ = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (inotify_fd_ < 0) {
+        return;
+    }
+    inotify_wd_ = inotify_add_watch(inotify_fd_, "/dev/input", IN_CREATE | IN_ATTRIB | IN_MOVED_TO);
+    if (inotify_wd_ < 0) {
+        close(inotify_fd_);
+        inotify_fd_ = -1;
+    }
+}
+
+void LinuxGamepadReader::poll_inotify() {
+    if (inotify_fd_ < 0) return;
+    alignas(struct inotify_event) char buf[1024];
+    while (true) {
+        const ssize_t len = read(inotify_fd_, buf, sizeof(buf));
+        if (len <= 0) {
+            if (len < 0 && errno == EINTR) continue;
+            break;
+        }
+        ssize_t offset = 0;
+        while (offset + static_cast<ssize_t>(sizeof(struct inotify_event)) <= len) {
+            const auto* ev = reinterpret_cast<const struct inotify_event*>(buf + offset);
+            const ssize_t step = static_cast<ssize_t>(sizeof(struct inotify_event)) +
+                                 static_cast<ssize_t>(ev->len);
+            if (step <= 0 || offset + step > len) break;
+            if (ev->len > 0) {
+                int num = -1;
+                if (parse_event_number(ev->name, num)) {
+                    const int slot = find_free_slot();
+                    if (slot >= 0) {
+                        char path[64];
+                        std::snprintf(path, sizeof(path), "/dev/input/event%d", num);
+                        (void)try_open_device(path, slot);
+                    }
+                }
+            }
+            offset += step;
+        }
+    }
 }
 
 bool LinuxGamepadReader::is_rdev_open(dev_t rdev) const noexcept {
@@ -145,7 +194,7 @@ void LinuxGamepadReader::close_slot(int slot, bool log_disconnect) {
     p = PadDevice{};
 }
 
-void LinuxGamepadReader::sync_device_state(PadDevice& pad) {
+void LinuxGamepadReader::sync_device_state(PadDevice& pad, bool initial_open) {
     if (pad.fd < 0) return;
 
     unsigned long key_state[(KEY_MAX / (sizeof(unsigned long) * 8)) + 1] = {};
@@ -180,14 +229,14 @@ void LinuxGamepadReader::sync_device_state(PadDevice& pad) {
         pad.hat_y = 0;
     }
     if (ioctl(pad.fd, EVIOCGABS(ABS_X), &ai) >= 0 && ai.maximum > ai.minimum) {
-        pad.axis_x = AxisCalib{true, ai.minimum, ai.maximum, ai.flat,
-                               eval_gamepad_axis_dir(ai.value, ai.minimum, ai.maximum, ai.flat)};
+        const int dir = initial_open ? 0 : eval_gamepad_axis_dir(ai.value, ai.minimum, ai.maximum, ai.flat);
+        pad.axis_x = AxisCalib{true, ai.minimum, ai.maximum, ai.flat, dir};
     } else {
         pad.axis_x = AxisCalib{};
     }
     if (ioctl(pad.fd, EVIOCGABS(ABS_Y), &ai) >= 0 && ai.maximum > ai.minimum) {
-        pad.axis_y = AxisCalib{true, ai.minimum, ai.maximum, ai.flat,
-                               eval_gamepad_axis_dir(ai.value, ai.minimum, ai.maximum, ai.flat)};
+        const int dir = initial_open ? 0 : eval_gamepad_axis_dir(ai.value, ai.minimum, ai.maximum, ai.flat);
+        pad.axis_y = AxisCalib{true, ai.minimum, ai.maximum, ai.flat, dir};
     } else {
         pad.axis_y = AxisCalib{};
     }
@@ -237,7 +286,7 @@ bool LinuxGamepadReader::try_open_device(const std::string& path, int slot) {
     pad.path = path;
     pad.name = name_buf;
     pad.rdev = rdev;
-    sync_device_state(pad);
+    sync_device_state(pad, true);
 
     std::fprintf(stderr, "czx: gamepad P%d active on %s (%s)\n",
                  slot + 1, path.c_str(), name_buf);
@@ -245,9 +294,6 @@ bool LinuxGamepadReader::try_open_device(const std::string& path, int slot) {
 }
 
 void LinuxGamepadReader::scan_devices() {
-    last_scan_ = std::chrono::steady_clock::now();
-    has_scanned_ = true;
-
     if (find_free_slot() < 0) return;
 
     DIR* dir = opendir("/dev/input");
@@ -308,12 +354,7 @@ void LinuxGamepadReader::handle_ev_abs(PadDevice& pad, uint16_t code, int32_t va
 }
 
 void LinuxGamepadReader::poll(std::vector<GamepadState>& out_states) {
-    const auto now = std::chrono::steady_clock::now();
-    if (!has_scanned_ ||
-        (find_free_slot() >= 0 &&
-         std::chrono::duration_cast<std::chrono::milliseconds>(now - last_scan_).count() >= 1000)) {
-        scan_devices();
-    }
+    poll_inotify();
 
     struct input_event evs[64];
     for (int i = 0; i < static_cast<int>(kMaxGamepads); ++i) {
@@ -341,7 +382,7 @@ void LinuxGamepadReader::poll(std::vector<GamepadState>& out_states) {
                 } else if (ev.type == EV_ABS) {
                     handle_ev_abs(pad, ev.code, ev.value);
                 } else if (ev.type == EV_SYN && ev.code == SYN_DROPPED) {
-                    sync_device_state(pad);
+                    sync_device_state(pad, false);
                 }
             }
         }

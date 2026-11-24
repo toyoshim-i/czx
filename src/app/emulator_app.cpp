@@ -2881,14 +2881,15 @@ void EmulatorApp::handle_gamepads(const std::vector<czx::platform::GamepadState>
         (all_prev & czx::platform::CZX_PAD_META) == 0u) {
         handle_host_command(czx::input::HostCommand::ToggleMenu);
         if (!in_launcher_ && !menu_.is_open() && !browser_.is_open()) {
-            pad_suppress_game_ = {true, true};
+            pad_suppress_mask_[0] |= now[0];
+            pad_suppress_mask_[1] |= now[1];
         }
     }
 
     const bool ui_active = in_launcher_ || menu_.is_open() || browser_.is_open();
     if (ui_active) {
         for (size_t p = 0; p < 2u; ++p) {
-            pad_suppress_game_[p] = (now[p] != 0u);
+            pad_suppress_mask_[p] |= now[p];
             pad_buttons_[p] = 0u;
         }
         sync_guest_joysticks();
@@ -2943,13 +2944,15 @@ void EmulatorApp::handle_gamepads(const std::vector<czx::platform::GamepadState>
         if ((pressed & (czx::platform::CZX_PAD_SOUTH | czx::platform::CZX_PAD_START)) != 0u) {
             send_ui_key(CZX_KEY_ENTER, false);
             if (!in_launcher_ && !menu_.is_open() && !browser_.is_open()) {
-                pad_suppress_game_ = {true, true};
+                pad_suppress_mask_[0] |= now[0];
+                pad_suppress_mask_[1] |= now[1];
             }
         }
         if ((pressed & czx::platform::CZX_PAD_EAST) != 0u) {
             send_ui_key(CZX_KEY_ESC, false);
             if (!in_launcher_ && !menu_.is_open() && !browser_.is_open()) {
-                pad_suppress_game_ = {true, true};
+                pad_suppress_mask_[0] |= now[0];
+                pad_suppress_mask_[1] |= now[1];
             }
         }
         if ((pressed & czx::platform::CZX_PAD_WEST) != 0u) {
@@ -2964,15 +2967,8 @@ void EmulatorApp::handle_gamepads(const std::vector<czx::platform::GamepadState>
     } else {
         pad_ui_repeat_dir_ = 0u;
         for (size_t p = 0; p < 2u; ++p) {
-            if (pad_suppress_game_[p]) {
-                if (now[p] == 0u) {
-                    pad_suppress_game_[p] = false;
-                } else {
-                    pad_buttons_[p] = 0u;
-                    continue;
-                }
-            }
-            pad_buttons_[p] = now[p];
+            pad_suppress_mask_[p] &= now[p];
+            pad_buttons_[p] = now[p] & ~pad_suppress_mask_[p];
         }
         sync_guest_joysticks();
     }

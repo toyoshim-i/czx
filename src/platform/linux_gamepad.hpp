@@ -3,7 +3,6 @@
 #include "platform/platform.hpp"
 
 #include <array>
-#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -53,15 +52,17 @@ private:
     };
 
     std::array<PadDevice, kMaxGamepads> pads_{};
-    std::chrono::steady_clock::time_point last_scan_{};
-    bool has_scanned_ = false;
+    int inotify_fd_ = -1;
+    int inotify_wd_ = -1;
 
+    void init_inotify();
+    void poll_inotify();
     void scan_devices();
     bool is_rdev_open(dev_t rdev) const noexcept;
     int find_free_slot() const noexcept;
     bool try_open_device(const std::string& path, int slot);
     void close_slot(int slot, bool log_disconnect);
-    void sync_device_state(PadDevice& pad);
+    void sync_device_state(PadDevice& pad, bool initial_open);
     void handle_ev_key(PadDevice& pad, uint16_t code, int32_t value) noexcept;
     void handle_ev_abs(PadDevice& pad, uint16_t code, int32_t value) noexcept;
 };

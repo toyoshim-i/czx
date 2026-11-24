@@ -161,7 +161,7 @@ private:
     std::array<uint32_t, 2> pad_buttons_{0u, 0u};
     std::array<uint32_t, 2> prev_pad_buttons_{0u, 0u};
     std::array<uint32_t, 2> last_sent_joy_{0u, 0u};
-    std::array<bool, 2> pad_suppress_game_{false, false};
+    std::array<uint32_t, 2> pad_suppress_mask_{0u, 0u};
     uint64_t joy_core_epoch_ = 0;
     uint32_t pad_ui_repeat_dir_ = 0u;
     double pad_ui_repeat_timer_ = 0.0;

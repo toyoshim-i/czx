@@ -97,6 +97,7 @@ extern "C" {
 #define RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS 44
 #define RETRO_ENVIRONMENT_GET_VFS_INTERFACE (45 | RETRO_ENVIRONMENT_EXPERIMENTAL)
 #define RETRO_ENVIRONMENT_GET_LED_INTERFACE (46 | RETRO_ENVIRONMENT_EXPERIMENTAL)
+#define RETRO_ENVIRONMENT_GET_MIDI_INTERFACE (48 | RETRO_ENVIRONMENT_EXPERIMENTAL)
 #define RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE (47 | RETRO_ENVIRONMENT_EXPERIMENTAL)
 #define RETRO_ENVIRONMENT_GET_FASTFORWARDING (49 | RETRO_ENVIRONMENT_EXPERIMENTAL)
 #define RETRO_ENVIRONMENT_GET_TARGET_REFRESH_RATE (50 | RETRO_ENVIRONMENT_EXPERIMENTAL)
@@ -427,6 +428,20 @@ typedef void (RETRO_CALLCONV* retro_set_led_state_t)(int led, int state);
 
 struct retro_led_interface {
     retro_set_led_state_t set_led_state;
+};
+
+typedef bool (RETRO_CALLCONV* retro_midi_input_enabled_t)(void);
+typedef bool (RETRO_CALLCONV* retro_midi_output_enabled_t)(void);
+typedef bool (RETRO_CALLCONV* retro_midi_read_t)(uint8_t* byte);
+typedef bool (RETRO_CALLCONV* retro_midi_write_t)(uint8_t byte, uint32_t delta_time);
+typedef bool (RETRO_CALLCONV* retro_midi_flush_t)(void);
+
+struct retro_midi_interface {
+    retro_midi_input_enabled_t input_enabled;
+    retro_midi_output_enabled_t output_enabled;
+    retro_midi_read_t read;
+    retro_midi_write_t write;
+    retro_midi_flush_t flush;
 };
 
 struct retro_fastforwarding_override {

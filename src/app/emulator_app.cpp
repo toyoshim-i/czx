@@ -214,6 +214,7 @@ void EmulatorApp::ensure_data_dirs() {
     fs::create_directories(root / "roms" / "mz700", ec);
     fs::create_directories(root / "roms" / "fm7", ec);
     fs::create_directories(root / "roms" / "x68000", ec);
+    fs::create_directories(root / "roms" / "mt32", ec);
     fs::create_directories(root / "media" / "apple2", ec);
     fs::create_directories(root / "media" / "c64", ec);
     fs::create_directories(root / "media" / "pc88", ec);
@@ -265,6 +266,8 @@ void EmulatorApp::load_app_config() {
             parse_bool(vsync_enabled_);
         } else if (key == "adpcm_lpf") {
             parse_bool(adpcm_lpf_enabled_);
+        } else if (key == "mt32") {
+            parse_bool(mt32_enabled_);
         }
     }
 }
@@ -279,6 +282,7 @@ void EmulatorApp::save_app_config() const {
     bool updated_warp = false;
     bool updated_vsync = false;
     bool updated_adpcm_lpf = false;
+    bool updated_mt32 = false;
     {
         std::ifstream ifs(cfg_path);
         std::string line;
@@ -304,6 +308,9 @@ void EmulatorApp::save_app_config() const {
                 } else if (key == "adpcm_lpf") {
                     line = std::string("adpcm_lpf = ") + (adpcm_lpf_enabled_ ? "on" : "off");
                     updated_adpcm_lpf = true;
+                } else if (key == "mt32") {
+                    line = std::string("mt32 = ") + (mt32_enabled_ ? "on" : "off");
+                    updated_mt32 = true;
                 }
             }
             lines.push_back(std::move(line));
@@ -320,6 +327,9 @@ void EmulatorApp::save_app_config() const {
     }
     if (!updated_adpcm_lpf) {
         lines.emplace_back(std::string("adpcm_lpf = ") + (adpcm_lpf_enabled_ ? "on" : "off"));
+    }
+    if (!updated_mt32) {
+        lines.emplace_back(std::string("mt32 = ") + (mt32_enabled_ ? "on" : "off"));
     }
 
     std::ofstream ofs(cfg_path, std::ios::trunc);
@@ -1055,6 +1065,7 @@ void EmulatorApp::destroy_active_core() {
     if (platform_.display) {
         platform_.display->hw_release_fbo();
     }
+    mt32_.reset();
 }
 
 bool EmulatorApp::activate_core(int index, const std::string& initial_media, const std::string& initial_media2) {
@@ -1112,6 +1123,8 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media, con
     host.disable_tape_warp = !tape_warp_enabled_;
     host.initial_media2 = initial_media2.empty() ? nullptr : initial_media2.c_str();
     host.initial_region = (pre_id.rfind("vice", 0) == 0) ? c64_region_.c_str() : nullptr;
+    host.midi_output_enabled = cb_midi_output_enabled;
+    host.midi_write = cb_midi_write;
     if (cfg_.headless_frames == 0 && platform_.display &&
         platform_.display->supports_hw_gles2() &&
         (desktop_native_mode_ || platform_.display->is_fullscreen())) {
@@ -1149,7 +1162,9 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media, con
     const czx_core_desc_t* desc = core_api_->get_desc(core_api_);
     if (platform_.audio && desc && desc->audio_sample_rate > 0) {
         platform_.audio->init(desc->audio_sample_rate);
+        mt32_.set_sample_rate(desc->audio_sample_rate);
     }
+    mt32_.reset();
 
     const uint32_t dcount = (core_api_ && core_api_->get_drive_count) ? core_api_->get_drive_count(core_api_) : 1u;
     if (dcount >= 2u) {
@@ -1525,17 +1540,20 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
 
     bool is_c64 = false;
     bool is_msx68k = false;
+    bool is_np2kai = false;
     if (!targets_.empty() && pending_target_index_ >= 0 &&
         static_cast<size_t>(pending_target_index_) < targets_.size()) {
         const std::string& tid = targets_[static_cast<size_t>(pending_target_index_)].id;
         is_c64 = (tid == "c64");
         is_msx68k = (tid == "msx68k");
+        is_np2kai = (tid == "np2kai");
     } else if (menu_api && menu_api->get_desc) {
         const auto* desc = menu_api->get_desc(menu_api);
         if (desc && desc->id) {
             const std::string did(desc->id);
             is_c64 = (did.rfind("vice", 0) == 0);
             is_msx68k = (did == "msx68k");
+            is_np2kai = (did == "np2kai");
         }
     }
     if (is_c64) {
@@ -1549,6 +1567,17 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
     if (is_msx68k) {
         vm.has_adpcm_lpf_option = true;
         vm.adpcm_lpf_enabled = adpcm_lpf_enabled_;
+    }
+    if (is_msx68k || is_np2kai) {
+        vm.has_mt32_option = true;
+        if (!mt32_.has_roms()) {
+            vm.mt32_value_label = "No ROM";
+        } else if (!mt32_enabled_) {
+            vm.mt32_value_label = "Off";
+        } else {
+            const std::string lbl = mt32_.rom_label();
+            vm.mt32_value_label = !lbl.empty() ? lbl : "On";
+        }
     }
 
     const char* exts = (menu_api && menu_api->get_extensions) ? menu_api->get_extensions(menu_api) : nullptr;
@@ -2315,6 +2344,18 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
             force_present_ = true;
             show_toast(adpcm_lpf_enabled_ ? "ADPCM LPF: ON" : "ADPCM LPF: OFF");
             break;
+        case czx::video::MenuAction::ToggleMt32:
+            if (!mt32_.has_roms()) {
+                show_toast("PUT ROMS IN roms/mt32");
+            } else {
+                mt32_enabled_ = !mt32_enabled_;
+                mt32_.set_enabled(mt32_enabled_);
+                if (!mt32_enabled_) mt32_.reset();
+                save_app_config();
+                show_toast(mt32_enabled_ ? "MT-32: ON" : "MT-32: OFF");
+            }
+            force_present_ = true;
+            break;
         case czx::video::MenuAction::ToggleInputMode:
             handle_host_command(czx::input::HostCommand::ToggleInputMode);
             break;
@@ -2786,6 +2827,13 @@ void EmulatorApp::cb_video_frame(void* user_data, const czx_frame_t* frame) {
 void EmulatorApp::cb_audio_samples(void* user_data, const int16_t* stereo_s16, size_t frame_count) {
     auto* self = static_cast<EmulatorApp*>(user_data);
     if (!self || !self->platform_.audio) return;
+    if (stereo_s16 && frame_count > 0 && self->mt32_.has_roms() && self->mt32_.is_enabled()) {
+        const size_t sample_count = frame_count * 2u;
+        self->audio_mix_buf_.assign(stereo_s16, stereo_s16 + sample_count);
+        self->mt32_.mix_into(self->audio_mix_buf_.data(), frame_count);
+        self->platform_.audio->write_samples(self->audio_mix_buf_.data(), frame_count);
+        return;
+    }
     self->platform_.audio->write_samples(stereo_s16, frame_count);
 }
 
@@ -2827,6 +2875,20 @@ uintptr_t EmulatorApp::cb_hw_get_current_framebuffer(void* user_data) {
     auto* self = static_cast<EmulatorApp*>(user_data);
     if (!self || !self->platform_.display) return 0;
     return self->platform_.display->hw_get_current_framebuffer();
+}
+
+bool EmulatorApp::cb_midi_output_enabled(void* user_data) {
+    auto* self = static_cast<EmulatorApp*>(user_data);
+    return self && self->mt32_.has_roms() && self->mt32_.is_enabled();
+}
+
+bool EmulatorApp::cb_midi_write(void* user_data, uint8_t byte, uint32_t /*delta_time*/) {
+    auto* self = static_cast<EmulatorApp*>(user_data);
+    if (!self || !self->mt32_.has_roms() || !self->mt32_.is_enabled()) {
+        return false;
+    }
+    self->mt32_.write_midi_byte(byte);
+    return true;
 }
 
 void EmulatorApp::cb_host_command(void* user_data, czx::input::HostCommand cmd) {
@@ -3104,6 +3166,10 @@ int EmulatorApp::run() {
         start_scale_worker();
         if (platform_.audio) {
             platform_.audio->init(44100);
+        }
+        const std::string mt32_dir = (fs::path(cfg_.data_dir) / "roms" / "mt32").string();
+        if (mt32_.init(mt32_dir, 44100)) {
+            mt32_.set_enabled(mt32_enabled_);
         }
     }
 

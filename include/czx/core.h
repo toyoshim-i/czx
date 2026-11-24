@@ -155,6 +155,8 @@ typedef struct czx_host {
     void* (*hw_get_proc_address)(void* user_data, const char* sym);
     bool (*hw_ensure_fbo)(void* user_data, uint32_t width, uint32_t height, bool depth, bool stencil);
     uintptr_t (*hw_get_current_framebuffer)(void* user_data);
+    bool (*midi_output_enabled)(void* user_data);
+    bool (*midi_write)(void* user_data, uint8_t byte, uint32_t delta_time);
 } czx_host_t;
 
 typedef struct czx_core_desc {

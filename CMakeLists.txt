@@ -86,8 +86,17 @@ target_compile_options(czx_g800_upstream PRIVATE
     -Wno-implicit-function-declaration
 )
 
+# Built-in Roland MT-32 / CM-32L synthesizer library (munt / libmt32emu, LGPL-2.1, static)
+set(libmt32emu_SHARED OFF CACHE BOOL "" FORCE)
+set(libmt32emu_C_INTERFACE OFF CACHE BOOL "" FORCE)
+set(libmt32emu_CPP_INTERFACE ON CACHE BOOL "" FORCE)
+set(libmt32emu_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(libmt32emu_WITH_INTERNAL_RESAMPLER ON CACHE BOOL "" FORCE)
+add_subdirectory(third_party/munt/mt32emu EXCLUDE_FROM_ALL)
+
 # Core-agnostic runtime library (scaler, HUD, menu, browser, input router, cores, app)
 add_library(czx_runtime STATIC
+    src/audio/mt32_synth.cpp
     src/video/core_icons.cpp
     src/video/scaler.cpp
     src/video/font6x8.cpp
@@ -113,7 +122,7 @@ target_include_directories(czx_runtime PUBLIC
     PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/cmake/g800_czx
 )
-target_link_libraries(czx_runtime PUBLIC czx_warnings Threads::Threads ${CMAKE_DL_LIBS} PRIVATE czx_g800_upstream m)
+target_link_libraries(czx_runtime PUBLIC czx_warnings Threads::Threads ${CMAKE_DL_LIBS} PRIVATE czx_g800_upstream MT32Emu::mt32emu m)
 
 # Device Linux platform library (DRM + fbdev + evdev + dynamic ALSA)
 if(UNIX AND NOT APPLE)
@@ -228,4 +237,8 @@ if(CZX_BUILD_TESTS)
     add_executable(test_platform_gles2 tests/test_platform_gles2.cpp)
     target_link_libraries(test_platform_gles2 PRIVATE czx_platform)
     add_test(NAME test_platform_gles2 COMMAND test_platform_gles2)
+
+    add_executable(test_mt32 tests/test_mt32.cpp)
+    target_link_libraries(test_mt32 PRIVATE czx_runtime)
+    add_test(NAME test_mt32 COMMAND test_mt32)
 endif()

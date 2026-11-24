@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/launcher_state.hpp"
+#include "audio/mt32_synth.hpp"
 #include "core/core_registry.hpp"
 #include "input/input_router.hpp"
 #include "platform/platform.hpp"
@@ -148,7 +149,10 @@ private:
     bool show_activity_indicator_ = true;
     bool tape_warp_enabled_ = true;
     bool adpcm_lpf_enabled_ = true;
+    bool mt32_enabled_ = true;
     bool vsync_enabled_ = true;
+    czx::audio::Mt32Synth mt32_;
+    std::vector<int16_t> audio_mix_buf_;
     bool hw_render_active_ = false;
     bool hw_bottom_left_ = false;
     std::string c64_region_ = "auto";
@@ -241,6 +245,8 @@ private:
     static void* cb_hw_get_proc_address(void* user_data, const char* sym);
     static bool cb_hw_ensure_fbo(void* user_data, uint32_t width, uint32_t height, bool depth, bool stencil);
     static uintptr_t cb_hw_get_current_framebuffer(void* user_data);
+    static bool cb_midi_output_enabled(void* user_data);
+    static bool cb_midi_write(void* user_data, uint8_t byte, uint32_t delta_time);
     static void cb_host_command(void* user_data, czx::input::HostCommand cmd);
     static void cb_pan(void* user_data, int dx, int dy);
     static void cb_menu_key(void* user_data, const czx_key_event_t& ev);

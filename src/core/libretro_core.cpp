@@ -2610,6 +2610,17 @@ private:
                 }
                 return true;
 
+            case RETRO_ENVIRONMENT_GET_MIDI_INTERFACE:
+                if (data) {
+                    auto* mi = static_cast<retro_midi_interface*>(data);
+                    mi->input_enabled = cb_midi_input_enabled;
+                    mi->output_enabled = cb_midi_output_enabled;
+                    mi->read = cb_midi_read;
+                    mi->write = cb_midi_write;
+                    mi->flush = cb_midi_flush;
+                }
+                return true;
+
             case RETRO_ENVIRONMENT_GET_FASTFORWARDING:
                 if (data) {
                     *static_cast<bool*>(data) = host_fastforward_;
@@ -2701,6 +2712,30 @@ private:
         static_assert(sizeof(fn) == sizeof(addr));
         std::memcpy(&fn, &addr, sizeof(fn));
         return fn;
+    }
+
+    static bool RETRO_CALLCONV cb_midi_input_enabled() {
+        return false;
+    }
+
+    static bool RETRO_CALLCONV cb_midi_output_enabled() {
+        return g_active_instance && g_active_instance->host_.midi_output_enabled &&
+               g_active_instance->host_.midi_output_enabled(g_active_instance->host_.user_data);
+    }
+
+    static bool RETRO_CALLCONV cb_midi_read(uint8_t* /*byte*/) {
+        return false;
+    }
+
+    static bool RETRO_CALLCONV cb_midi_write(uint8_t byte, uint32_t delta_time) {
+        if (!g_active_instance || !g_active_instance->host_.midi_write) {
+            return false;
+        }
+        return g_active_instance->host_.midi_write(g_active_instance->host_.user_data, byte, delta_time);
+    }
+
+    static bool RETRO_CALLCONV cb_midi_flush() {
+        return true;
     }
 };
 

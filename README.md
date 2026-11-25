@@ -49,7 +49,7 @@ Holding `Alt` reveals the 5-slot icon bar aligned above physical keys `4 5 6 7 8
 
 ## Roland MT-32 / CM-32L MIDI (`munt`)
 
-`czx` includes a built-in background-threaded **Roland MT-32 / CM-32L** synthesizer (`munt` / `libmt32emu`) exposed to cores via `RETRO_ENVIRONMENT_GET_MIDI_INTERFACE` (used by [SHARP X68000 (`msx68k`)](docs/x68000.md#roland-mt-32--cm-32l-midi-munt--cz-6bm1) via CZ-6BM1 MIDI board emulation).
+`czx` includes a built-in background-threaded **Roland MT-32 / CM-32L** synthesizer (`munt` / `libmt32emu`) exposed to cores via `RETRO_ENVIRONMENT_GET_MIDI_INTERFACE` (used by [NEC PC-9801 (`np2kai`)](docs/pc98.md#roland-mt-32--cm-32l-midi-munt--mpu-pc98ii) via MPU-PC98II and [SHARP X68000 (`msx68k`)](docs/x68000.md#roland-mt-32--cm-32l-midi-munt--cz-6bm1) via CZ-6BM1 MIDI board emulation).
 
 - Place a user-supplied ROM pair in `~/czx/roms/mt32/` (case-insensitive; **CM-32L** is preferred if both are present):
   - `CM32L_CONTROL.ROM` + `CM32L_PCM.ROM`

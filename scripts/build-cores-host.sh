@@ -50,11 +50,16 @@ echo "Building NP2kai (libretro, x86_64)..."
     cd "$SRC_DIR/NP2kai/sdl"
     NP2KAI_HASH="$(git -C "$SRC_DIR/NP2kai" rev-parse --short HEAD 2>/dev/null || echo unknown)"
     make -f Makefile.libretro clean >/dev/null 2>&1 || true
+    MIDI_OBJ="$ROOT_DIR/build/np2kai_midi_bridge.o"
+    gcc -O3 -fPIC -D__LIBRETRO__ -I. -I.. -Ilibretro -Ilibretro/libretro-common/include \
+        -c "$ROOT_DIR/cmake/np2kai_czx/midi_bridge.c" -o "$MIDI_OBJ"
     CFLAGS="-O3 -Wno-incompatible-pointer-types -Wno-implicit-function-declaration" \
     CXXFLAGS="-O3" \
+    LDFLAGS="$MIDI_OBJ -Wl,--wrap=pccore_reset -Wl,--wrap=commng_create" \
     make -f Makefile.libretro -j"$(nproc)" platform=unix \
         NP2KAI_VERSION=rev.22 NP2KAI_HASH="$NP2KAI_HASH"
     cp -f "np2kai_libretro.so" "$OUT_DIR/"
+    rm -f "$MIDI_OBJ"
     make -f Makefile.libretro clean >/dev/null 2>&1 || true
 )
 

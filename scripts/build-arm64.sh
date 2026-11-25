@@ -72,13 +72,18 @@ docker run --rm \
 
         cd /workspace/third_party/NP2kai/sdl
         make -f Makefile.libretro clean >/dev/null 2>&1 || true
+        MIDI_OBJ="/workspace/build-arm64/np2kai_midi_bridge.o"
+        aarch64-linux-gnu-gcc -O3 -mcpu=cortex-a53 -fPIC -D__LIBRETRO__ \
+            -I. -I.. -Ilibretro -Ilibretro/libretro-common/include \
+            -c /workspace/cmake/np2kai_czx/midi_bridge.c -o "$MIDI_OBJ"
         CFLAGS="-O3 -mcpu=cortex-a53 -Wno-incompatible-pointer-types -Wno-implicit-function-declaration" \
         CXXFLAGS="-O3 -mcpu=cortex-a53" \
-        LDFLAGS="-static-libgcc -static-libstdc++" \
+        LDFLAGS="-static-libgcc -static-libstdc++ $MIDI_OBJ -Wl,--wrap=pccore_reset -Wl,--wrap=commng_create" \
         make -f Makefile.libretro -j"$NPROC" platform=unix \
             CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ AR=aarch64-linux-gnu-ar \
             NP2KAI_VERSION=rev.22 NP2KAI_HASH="$NP2KAI_HASH"
         cp -f "np2kai_libretro.so" /workspace/dist-arm64/cores/
+        rm -f "$MIDI_OBJ"
         make -f Makefile.libretro clean >/dev/null 2>&1 || true
 
         cd /workspace/third_party/blueMSX-libretro

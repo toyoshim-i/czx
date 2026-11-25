@@ -40,7 +40,6 @@ enum class MenuAction {
     ToggleMt32,
     ToggleInputMode,
     ResetCore,
-    Quit,
 };
 
 struct MenuViewModel {

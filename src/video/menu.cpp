@@ -12,14 +12,14 @@ namespace czx::video {
 namespace {
 
 enum class MenuRow {
-    Core = 0,
+    Drive1OrMediaOrPreset = 0,
+    Drive2OrEject,
+    Core,
     Variant,
     Region,
     AdpcmLpf,
     CrtWhine,
     Mt32,
-    Drive1OrMediaOrPreset,
-    Drive2OrEject,
     Display,
     Vsync,
     Aspect,
@@ -29,12 +29,13 @@ enum class MenuRow {
     TapeWarp,
     Input,
     ResetOrLaunch,
-    Quit,
 };
 
 std::vector<MenuRow> build_rows(const MenuViewModel& vm) {
     std::vector<MenuRow> rows;
-    rows.reserve(15);
+    rows.reserve(16);
+    rows.push_back(MenuRow::Drive1OrMediaOrPreset);
+    rows.push_back(MenuRow::Drive2OrEject);
     rows.push_back(MenuRow::Core);
     if (vm.has_variant_option) {
         rows.push_back(MenuRow::Variant);
@@ -51,8 +52,6 @@ std::vector<MenuRow> build_rows(const MenuViewModel& vm) {
     if (vm.has_mt32_option) {
         rows.push_back(MenuRow::Mt32);
     }
-    rows.push_back(MenuRow::Drive1OrMediaOrPreset);
-    rows.push_back(MenuRow::Drive2OrEject);
     if (vm.fullscreen_native) {
         rows.push_back(MenuRow::Aspect);
         if (vm.has_vsync_option) {
@@ -71,7 +70,6 @@ std::vector<MenuRow> build_rows(const MenuViewModel& vm) {
     rows.push_back(MenuRow::TapeWarp);
     rows.push_back(MenuRow::Input);
     rows.push_back(MenuRow::ResetOrLaunch);
-    rows.push_back(MenuRow::Quit);
     return rows;
 }
 
@@ -162,11 +160,6 @@ MenuAction OverlayMenu::handle_key(const czx_key_event_t& ev, const MenuViewMode
             if (ok) {
                 open_ = false;
                 return MenuAction::ResetCore;
-            }
-            return MenuAction::None;
-        case MenuRow::Quit:
-            if (ok) {
-                return MenuAction::Quit;
             }
             return MenuAction::None;
     }
@@ -324,10 +317,6 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
                             ? "Launch Core"
                             : (vm.core_is_launcher ? "Go Launcher"
                                                    : (vm.core_pending ? "Launch Core" : "Reset Core"));
-                val = "[Enter]";
-                break;
-            case MenuRow::Quit:
-                label = "Quit App";
                 val = "[Enter]";
                 break;
         }

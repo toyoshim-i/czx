@@ -646,7 +646,7 @@ void EmulatorApp::persist_launcher_state() const {
 
 std::vector<czx::video::LauncherItemView> EmulatorApp::build_launcher_items() const {
     std::vector<czx::video::LauncherItemView> items;
-    items.reserve(targets_.size());
+    items.reserve(targets_.size() + 1u);
     for (size_t i = 0; i < targets_.size(); ++i) {
         const auto& t = targets_[i];
         const TargetSavedState* st = find_target_saved_state(static_cast<int>(i));
@@ -689,6 +689,11 @@ std::vector<czx::video::LauncherItemView> EmulatorApp::build_launcher_items() co
             t.icon_key,
         });
     }
+    items.push_back(czx::video::LauncherItemView{
+        "QUIT",
+        "Exit czx",
+        "quit",
+    });
     return items;
 }
 
@@ -803,7 +808,7 @@ bool EmulatorApp::launch_target(int target_index,
     active_target_index_ = target_index;
     pending_target_index_ = target_index;
     launcher_index_ = target_index;
-    launcher_.set_selected(target_index, static_cast<int>(targets_.size()), false);
+    launcher_.set_selected(target_index, static_cast<int>(targets_.size()) + 1, false);
 
     if (cfg_.headless_frames == 0) {
         launcher_state_.last_target_id = t.id;
@@ -854,7 +859,7 @@ void EmulatorApp::enter_launcher(int focus_target_index) {
     const int n = static_cast<int>(targets_.size());
     if (n > 0) {
         launcher_index_ = ((focus_target_index >= 0) ? focus_target_index : 0) % n;
-        launcher_.set_selected(launcher_index_, n, false);
+        launcher_.set_selected(launcher_index_, n + 1, false);
         pending_target_index_ = launcher_index_;
         apply_target_prefs(launcher_index_);
         const auto& t = targets_[static_cast<size_t>(launcher_index_)];
@@ -866,7 +871,7 @@ void EmulatorApp::enter_launcher(int focus_target_index) {
     } else {
         launcher_index_ = 0;
         pending_target_index_ = -1;
-        launcher_.set_selected(0, 0, false);
+        launcher_.set_selected(0, 1, false);
     }
 
     sync_router_menu_open();
@@ -876,22 +881,34 @@ void EmulatorApp::enter_launcher(int focus_target_index) {
 }
 
 void EmulatorApp::handle_launcher_key(const czx_key_event_t& ev) {
-    if (!in_launcher_ || targets_.empty()) {
+    if (!in_launcher_) {
         return;
     }
-    const auto action = launcher_.handle_key(ev, static_cast<int>(targets_.size()));
+    const int n = static_cast<int>(targets_.size());
+    const int item_count = n + 1;  // 0..n-1 = machine targets, n = Quit
+    const auto action = launcher_.handle_key(ev, item_count);
+    const bool is_quit = (launcher_.selected() == n);
     switch (action) {
         case czx::video::LauncherAction::SelectionChanged:
             launcher_index_ = launcher_.selected();
-            pending_target_index_ = launcher_index_;
-            launcher_state_.last_target_id = targets_[static_cast<size_t>(launcher_index_)].id;
-            apply_target_prefs(launcher_index_);
+            if (!is_quit) {
+                pending_target_index_ = launcher_index_;
+                launcher_state_.last_target_id = targets_[static_cast<size_t>(launcher_index_)].id;
+                apply_target_prefs(launcher_index_);
+            }
             force_present_ = true;
             break;
         case czx::video::LauncherAction::BootSelected:
-            (void)launch_target(launcher_index_, true);
+            if (is_quit) {
+                running_ = false;
+            } else {
+                (void)launch_target(launcher_index_, true);
+            }
             break;
         case czx::video::LauncherAction::OpenMenu: {
+            if (is_quit) {
+                break;
+            }
             menu_from_launcher_ = true;
             pending_target_index_ = launcher_index_;
             pending_variant_index_ = resolve_target_variant_index(launcher_index_);
@@ -1412,7 +1429,7 @@ void EmulatorApp::cycle_core(int delta) {
             capture_current_prefs_to_target(pending_target_index_, false);
             pending_target_index_ = ((pending_target_index_ + delta) % n + n) % n;
             launcher_index_ = pending_target_index_;
-            launcher_.set_selected(launcher_index_, n, false);
+            launcher_.set_selected(launcher_index_, n + 1, false);
             apply_target_prefs(launcher_index_);
             const auto& t = targets_[static_cast<size_t>(launcher_index_)];
             pending_variant_index_ = resolve_target_variant_index(launcher_index_);
@@ -1858,12 +1875,12 @@ void EmulatorApp::handle_host_command(czx::input::HostCommand cmd) {
                     capture_current_prefs_to_target(launcher_index_, false);
                     persist_launcher_state();
                 } else {
+                    if (launcher_index_ < 0 || static_cast<size_t>(launcher_index_) >= targets_.size()) {
+                        break;
+                    }
                     menu_from_launcher_ = true;
                     pending_target_index_ = launcher_index_;
-                    pending_variant_index_ =
-                        (launcher_index_ >= 0 && static_cast<size_t>(launcher_index_) < targets_.size())
-                            ? resolve_target_variant_index(launcher_index_)
-                            : 0;
+                    pending_variant_index_ = resolve_target_variant_index(launcher_index_);
                     menu_.reset_cursor();
                     menu_.set_open(true);
                 }
@@ -1996,9 +2013,10 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
                 return;
             }
 
-            menu_.set_open(false);
+            menu_.set_open(true);
+            hud_.menu_open = true;
             sync_router_menu_open();
-            hud_.menu_open = false;
+            force_present_ = true;
             auto record_drive_d88 = [&](bool ok) {
                 if (!ok) return;
                 if (!path2.empty()) {
@@ -2074,6 +2092,10 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
                 } else {
                     show_toast("LOAD FAILED");
                 }
+                menu_.set_open(true);
+                hud_.menu_open = true;
+                sync_router_menu_open();
+                force_present_ = true;
                 return;
             }
 
@@ -2271,9 +2293,7 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
             } else if (!has_pending_core_change() && core_api_ && core_inst_ && core_api_->eject_media &&
                        core_api_->eject_media(core_inst_)) {
                 if (vm.is_tape_media) {
-                    menu_.set_open(false);
-                    sync_router_menu_open();
-                    hud_.menu_open = false;
+                    force_present_ = true;
                     show_toast("TAPE PLAY");
                 } else {
                     active_media1_.clear();
@@ -2398,9 +2418,6 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
                 core_api_->reset(core_inst_, true);
                 show_toast("CORE RESET");
             }
-            break;
-        case czx::video::MenuAction::Quit:
-            running_ = false;
             break;
         case czx::video::MenuAction::Close:
             if (in_launcher_ && menu_from_launcher_) {
@@ -3238,7 +3255,7 @@ int EmulatorApp::run() {
         }
         if (cfg_.headless_frames == 0 && active_target_index_ >= 0) {
             launcher_index_ = active_target_index_;
-            launcher_.set_selected(launcher_index_, static_cast<int>(targets_.size()), false);
+            launcher_.set_selected(launcher_index_, static_cast<int>(targets_.size()) + 1, false);
             launcher_state_.last_target_id = targets_[static_cast<size_t>(active_target_index_)].id;
             capture_current_prefs_to_target(active_target_index_, activated);
             persist_launcher_state();

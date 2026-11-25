@@ -63,6 +63,7 @@ void test_core_icons() {
         "msx68k",
         "g800",
         "test_pattern",
+        "quit",
     };
 
     const CoreIconSprite c64 = find_core_icon("c64");
@@ -101,6 +102,9 @@ void test_core_icons() {
     }
 
     const CoreIconSprite test_sp = find_core_icon("test_pattern");
+    const CoreIconSprite quit_sp = find_core_icon("quit");
+    CHECK(quit_sp.pixels != nullptr);
+    CHECK(quit_sp.pixels != test_sp.pixels);
     const CoreIconSprite unknown_sp = find_core_icon("nonexistent_core_id");
     CHECK(unknown_sp.pixels == test_sp.pixels);
     CHECK(unknown_sp.width == kCoreIconWidth);

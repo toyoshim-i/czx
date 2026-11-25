@@ -36,8 +36,8 @@ To bump the version cleanly for an update, update `"version"` in
 ## Testing on Cardputer Zero
 
 ```bash
-scp dist-arm64/czx_0.1.0_arm64.deb pi@<cardputer-zero-host>:/tmp/
-ssh pi@<cardputer-zero-host> "sudo dpkg -i /tmp/czx_0.1.0_arm64.deb"
+scp dist-arm64/czx_0.9.0_arm64.deb pi@<cardputer-zero-host>:/tmp/
+ssh pi@<cardputer-zero-host> "sudo dpkg -i /tmp/czx_0.9.0_arm64.deb"
 ```
 
 After installation, `czx` appears in APPLaunch and can also be launched from
@@ -50,9 +50,9 @@ Either submit through the CLI (`czdev`) or upload via the web developer portal:
 1. **Via `czdev` (from `CardputerZero/AppBuilder`)** — run in the repo root where `app-builder.json` lives:
    ```bash
    /path/to/CardputerZero-AppBuilder/czdev login
-   /path/to/CardputerZero-AppBuilder/czdev publish --deb dist-arm64/czx_0.1.0_arm64.deb
+   /path/to/CardputerZero-AppBuilder/czdev publish --deb dist-arm64/czx_0.9.0_arm64.deb
    ```
-2. **Via Web Portal** — drag `dist-arm64/czx_0.1.0_arm64.deb` onto
+2. **Via Web Portal** — drag `dist-arm64/czx_0.9.0_arm64.deb` onto
    <https://dev.cardputer.cc> and fill in the fields matching `app-builder.json`.
 
 > **First release policy:** Per `CardputerZero/packages` review rules, the

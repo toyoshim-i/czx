@@ -48,3 +48,8 @@ Bundled Libretro / Emulation Cores:
  - msx68k (msx68k_libretro.so):
      Upstream: https://github.com/toyoshim-i/msx68k
      License: Apache-2.0
+
+Bundled Audio Synthesizer Library:
+ - munt / libmt32emu (statically linked into czx; no Roland ROMs bundled):
+     Upstream: https://github.com/munt/munt
+     License: LGPL-2.1-or-later

@@ -105,5 +105,14 @@ else
     echo "cargo not found; skipping experimental msx68k core."
 fi
 
+echo "Building DOSBox Pure (libretro, x86_64)..."
+(
+    cd "$SRC_DIR/dosbox-pure"
+    make clean >/dev/null 2>&1 || true
+    make -j"$(nproc)"
+    cp -f "dosbox_pure_libretro.so" "$OUT_DIR/"
+    make clean >/dev/null 2>&1 || true
+)
+
 echo "Built host cores in $OUT_DIR:"
 ls -lh "$OUT_DIR"

@@ -17,6 +17,7 @@
 | [SHARP MZ-700](docs/mz700.md) | `emuz700` | **Yes** *(case-insensitive + aliases)* | `mz700/` | `mz700/` — `.mzt` `.mzf` `.m12` `.wav` `.tap` `.q20` `.d88` `.2d` |
 | [Fujitsu FM-7 / FM77AV / FM77AV40](docs/fm7.md) | `efm7`, `efm77av`, `efm77av40` | **Yes** *(case-insensitive)* | `fm7/` | `fm7/` — `.d77` `.77d` `.d88` `.2d` `.t77` `.wav` `.m3u` |
 | [SHARP X68000](docs/x68000.md) *(Experimental)* | `msx68k` | **Yes** *(case-insensitive)* | `x68000/` | `x68000/` — `.xdf` `.dim` `.2hd` `.2dd` `.hds` `.hdf` `.img` `.m3u` |
+| [IBM PC / DOS](docs/dos.md) | `dosbox_pure` | **No** *(optional `.sf2` in `dos/`)* | `dos/` | `dos/` — `.zip` `.dosz` `.exe` `.com` `.bat` `.img` `.ima` `.iso` `.cue` `.chd` |
 
 `czx` also includes a built-in `test_pattern` core (requires no ROMs or media) with interactive `280×192`, `560×192`, `320×200`, `384×272`, and `640×400` calibration patterns.
 
@@ -49,7 +50,7 @@ Holding `Alt` reveals the 5-slot icon bar aligned above physical keys `4 5 6 7 8
 
 ## Roland MT-32 / CM-32L MIDI (`munt`)
 
-`czx` includes a built-in background-threaded **Roland MT-32 / CM-32L** synthesizer (`munt` / `libmt32emu`) exposed to cores via `RETRO_ENVIRONMENT_GET_MIDI_INTERFACE` (used by [NEC PC-9801 (`np2kai`)](docs/pc98.md#roland-mt-32--cm-32l-midi-munt--mpu-pc98ii) via MPU-PC98II and [SHARP X68000 (`msx68k`)](docs/x68000.md#roland-mt-32--cm-32l-midi-munt--cz-6bm1) via CZ-6BM1 MIDI board emulation).
+`czx` includes a built-in background-threaded **Roland MT-32 / CM-32L** synthesizer (`munt` / `libmt32emu`) exposed to cores via `RETRO_ENVIRONMENT_GET_MIDI_INTERFACE` (used by [NEC PC-9801 (`np2kai`)](docs/pc98.md#roland-mt-32--cm-32l-midi-munt--mpu-pc98ii) via MPU-PC98II, [SHARP X68000 (`msx68k`)](docs/x68000.md#roland-mt-32--cm-32l-midi-munt--cz-6bm1) via CZ-6BM1, and [IBM PC / DOS (`dosbox_pure`)](docs/dos.md#roland-mt-32--cm-32l-midi-munt--mpu-401) via MPU-401).
 
 - Place a user-supplied ROM pair in `~/czx/roms/mt32/` (case-insensitive; **CM-32L** is preferred if both are present):
   - `CM32L_CONTROL.ROM` + `CM32L_PCM.ROM`

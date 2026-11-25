@@ -48,6 +48,9 @@ Bundled Libretro / Emulation Cores:
  - msx68k (msx68k_libretro.so):
      Upstream: https://github.com/toyoshim-i/msx68k
      License: Apache-2.0
+ - DOSBox Pure (dosbox_pure_libretro.so):
+     Upstream: https://codeberg.org/schelling/dosbox-pure
+     License: GPL-2.0-or-later
 
 Bundled Audio Synthesizer Library:
  - munt / libmt32emu (statically linked into czx; no Roland ROMs bundled):

@@ -82,6 +82,7 @@ int core_sort_priority(const std::string& id) {
     if (id == "efm77av") return 8;
     if (id == "efm77av40") return 9;
     if (id == "msx68k") return 10;
+    if (id == "dosbox_pure") return 11;
     return 15;
 }
 
@@ -148,6 +149,12 @@ std::vector<std::string> candidate_core_ids_for_media(const std::string& media_p
         append_unique(out, "msx68k");
         return out;
     }
+    if (ext == ".dosz" || ext == ".exe" || ext == ".com" || ext == ".bat" ||
+        ext == ".iso" || ext == ".chd" || ext == ".cue" || ext == ".ima" ||
+        ext == ".conf" || ext == ".jrc") {
+        append_unique(out, "dosbox_pure");
+        return out;
+    }
 
     // 2. Ambiguous extensions: check directory path hints first
     std::vector<std::string> dir_parts;
@@ -202,6 +209,12 @@ std::vector<std::string> candidate_core_ids_for_media(const std::string& media_p
     }
     if (has_dir_hint({"g800", "g850", "g815", "e200"})) {
         append_unique(out, "g800");
+    }
+    if (has_dir_hint({"dosbox", "ibmpc"}) ||
+        std::any_of(dir_parts.begin(), dir_parts.end(), [](const std::string& dp) {
+            return dp == "dos" || dp.rfind("dos-", 0) == 0 || dp.rfind("dos_", 0) == 0;
+        })) {
+        append_unique(out, "dosbox_pure");
     }
 
     // 3. Format-specific disambiguation / defaults
@@ -263,6 +276,9 @@ std::vector<std::string> candidate_core_ids_for_media(const std::string& media_p
     } else if (ext == ".img") {
         append_unique(out, "msx68k");
         append_unique(out, "np2kai");
+        append_unique(out, "dosbox_pure");
+    } else if (ext == ".zip" || ext == ".vhd") {
+        append_unique(out, "dosbox_pure");
     }
 
     return out;

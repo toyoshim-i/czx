@@ -111,6 +111,7 @@ std::string derive_display_name(const std::string& id, const char* lib_name) {
     if (id == "efm7") return "FM-7 (eFM-7)";
     if (id == "efm77av") return "FM77AV (eFM77AV)";
     if (id == "efm77av40") return "FM77AV40 (eFM77AV40)";
+    if (id == "dosbox_pure") return "IBM PC / DOS (DOSBox Pure)";
     if (lib_name && lib_name[0] != '\0') return lib_name;
     return id;
 }
@@ -576,6 +577,7 @@ public:
         is_emuz700_ = (loader_->id().find("emuz700") != std::string::npos);
         is_msx68k_ = (loader_->id().find("msx68k") != std::string::npos);
         is_efm7_ = (loader_->id() == "efm7" || loader_->id() == "efm77av" || loader_->id() == "efm77av40");
+        is_dosbox_pure_ = (loader_->id() == "dosbox_pure");
         if (const char* dd = std::getenv("CZX_DATA_DIR"); dd && dd[0] != '\0') {
             set_data_dir(dd);
         } else if (const char* home = std::getenv("HOME"); home && home[0] != '\0') {
@@ -705,6 +707,9 @@ public:
         } else if (is_efm7_) {
             system_dir_ = (fs::path(data_dir_) / "roms" / "fm7").string();
             fs::create_directories(system_dir_, ec);
+        } else if (is_dosbox_pure_) {
+            system_dir_ = (fs::path(data_dir_) / "roms" / "dos").string();
+            fs::create_directories(system_dir_, ec);
         } else {
             system_dir_ = (fs::path(data_dir_) / "roms").string();
             fs::create_directories(system_dir_, ec);
@@ -757,7 +762,8 @@ public:
             return false;
         }
 
-        if (is_vice_ || is_quasi88_ || is_np2kai_ || is_bluemsx_ || is_emuz700_ || is_msx68k_ || is_efm7_) {
+        if (is_vice_ || is_quasi88_ || is_np2kai_ || is_bluemsx_ || is_emuz700_ || is_msx68k_ || is_efm7_ ||
+            is_dosbox_pure_) {
             std::error_code ec;
             if (!fs::is_regular_file(path, ec)) {
                 return false;
@@ -1347,6 +1353,7 @@ private:
     bool is_emuz700_ = false;
     bool is_msx68k_ = false;
     bool is_efm7_ = false;
+    bool is_dosbox_pure_ = false;
 
     std::string data_dir_;
     std::string system_dir_;
@@ -1961,6 +1968,11 @@ private:
             options_["efm7_tape_turbo"] = host_.disable_tape_warp ? "disabled" : "enabled";
             options_["efm7_tape_sound"] = "disabled";
             options_["efm7_drive"] = "FDD0";
+        } else if (is_dosbox_pure_) {
+            options_["dosbox_pure_midi"] = "frontend";
+            options_["dosbox_pure_auto_mapping"] = "true";
+            options_["dosbox_pure_on_screen_keyboard"] = "false";
+            options_["dosbox_pure_bind_unused"] = "false";
         }
     }
 

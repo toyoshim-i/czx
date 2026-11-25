@@ -214,6 +214,7 @@ void EmulatorApp::ensure_data_dirs() {
     fs::create_directories(root / "roms" / "mz700", ec);
     fs::create_directories(root / "roms" / "fm7", ec);
     fs::create_directories(root / "roms" / "x68000", ec);
+    fs::create_directories(root / "roms" / "dos", ec);
     fs::create_directories(root / "roms" / "mt32", ec);
     fs::create_directories(root / "media" / "apple2", ec);
     fs::create_directories(root / "media" / "c64", ec);
@@ -224,6 +225,7 @@ void EmulatorApp::ensure_data_dirs() {
     fs::create_directories(root / "media" / "mz700", ec);
     fs::create_directories(root / "media" / "fm7", ec);
     fs::create_directories(root / "media" / "x68000", ec);
+    fs::create_directories(root / "media" / "dos", ec);
     fs::create_directories(root / "saves", ec);
     fs::create_directories(root / "config", ec);
 }
@@ -428,6 +430,15 @@ void EmulatorApp::sync_core_crt_whine_option() {
     const std::string id = (desc && desc->id) ? desc->id : "";
     if (id != "msx68k") return;
     core_api_->set_option(core_inst_, "msx68k_crt_whine", crt_whine_enabled_ ? "on" : "off");
+}
+
+void EmulatorApp::sync_core_mt32_option() {
+    if (!core_api_ || !core_inst_ || !core_api_->set_option || !core_api_->get_desc) return;
+    const czx_core_desc_t* desc = core_api_->get_desc(core_api_);
+    const std::string id = (desc && desc->id) ? desc->id : "";
+    if (id != "dosbox_pure") return;
+    const bool active = mt32_.has_roms() && mt32_enabled_;
+    core_api_->set_option(core_inst_, "dosbox_pure_midi", active ? "frontend" : "disabled");
 }
 
 void EmulatorApp::clear_activity_state() noexcept {
@@ -979,6 +990,9 @@ std::string EmulatorApp::default_media_dir_for_core(const czx_core_api_t* api) c
     if (id.find("msx68k") != std::string::npos && fs::is_directory(media_root / "x68000", ec)) {
         return (media_root / "x68000").string();
     }
+    if (id.find("dosbox") != std::string::npos && fs::is_directory(media_root / "dos", ec)) {
+        return (media_root / "dos").string();
+    }
     if (id.rfind("efm7", 0) == 0 && fs::is_directory(media_root / "fm7", ec)) {
         return (media_root / "fm7").string();
     }
@@ -1185,6 +1199,7 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media, con
     sync_core_gpu_scale_option();
     sync_core_adpcm_lpf_option();
     sync_core_crt_whine_option();
+    sync_core_mt32_option();
 
     if (core_api_->select_preset && core_api_->get_preset_count) {
         const uint32_t count = core_api_->get_preset_count(core_inst_);
@@ -1576,12 +1591,14 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
     bool is_c64 = false;
     bool is_msx68k = false;
     bool is_np2kai = false;
+    bool is_dosbox_pure = false;
     if (!targets_.empty() && pending_target_index_ >= 0 &&
         static_cast<size_t>(pending_target_index_) < targets_.size()) {
         const std::string& tid = targets_[static_cast<size_t>(pending_target_index_)].id;
         is_c64 = (tid == "c64");
         is_msx68k = (tid == "msx68k");
         is_np2kai = (tid == "np2kai");
+        is_dosbox_pure = (tid == "dosbox_pure");
     } else if (menu_api && menu_api->get_desc) {
         const auto* desc = menu_api->get_desc(menu_api);
         if (desc && desc->id) {
@@ -1589,6 +1606,7 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
             is_c64 = (did.rfind("vice", 0) == 0);
             is_msx68k = (did == "msx68k");
             is_np2kai = (did == "np2kai");
+            is_dosbox_pure = (did == "dosbox_pure");
         }
     }
     if (is_c64) {
@@ -1605,7 +1623,7 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
         vm.has_crt_whine_option = true;
         vm.crt_whine_enabled = crt_whine_enabled_;
     }
-    if (is_msx68k || is_np2kai) {
+    if (is_msx68k || is_np2kai || is_dosbox_pure) {
         vm.has_mt32_option = true;
         if (!mt32_.has_roms()) {
             vm.mt32_value_label = "No ROM";
@@ -2399,6 +2417,7 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
                 mt32_.set_enabled(mt32_enabled_);
                 if (!mt32_enabled_) mt32_.reset();
                 save_app_config();
+                sync_core_mt32_option();
                 show_toast(mt32_enabled_ ? "MT-32: ON" : "MT-32: OFF");
             }
             force_present_ = true;

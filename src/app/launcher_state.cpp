@@ -186,6 +186,9 @@ TargetDescriptor describe_core_id(const std::string& raw_id, const char* raw_nam
     if (id == "msx68k") {
         return {"msx68k", "X68000", "msx68k", "", "", "", "msx68k", "X68000 (msx68k)"};
     }
+    if (id == "dosbox_pure") {
+        return {"dosbox_pure", "IBM PC / DOS", "dosbox_pure", "", "", "", "DOSBox Pure", "IBM PC / DOS (DOSBox Pure)"};
+    }
     if (id == "g800") {
         return {"g800", "PC-G850", "g800", "", "", "", "g800", "PC-G850 (g800)"};
     }

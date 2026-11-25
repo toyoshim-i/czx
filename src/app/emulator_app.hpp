@@ -187,6 +187,7 @@ private:
     void sync_core_gpu_scale_option();
     void sync_core_adpcm_lpf_option();
     void sync_core_crt_whine_option();
+    void sync_core_mt32_option();
     void sync_router_menu_open();
     void clear_activity_state() noexcept;
     void poll_core_activity();

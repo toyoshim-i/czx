@@ -125,6 +125,16 @@ docker run --rm \
             --target-dir /workspace/build-arm64-msx68k
         cp -f /workspace/build-arm64-msx68k/aarch64-unknown-linux-gnu/release/libmsx68k_libretro.so \
             /workspace/dist-arm64/cores/msx68k_libretro.so
+
+        cd /workspace/third_party/dosbox-pure
+        make clean >/dev/null 2>&1 || true
+        make -j"$NPROC" \
+            CXX=aarch64-linux-gnu-g++ \
+            STRIP=aarch64-linux-gnu-strip \
+            MAKE_CPUFLAGS="-mcpu=cortex-a53 -DPAGESIZE=4096" \
+            LDFLAGS="-Wl,--gc-sections -fno-ident -O2 -shared -static-libgcc -static-libstdc++"
+        cp -f "dosbox_pure_libretro.so" /workspace/dist-arm64/cores/
+        make clean >/dev/null 2>&1 || true
     '
 
 "$ROOT_DIR/scripts/stage-bluemsx-data.sh" \

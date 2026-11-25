@@ -61,6 +61,7 @@ void test_core_icons() {
         "efm77av",
         "efm77av40",
         "msx68k",
+        "dosbox_pure",
         "g800",
         "test_pattern",
         "quit",
@@ -102,6 +103,9 @@ void test_core_icons() {
     }
 
     const CoreIconSprite test_sp = find_core_icon("test_pattern");
+    const CoreIconSprite dos_sp = find_core_icon("dosbox_pure");
+    CHECK(dos_sp.pixels != nullptr);
+    CHECK(dos_sp.pixels != test_sp.pixels);
     const CoreIconSprite quit_sp = find_core_icon("quit");
     CHECK(quit_sp.pixels != nullptr);
     CHECK(quit_sp.pixels != test_sp.pixels);

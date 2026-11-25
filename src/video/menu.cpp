@@ -12,9 +12,9 @@ namespace czx::video {
 namespace {
 
 enum class MenuRow {
-    Drive1OrMediaOrPreset = 0,
+    Core = 0,
+    Drive1OrMediaOrPreset,
     Drive2OrEject,
-    Core,
     Variant,
     Region,
     AdpcmLpf,
@@ -28,15 +28,16 @@ enum class MenuRow {
     AccessLed,
     TapeWarp,
     Input,
+    ReturnToLauncher,
     ResetOrLaunch,
 };
 
 std::vector<MenuRow> build_rows(const MenuViewModel& vm) {
     std::vector<MenuRow> rows;
-    rows.reserve(16);
+    rows.reserve(17);
+    rows.push_back(MenuRow::Core);
     rows.push_back(MenuRow::Drive1OrMediaOrPreset);
     rows.push_back(MenuRow::Drive2OrEject);
-    rows.push_back(MenuRow::Core);
     if (vm.has_variant_option) {
         rows.push_back(MenuRow::Variant);
     }
@@ -69,6 +70,9 @@ std::vector<MenuRow> build_rows(const MenuViewModel& vm) {
     rows.push_back(MenuRow::AccessLed);
     rows.push_back(MenuRow::TapeWarp);
     rows.push_back(MenuRow::Input);
+    if (!vm.from_launcher) {
+        rows.push_back(MenuRow::ReturnToLauncher);
+    }
     rows.push_back(MenuRow::ResetOrLaunch);
     return rows;
 }
@@ -156,6 +160,12 @@ MenuAction OverlayMenu::handle_key(const czx_key_event_t& ev, const MenuViewMode
             return MenuAction::ToggleTapeWarp;
         case MenuRow::Input:
             return MenuAction::ToggleInputMode;
+        case MenuRow::ReturnToLauncher:
+            if (ok) {
+                open_ = false;
+                return MenuAction::ReturnToLauncher;
+            }
+            return MenuAction::None;
         case MenuRow::ResetOrLaunch:
             if (ok) {
                 open_ = false;
@@ -312,11 +322,12 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
                 label = "Input";
                 val = input_label;
                 break;
+            case MenuRow::ReturnToLauncher:
+                label = "Return to Launcher";
+                val = "[Enter]";
+                break;
             case MenuRow::ResetOrLaunch:
-                label = vm.from_launcher
-                            ? "Launch Core"
-                            : (vm.core_is_launcher ? "Go Launcher"
-                                                   : (vm.core_pending ? "Launch Core" : "Reset Core"));
+                label = vm.from_launcher ? "Launch Core" : "Reset Core";
                 val = "[Enter]";
                 break;
         }

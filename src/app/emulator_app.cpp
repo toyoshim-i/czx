@@ -2406,6 +2406,9 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
         case czx::video::MenuAction::ToggleInputMode:
             handle_host_command(czx::input::HostCommand::ToggleInputMode);
             break;
+        case czx::video::MenuAction::ReturnToLauncher:
+            enter_launcher(active_target_index_);
+            break;
         case czx::video::MenuAction::ResetCore:
             if (in_launcher_ && menu_from_launcher_) {
                 capture_current_prefs_to_target(pending_target_index_, false);

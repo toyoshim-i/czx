@@ -231,33 +231,37 @@ void test_overlay_menu() {
     vm.tape_warp_enabled = true;
 
     menu.set_open(true);
-    // Row 0 = Load Media, 1 = Tape Play, 2 = Core, 3 = Display, 4 = Aspect,
-    // 5 = Borders, 6 = Margin, 7 = Access LED, 8 = Tape Warp, 9 = Input, 10 = Reset Core.
+    // Row 0 = Core, 1 = Load Media, 2 = Tape Play, 3 = Display, 4 = Aspect,
+    // 5 = Borders, 6 = Margin, 7 = Access LED, 8 = Tape Warp, 9 = Input,
+    // 10 = Return to Launcher, 11 = Reset Core.
+    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), vm) == czx::video::MenuAction::None);  // 1: Media
     CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), vm) == czx::video::MenuAction::OpenMediaBrowser);
     CHECK(menu.is_open());
-    for (int i = 0; i < 7; ++i) {
+    for (int i = 0; i < 6; ++i) {
         CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), vm) == czx::video::MenuAction::None);
-    }
+    }  // 7: Access LED
     CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), vm) == czx::video::MenuAction::ToggleActivityIndicator);
     CHECK(menu.handle_key(key_press(CZX_KEY_LEFT), vm) == czx::video::MenuAction::ToggleActivityIndicator);
     CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), vm) == czx::video::MenuAction::ToggleActivityIndicator);
 
-    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), vm) == czx::video::MenuAction::None);
+    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), vm) == czx::video::MenuAction::None);  // 8: Tape Warp
     CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), vm) == czx::video::MenuAction::ToggleTapeWarp);
     CHECK(menu.handle_key(key_press(CZX_KEY_LEFT), vm) == czx::video::MenuAction::ToggleTapeWarp);
     CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), vm) == czx::video::MenuAction::ToggleTapeWarp);
 
-    for (int i = 0; i < 2; ++i) {
-        CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), vm) == czx::video::MenuAction::None);
-    }  // 10: Reset Core (last item)
+    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), vm) == czx::video::MenuAction::None);  // 9: Input
+    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), vm) == czx::video::MenuAction::None);  // 10: Return to Launcher
+    CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), vm) == czx::video::MenuAction::ReturnToLauncher);
+    CHECK(!menu.is_open());
+
+    menu.set_open(true);
+    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), vm) == czx::video::MenuAction::None);  // 11: Reset Core (last item)
     CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), vm) == czx::video::MenuAction::ResetCore);
     CHECK(!menu.is_open());
 
-    // Reopen and wrap around from last item (10) back to Media (0), then move to Core (2).
+    // Reopen and wrap around from last item (11) back to Core (0).
     menu.set_open(true);
-    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), vm) == czx::video::MenuAction::None);  // 0: Media
-    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), vm) == czx::video::MenuAction::None);  // 1: Tape Play
-    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), vm) == czx::video::MenuAction::None);  // 2: Core
+    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), vm) == czx::video::MenuAction::None);  // 0: Core
     CHECK(menu.handle_key(key_press(CZX_KEY_LEFT), vm) == czx::video::MenuAction::CycleCorePrev);
     CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), vm) == czx::video::MenuAction::CycleCoreNext);
     CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), vm) == czx::video::MenuAction::None);
@@ -285,7 +289,7 @@ void test_overlay_menu() {
     menu.render(fb.data(), vm);
     CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
 
-    // Variant option (12 rows) right after Core row (index 3; C64 Accuracy + FM-7 Model).
+    // Variant option (13 rows) right after Drive2OrEject (index 3; C64 Accuracy + FM-7 Model).
     czx::video::MenuViewModel c64_vm{};
     c64_vm.core_name = "C64 (VICE x64)";
     c64_vm.has_variant_option = true;
@@ -303,9 +307,9 @@ void test_overlay_menu() {
     std::fill(fb.begin(), fb.end(), 0);
     menu.render(fb.data(), c64_vm);
     CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
-    for (int i = 0; i < 11; ++i) {
+    for (int i = 0; i < 10; ++i) {
         CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), c64_vm) == czx::video::MenuAction::None);
-    }  // wraps around to 2: Core
+    }  // wraps around to 0: Core
     CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), c64_vm) == czx::video::MenuAction::CycleCoreNext);
 
     czx::video::MenuViewModel fm7_vm{};
@@ -328,7 +332,7 @@ void test_overlay_menu() {
     menu.render(fb.data(), fm7_vm);
     CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
 
-    // Launcher pre-launch menu mode (from_launcher = true).
+    // Launcher pre-launch menu mode (from_launcher = true, omits Return to Launcher).
     czx::video::MenuViewModel launch_vm = c64_vm;
     launch_vm.from_launcher = true;
     menu.set_open(true);
@@ -336,8 +340,6 @@ void test_overlay_menu() {
     std::fill(fb.begin(), fb.end(), 0);
     menu.render(fb.data(), launch_vm);
     CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
-    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), launch_vm) == czx::video::MenuAction::None);  // 1: Clear Media
-    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), launch_vm) == czx::video::MenuAction::None);  // 2: Core
     CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), launch_vm) == czx::video::MenuAction::ApplyCore);
     CHECK(!menu.is_open());
     menu.set_open(true);
@@ -354,12 +356,10 @@ void test_overlay_menu() {
     std::fill(fb.begin(), fb.end(), 0);
     menu.render(fb.data(), ret_vm);
     CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
-    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), ret_vm) == czx::video::MenuAction::None);  // 1
-    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), ret_vm) == czx::video::MenuAction::None);  // 2: Core
     CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), ret_vm) == czx::video::MenuAction::ApplyCore);
     CHECK(!menu.is_open());
 
-    // Region + VSync + Variant (14 rows with scrolling).
+    // Region + VSync + Variant (15 rows with scrolling).
     czx::video::MenuViewModel c64_full_vm = c64_vm;
     c64_full_vm.has_region_option = true;
     c64_full_vm.region_value_label = "PAL (50Hz)";
@@ -376,16 +376,16 @@ void test_overlay_menu() {
     CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), c64_full_vm) == czx::video::MenuAction::None);  // 5: Display
     CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), c64_full_vm) == czx::video::MenuAction::None);  // 6: VSync
     CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), c64_full_vm) == czx::video::MenuAction::ToggleVsync);
-    for (int i = 0; i < 7; ++i) {
+    for (int i = 0; i < 8; ++i) {
         CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), c64_full_vm) == czx::video::MenuAction::None);
         std::fill(fb.begin(), fb.end(), 0);
         menu.render(fb.data(), c64_full_vm);
         CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
-    }  // 13: Reset Core -> wrap to 0: Media on next DOWN
+    }  // 14: Reset Core -> wrap to 0: Core on next DOWN
     CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), c64_full_vm) == czx::video::MenuAction::None);
     std::fill(fb.begin(), fb.end(), 0);
     menu.render(fb.data(), c64_full_vm);
-    CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), c64_full_vm) == czx::video::MenuAction::OpenMediaBrowser);
+    CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), c64_full_vm) == czx::video::MenuAction::CycleCoreNext);
 
     // Non-fullscreen menu keeps Display -> VSync -> Aspect (rows 3, 4, 5 for 1-variant no-region vm).
     czx::video::MenuViewModel non_fs_vm{};

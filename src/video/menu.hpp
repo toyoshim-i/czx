@@ -39,6 +39,7 @@ enum class MenuAction {
     ToggleCrtWhine,
     ToggleMt32,
     ToggleInputMode,
+    ReturnToLauncher,
     ResetCore,
 };
 

@@ -1,5 +1,5 @@
 [Desktop Entry]
-Name=CZX Emulator
+Name=CZX
 Exec=/usr/share/APPLaunch/bin/run-czx
 Icon=share/images/czx.png
 Terminal=false

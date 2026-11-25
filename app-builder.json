@@ -1,7 +1,7 @@
 {
   "package_name": "czx",
   "version": "0.9.0",
-  "app_name": "CZX Emulator",
+  "app_name": "CZX",
   "bin_name": "czx",
   "description": "Retro computer multi-emulator platform for Cardputer Zero",
   "store": {
@@ -32,11 +32,11 @@
     },
     "locales": {
       "en": {
-        "title": "CZX Emulator",
+        "title": "CZX",
         "summary": "Retro computer multi-emulator (Apple II, C64, PC-88/98, MSX, MZ, FM-7, X68k)"
       },
       "ja": {
-        "title": "CZX Emulator",
+        "title": "CZX",
         "summary": "レトロPCマルチエミュレータ (Apple II/C64/PC-88/PC-98/MSX/MZ-700/FM-7/X68000)"
       }
     }

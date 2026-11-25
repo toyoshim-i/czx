@@ -36,6 +36,7 @@ enum class MenuAction {
     ToggleActivityIndicator,
     ToggleTapeWarp,
     ToggleAdpcmLpf,
+    ToggleCrtWhine,
     ToggleMt32,
     ToggleInputMode,
     ResetCore,
@@ -54,6 +55,8 @@ struct MenuViewModel {
     std::string region_value_label;
     bool has_adpcm_lpf_option = false;
     bool adpcm_lpf_enabled = true;
+    bool has_crt_whine_option = false;
+    bool crt_whine_enabled = false;
     bool has_mt32_option = false;
     std::string mt32_value_label;
     std::string preset_or_media_label;

@@ -149,6 +149,7 @@ private:
     bool show_activity_indicator_ = true;
     bool tape_warp_enabled_ = true;
     bool adpcm_lpf_enabled_ = true;
+    bool crt_whine_enabled_ = false;
     bool mt32_enabled_ = true;
     bool vsync_enabled_ = true;
     czx::audio::Mt32Synth mt32_;
@@ -185,6 +186,7 @@ private:
     std::string resolve_target_region_id(int target_index) const;
     void sync_core_gpu_scale_option();
     void sync_core_adpcm_lpf_option();
+    void sync_core_crt_whine_option();
     void sync_router_menu_open();
     void clear_activity_state() noexcept;
     void poll_core_activity();

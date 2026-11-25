@@ -266,6 +266,8 @@ void EmulatorApp::load_app_config() {
             parse_bool(vsync_enabled_);
         } else if (key == "adpcm_lpf") {
             parse_bool(adpcm_lpf_enabled_);
+        } else if (key == "crt_whine") {
+            parse_bool(crt_whine_enabled_);
         } else if (key == "mt32") {
             parse_bool(mt32_enabled_);
         }
@@ -282,6 +284,7 @@ void EmulatorApp::save_app_config() const {
     bool updated_warp = false;
     bool updated_vsync = false;
     bool updated_adpcm_lpf = false;
+    bool updated_crt_whine = false;
     bool updated_mt32 = false;
     {
         std::ifstream ifs(cfg_path);
@@ -308,6 +311,9 @@ void EmulatorApp::save_app_config() const {
                 } else if (key == "adpcm_lpf") {
                     line = std::string("adpcm_lpf = ") + (adpcm_lpf_enabled_ ? "on" : "off");
                     updated_adpcm_lpf = true;
+                } else if (key == "crt_whine") {
+                    line = std::string("crt_whine = ") + (crt_whine_enabled_ ? "on" : "off");
+                    updated_crt_whine = true;
                 } else if (key == "mt32") {
                     line = std::string("mt32 = ") + (mt32_enabled_ ? "on" : "off");
                     updated_mt32 = true;
@@ -327,6 +333,9 @@ void EmulatorApp::save_app_config() const {
     }
     if (!updated_adpcm_lpf) {
         lines.emplace_back(std::string("adpcm_lpf = ") + (adpcm_lpf_enabled_ ? "on" : "off"));
+    }
+    if (!updated_crt_whine) {
+        lines.emplace_back(std::string("crt_whine = ") + (crt_whine_enabled_ ? "on" : "off"));
     }
     if (!updated_mt32) {
         lines.emplace_back(std::string("mt32 = ") + (mt32_enabled_ ? "on" : "off"));
@@ -411,6 +420,14 @@ void EmulatorApp::sync_core_adpcm_lpf_option() {
     const std::string id = (desc && desc->id) ? desc->id : "";
     if (id != "msx68k") return;
     core_api_->set_option(core_inst_, "msx68k_adpcm_lpf", adpcm_lpf_enabled_ ? "on" : "off");
+}
+
+void EmulatorApp::sync_core_crt_whine_option() {
+    if (!core_api_ || !core_inst_ || !core_api_->set_option || !core_api_->get_desc) return;
+    const czx_core_desc_t* desc = core_api_->get_desc(core_api_);
+    const std::string id = (desc && desc->id) ? desc->id : "";
+    if (id != "msx68k") return;
+    core_api_->set_option(core_inst_, "msx68k_crt_whine", crt_whine_enabled_ ? "on" : "off");
 }
 
 void EmulatorApp::clear_activity_state() noexcept {
@@ -1150,6 +1167,7 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media, con
     sync_core_region_option();
     sync_core_gpu_scale_option();
     sync_core_adpcm_lpf_option();
+    sync_core_crt_whine_option();
 
     if (core_api_->select_preset && core_api_->get_preset_count) {
         const uint32_t count = core_api_->get_preset_count(core_inst_);
@@ -1567,6 +1585,8 @@ czx::video::MenuViewModel EmulatorApp::build_menu_vm() const {
     if (is_msx68k) {
         vm.has_adpcm_lpf_option = true;
         vm.adpcm_lpf_enabled = adpcm_lpf_enabled_;
+        vm.has_crt_whine_option = true;
+        vm.crt_whine_enabled = crt_whine_enabled_;
     }
     if (is_msx68k || is_np2kai) {
         vm.has_mt32_option = true;
@@ -2343,6 +2363,13 @@ void EmulatorApp::handle_menu_key(const czx_key_event_t& ev) {
             sync_core_adpcm_lpf_option();
             force_present_ = true;
             show_toast(adpcm_lpf_enabled_ ? "ADPCM LPF: ON" : "ADPCM LPF: OFF");
+            break;
+        case czx::video::MenuAction::ToggleCrtWhine:
+            crt_whine_enabled_ = !crt_whine_enabled_;
+            save_app_config();
+            sync_core_crt_whine_option();
+            force_present_ = true;
+            show_toast(crt_whine_enabled_ ? "CRT WHINE: ON" : "CRT WHINE: OFF");
             break;
         case czx::video::MenuAction::ToggleMt32:
             if (!mt32_.has_roms()) {

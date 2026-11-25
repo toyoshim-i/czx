@@ -16,6 +16,7 @@ enum class MenuRow {
     Variant,
     Region,
     AdpcmLpf,
+    CrtWhine,
     Mt32,
     Drive1OrMediaOrPreset,
     Drive2OrEject,
@@ -43,6 +44,9 @@ std::vector<MenuRow> build_rows(const MenuViewModel& vm) {
     }
     if (vm.has_adpcm_lpf_option) {
         rows.push_back(MenuRow::AdpcmLpf);
+    }
+    if (vm.has_crt_whine_option) {
+        rows.push_back(MenuRow::CrtWhine);
     }
     if (vm.has_mt32_option) {
         rows.push_back(MenuRow::Mt32);
@@ -119,6 +123,8 @@ MenuAction OverlayMenu::handle_key(const czx_key_event_t& ev, const MenuViewMode
             return left ? MenuAction::CycleRegionPrev : MenuAction::CycleRegionNext;
         case MenuRow::AdpcmLpf:
             return MenuAction::ToggleAdpcmLpf;
+        case MenuRow::CrtWhine:
+            return MenuAction::ToggleCrtWhine;
         case MenuRow::Mt32:
             return MenuAction::ToggleMt32;
         case MenuRow::Drive1OrMediaOrPreset:
@@ -256,6 +262,10 @@ void OverlayMenu::render(uint16_t* fb_rgb565, const MenuViewModel& vm) const {
             case MenuRow::AdpcmLpf:
                 label = "ADPCM LPF";
                 val = vm.adpcm_lpf_enabled ? "On" : "Off";
+                break;
+            case MenuRow::CrtWhine:
+                label = "CRT Whine";
+                val = vm.crt_whine_enabled ? "On" : "Off";
                 break;
             case MenuRow::Mt32:
                 label = "MT-32";

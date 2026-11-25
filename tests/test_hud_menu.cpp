@@ -412,10 +412,12 @@ void test_overlay_menu() {
         CHECK(count_nonzero_in_rect(fb, 12, 3, 308, 167) > 1000);
     }
 
-    // X68000 ADPCM LPF + MT-32 toggle rows right after Core.
+    // X68000 ADPCM LPF + CRT Whine + MT-32 toggle rows right after Core.
     czx::video::MenuViewModel x68_vm = fs_vm;
     x68_vm.has_adpcm_lpf_option = true;
     x68_vm.adpcm_lpf_enabled = true;
+    x68_vm.has_crt_whine_option = true;
+    x68_vm.crt_whine_enabled = false;
     x68_vm.has_mt32_option = true;
     x68_vm.mt32_value_label = "CM-32L";
     menu.set_open(true);
@@ -424,7 +426,11 @@ void test_overlay_menu() {
     CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), x68_vm) == czx::video::MenuAction::ToggleAdpcmLpf);
     CHECK(menu.handle_key(key_press(CZX_KEY_LEFT), x68_vm) == czx::video::MenuAction::ToggleAdpcmLpf);
     CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), x68_vm) == czx::video::MenuAction::ToggleAdpcmLpf);
-    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), x68_vm) == czx::video::MenuAction::None);  // 2: MT-32
+    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), x68_vm) == czx::video::MenuAction::None);  // 2: CRT Whine
+    CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), x68_vm) == czx::video::MenuAction::ToggleCrtWhine);
+    CHECK(menu.handle_key(key_press(CZX_KEY_LEFT), x68_vm) == czx::video::MenuAction::ToggleCrtWhine);
+    CHECK(menu.handle_key(key_press(CZX_KEY_RIGHT), x68_vm) == czx::video::MenuAction::ToggleCrtWhine);
+    CHECK(menu.handle_key(key_press(CZX_KEY_DOWN), x68_vm) == czx::video::MenuAction::None);  // 3: MT-32
     CHECK(menu.handle_key(key_press(CZX_KEY_ENTER), x68_vm) == czx::video::MenuAction::ToggleMt32);
     std::fill(fb.begin(), fb.end(), 0);
     menu.render(fb.data(), x68_vm);

@@ -14,6 +14,7 @@ use msx68k_bus::{
     AdpcmLpf, AdpcmSampleEvent, CpuModel, CpuSpeedMode, Crtc, FrameBudget, MidiCallbackPort, Opm,
     OpmRegEvent, OpmSynthMode, VmConfig, X68kVm,
 };
+use msx68k_bus::adpcm::CrtWhineSynth;
 use msx68k_vicon::{
     FrameTimingStats, PixelFormat, RenderedFrame565, RendererConfig, ShaderGeneration,
     ViconCompositor,
@@ -347,6 +348,7 @@ struct CoreState {
     adpcm_events: Vec<AdpcmSampleEvent>,
     opm_mode: OpmAudioMode,
     adpcm_lpf: bool,
+    crt_whine: bool,
     opm_worker: Option<OpmOffloadWorker>,
     perf_log: bool,
     perf_detail: bool,
@@ -388,6 +390,8 @@ enum OpmWorkerReq {
         target_clock: u64,
         pcm_buf: Vec<i16>,
         adpcm_lpf: bool,
+        crt_whine: bool,
+        scanline_cycles: u32,
     },
     Reset,
     Shutdown,
@@ -426,6 +430,7 @@ impl OpmOffloadWorker {
                 let mut adpcm_lpf_l = AdpcmLpf::new();
                 let mut adpcm_lpf_r = AdpcmLpf::new();
                 let mut prev_lpf = true;
+                let mut crt_whine_synth = CrtWhineSynth::default();
 
                 while let Ok(req) = req_rx.recv() {
                     match req {
@@ -435,6 +440,8 @@ impl OpmOffloadWorker {
                             target_clock,
                             mut pcm_buf,
                             adpcm_lpf,
+                            crt_whine,
+                            scanline_cycles,
                         } => {
                             let t_start = Instant::now();
                             let event_count = events.len();
@@ -484,6 +491,11 @@ impl OpmOffloadWorker {
                                 pcm_buf.push((or >> 1).saturating_add(ar));
                                 synth_clock += 1;
                             }
+                            crt_whine_synth.mix_into_interleaved(
+                                crt_whine,
+                                scanline_cycles,
+                                &mut pcm_buf,
+                            );
                             let synth_ns = t_start.elapsed().as_nanos() as u64;
                             if resp_tx
                                 .send(OpmWorkerResp {
@@ -507,6 +519,7 @@ impl OpmOffloadWorker {
                             adpcm_lr = (0, 0);
                             adpcm_lpf_l.reset();
                             adpcm_lpf_r.reset();
+                            crt_whine_synth.reset();
                             synth_clock = 0;
                             let _ = resp_tx.send(OpmWorkerResp {
                                 pcm_buf: Vec::new(),
@@ -537,6 +550,8 @@ impl OpmOffloadWorker {
         adpcm_events: &mut Vec<AdpcmSampleEvent>,
         target_clock: u64,
         adpcm_lpf: bool,
+        crt_whine: bool,
+        scanline_cycles: u32,
     ) -> Option<(Vec<i16>, u64, usize, usize)> {
         let send_events = std::mem::take(events);
         let send_adpcm = std::mem::take(adpcm_events);
@@ -565,6 +580,8 @@ impl OpmOffloadWorker {
                 target_clock,
                 pcm_buf,
                 adpcm_lpf,
+                crt_whine,
+                scanline_cycles,
             })
             .is_ok()
         {
@@ -766,6 +783,8 @@ const VAR_OPM_THREAD_K: &[u8] = b"msx68k_opm_thread\0";
 const VAR_OPM_THREAD_V: &[u8] = b"OPM Synth Thread; offload|inline|off\0";
 const VAR_ADPCM_LPF_K: &[u8] = b"msx68k_adpcm_lpf\0";
 const VAR_ADPCM_LPF_V: &[u8] = b"ADPCM LPF; on|off\0";
+const VAR_CRT_WHINE_K: &[u8] = b"msx68k_crt_whine\0";
+const VAR_CRT_WHINE_V: &[u8] = b"CRT Whine (15kHz); off|on\0";
 
 fn log_msg(level: c_uint, msg: &str) {
     let cb = CALLBACKS.lock().ok().and_then(|c| c.log);
@@ -895,6 +914,13 @@ fn parse_adpcm_lpf_option(s: Option<&str>) -> bool {
     !matches!(
         s.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
         Some("off") | Some("0") | Some("false") | Some("disabled")
+    )
+}
+
+fn parse_crt_whine_option(s: Option<&str>) -> bool {
+    matches!(
+        s.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("on") | Some("1") | Some("true") | Some("enabled")
     )
 }
 
@@ -1505,13 +1531,16 @@ fn load_game_inner(game: *const RetroGameInfo) -> bool {
         &mut adpcm_events,
     );
     let adpcm_lpf = parse_adpcm_lpf_option(get_variable(VAR_ADPCM_LPF_K).as_deref());
+    let crt_whine = parse_crt_whine_option(get_variable(VAR_CRT_WHINE_K).as_deref());
     vm.set_adpcm_lpf_enabled(adpcm_lpf);
+    vm.set_crt_whine_enabled(crt_whine);
     log_msg(
         RETRO_LOG_INFO,
         &format!(
-            "YM2151 OPM synth mode: {} (ADPCM LPF: {})",
+            "YM2151 OPM synth mode: {} (ADPCM LPF: {}, CRT whine: {})",
             opm_mode.label(),
-            if adpcm_lpf { "on" } else { "off" }
+            if adpcm_lpf { "on" } else { "off" },
+            if crt_whine { "on" } else { "off" }
         ),
     );
 
@@ -1634,6 +1663,7 @@ fn load_game_inner(game: *const RetroGameInfo) -> bool {
         adpcm_events,
         opm_mode,
         adpcm_lpf,
+        crt_whine,
         opm_worker,
         perf_log,
         perf_detail,
@@ -1712,6 +1742,10 @@ pub unsafe extern "C" fn retro_set_environment(cb: Option<RetroEnvironmentFn>) {
             RetroVariable {
                 key: VAR_ADPCM_LPF_K.as_ptr() as *const c_char,
                 value: VAR_ADPCM_LPF_V.as_ptr() as *const c_char,
+            },
+            RetroVariable {
+                key: VAR_CRT_WHINE_K.as_ptr() as *const c_char,
+                value: VAR_CRT_WHINE_V.as_ptr() as *const c_char,
             },
             RetroVariable {
                 key: std::ptr::null(),
@@ -2047,6 +2081,7 @@ pub unsafe extern "C" fn retro_run() {
             let next_gpu_scale = parse_gpu_scale_option(get_variable(VAR_GPU_SCALE_K).as_deref());
             let next_opm_mode = resolve_opm_audio_mode();
             let next_adpcm_lpf = parse_adpcm_lpf_option(get_variable(VAR_ADPCM_LPF_K).as_deref());
+            let next_crt_whine = parse_crt_whine_option(get_variable(VAR_CRT_WHINE_K).as_deref());
             if let Ok(mut guard) = CORE_STATE.lock() {
                 if let Some(st) = guard.as_mut() {
                     if st.vm.speed_mode() != next_speed {
@@ -2057,6 +2092,10 @@ pub unsafe extern "C" fn retro_run() {
                     if st.adpcm_lpf != next_adpcm_lpf {
                         st.adpcm_lpf = next_adpcm_lpf;
                         st.vm.set_adpcm_lpf_enabled(next_adpcm_lpf);
+                    }
+                    if st.crt_whine != next_crt_whine {
+                        st.crt_whine = next_crt_whine;
+                        st.vm.set_crt_whine_enabled(next_crt_whine);
                     }
                     if st.opm_mode != next_opm_mode {
                         st.audio_opm.clear();
@@ -2155,8 +2194,16 @@ pub unsafe extern "C" fn retro_run() {
             st.adpcm_events.clear();
             let target_clock = st.vm.take_audio_events(&mut st.audio_events);
             st.vm.take_adpcm_events(&mut st.adpcm_events);
+            let scanline_cycles = st.vm.crtc_scanline_cycles();
             st.opm_worker.as_mut().and_then(|worker| {
-                worker.exchange(&mut st.audio_events, &mut st.adpcm_events, target_clock, st.adpcm_lpf)
+                worker.exchange(
+                    &mut st.audio_events,
+                    &mut st.adpcm_events,
+                    target_clock,
+                    st.adpcm_lpf,
+                    st.crt_whine,
+                    scanline_cycles,
+                )
             })
         } else {
             None

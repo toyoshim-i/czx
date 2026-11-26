@@ -224,7 +224,7 @@ build_for_abi() {
             OBJ_DIR="$ROOT_DIR/build-android-${abi}-emuz700" \
             OUT_SO="$out_dir/libemuz700_libretro.so" \
             CXX="$cxx_bin" \
-            OPT_FLAGS="-O3" \
+            OPT_FLAGS="-O3 -Wno-register" \
             GNU_UNIQUE_FLAG="" \
             EXTRA_LIBS="-lm -static-libstdc++"
         "$STRIP_BIN" --strip-unneeded "$out_dir/libemuz700_libretro.so"
@@ -241,7 +241,7 @@ build_for_abi() {
                 OBJ_DIR="$ROOT_DIR/build-android-${abi}-${fm7_name}" \
                 OUT_SO="$out_dir/lib${fm7_name}_libretro.so" \
                 CXX="$cxx_bin" \
-                OPT_FLAGS="-O3" \
+                OPT_FLAGS="-O3 -Wno-register" \
                 GNU_UNIQUE_FLAG="" \
                 EXTRA_LIBS="-lm -static-libstdc++"
             "$STRIP_BIN" --strip-unneeded "$out_dir/lib${fm7_name}_libretro.so"

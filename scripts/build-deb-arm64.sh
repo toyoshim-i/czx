@@ -152,7 +152,7 @@ Description: $PKG_SHORT_DESC
  Cardputer Zero (320x170 SPI LCD, TCA8418 I2C keyboard, and automatic
  fullscreen GLES2 HDMI output) supporting Apple II, Commodore 64,
  NEC PC-8801, NEC PC-9801, MSX/MSX2/MSX2+, SHARP PC-G850/MZ-700/X68000,
- and Fujitsu FM-7/FM77AV/FM77AV40. No copyrighted ROMs are bundled.
+ Fujitsu FM-7/FM77AV/FM77AV40, and IBM PC / DOS. No copyrighted ROMs are bundled.
 EOF
 
 cat >"$STAGE/DEBIAN/postinst" <<'EOF'

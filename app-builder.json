@@ -1,6 +1,6 @@
 {
   "package_name": "czx",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "app_name": "CZX",
   "bin_name": "czx",
   "description": "Retro computer multi-emulator platform for Cardputer Zero",

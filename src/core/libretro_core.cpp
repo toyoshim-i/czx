@@ -95,6 +95,9 @@ std::string derive_core_id(const std::string& so_path) {
     if (stem.size() > std::strlen(kSuffix) &&
         stem.compare(stem.size() - std::strlen(kSuffix), std::strlen(kSuffix), kSuffix) == 0) {
         stem.resize(stem.size() - std::strlen(kSuffix));
+        if (stem.size() > 3 && stem.compare(0, 3, "lib") == 0) {
+            stem.erase(0, 3);
+        }
     }
     return to_lower_copy(stem);
 }
@@ -883,6 +886,12 @@ public:
 
     void on_key(const czx_key_event_t& ev) {
         g_active_instance = this;
+        if (ev.native_key != 0u) {
+            if (ev.native_key < RETROK_LAST) {
+                emit_retro_key(ev.pressed, ev.native_key, ev.codepoint, map_mods_to_libretro(ev.mods));
+            }
+            return;
+        }
         const size_t key_idx = static_cast<size_t>(ev.key);
         if (key_idx >= active_keys_.size()) return;
 
@@ -2139,6 +2148,11 @@ private:
         }
         if (synthetic_shift_count_ > 0 && !phys_shift_held_) {
             emit_retro_key(false, RETROK_LSHIFT, 0, RETROKMOD_NONE);
+        }
+        for (size_t rk = 0; rk < retro_key_down_.size(); ++rk) {
+            if (retro_key_down_[rk]) {
+                emit_retro_key(false, static_cast<uint32_t>(rk), 0, RETROKMOD_NONE);
+            }
         }
         synthetic_shift_count_ = 0;
         phys_shift_held_ = false;

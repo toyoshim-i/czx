@@ -3224,7 +3224,9 @@ int EmulatorApp::run() {
     rcb.on_guest_joystick = cb_guest_joystick;
     rcb.on_guest_mouse = cb_guest_mouse;
     router_.set_callbacks(rcb);
+    router_.set_host_shortcuts_enabled(!cfg_.platform.disable_host_shortcuts);
 
+    hud_.suppress_alt_bar = cfg_.platform.suppress_alt_bar;
     hud_.display_mode = scaler_cfg_.mode;
     router_.set_native_pan_enabled(scaler_cfg_.mode == czx::video::DisplayMode::NativePan);
 
@@ -3314,9 +3316,22 @@ int EmulatorApp::run() {
     std::vector<czx::platform::GamepadState> raw_gamepads;
     int frames_done = 0;
 
-    while (running_ && !g_signal_quit) {
+    while (running_ && !g_signal_quit && !stop_requested_.load(std::memory_order_relaxed)) {
         if (platform_.display && platform_.display->should_close()) {
             break;
+        }
+        if (platform_.display && platform_.display->is_paused()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+            const auto paused_now = std::chrono::steady_clock::now();
+            last_tick = paused_now;
+            next_frame = paused_now + frame_period_for_fps(last_target_fps, 0.0);
+            fps_window_start = paused_now;
+            fps_window_frames = 0;
+            fps_initialized = false;
+            continue;
+        }
+        if (surface_resize_requested_.exchange(false, std::memory_order_relaxed)) {
+            force_present_ = true;
         }
 
         const auto now = std::chrono::steady_clock::now();
@@ -3354,6 +3369,16 @@ int EmulatorApp::run() {
         }
         for (const auto& ev : raw_events) {
             router_.handle_raw_key(ev);
+        }
+        {
+            std::deque<czx::input::HostCommand> cmds;
+            {
+                std::lock_guard<std::mutex> lock(host_cmd_mtx_);
+                cmds.swap(pending_host_cmds_);
+            }
+            for (const auto cmd : cmds) {
+                handle_host_command(cmd);
+            }
         }
         handle_gamepads(raw_gamepads, dt_sec);
         if (!in_launcher_ && !browser_.is_open() && !menu_.is_open()) {
@@ -3485,7 +3510,7 @@ int EmulatorApp::run() {
                     view.par_num = native_par_num_;
                     view.par_den = native_par_den_;
                     view.aspect_policy = scaler_cfg_.aspect_policy;
-                    view.display_dar = is_fullscreen_display() ? (16.0 / 9.0) : 0.0;
+                    view.display_dar = platform_.display ? platform_.display->physical_display_dar() : 0.0;
                     view.bottom_left_origin = hw_bottom_left_;
                     view.margin_xrgb = 0u;
                     if (overlay_active) {
@@ -3505,7 +3530,7 @@ int EmulatorApp::run() {
                     view.par_num = native_par_num_;
                     view.par_den = native_par_den_;
                     view.aspect_policy = scaler_cfg_.aspect_policy;
-                    view.display_dar = is_fullscreen_display() ? (16.0 / 9.0) : 0.0;
+                    view.display_dar = platform_.display ? platform_.display->physical_display_dar() : 0.0;
                     view.margin_xrgb =
                         (scaler_cfg_.margin_fill == czx::video::MarginFill::Auto) ? native_margin_xrgb_ : 0u;
                     if (overlay_active) {
@@ -3586,6 +3611,9 @@ int EmulatorApp::run() {
         }
 
         ++frames_done;
+        if (cfg_.headless_frames == 0) {
+            update_ui_snapshot();
+        }
         if (!menu_paused) {
             ++fps_window_frames;
         }
@@ -3644,6 +3672,48 @@ int EmulatorApp::run() {
         return 3;
     }
     return 0;
+}
+
+void EmulatorApp::enqueue_host_command(czx::input::HostCommand cmd) {
+    if (cmd == czx::input::HostCommand::None) return;
+    std::lock_guard<std::mutex> lock(host_cmd_mtx_);
+    pending_host_cmds_.push_back(cmd);
+}
+
+void EmulatorApp::request_stop() noexcept {
+    stop_requested_.store(true, std::memory_order_relaxed);
+}
+
+void EmulatorApp::notify_surface_resized() noexcept {
+    surface_resize_requested_.store(true, std::memory_order_relaxed);
+}
+
+void EmulatorApp::update_ui_snapshot() {
+    UiSnapshot snap{};
+    snap.in_launcher = in_launcher_;
+    snap.menu_open = menu_.is_open();
+    snap.browser_open = browser_.is_open();
+    snap.ui_active = snap.in_launcher || snap.menu_open || snap.browser_open;
+    if (!in_launcher_ && core_api_ && core_api_->get_desc) {
+        if (const czx_core_desc_t* d = core_api_->get_desc(core_api_)) {
+            if (d->id) snap.core_id = d->id;
+            if (d->name) snap.core_name = d->name;
+        }
+    }
+    snap.preset_index = static_cast<int>(preset_index_);
+    snap.aspect_policy = static_cast<int>(scaler_cfg_.aspect_policy);
+    snap.input_mode = static_cast<int>(router_.input_mode());
+    snap.activity_flags = activity_flags_;
+    snap.activity_tape_percent = activity_tape_percent_;
+    snap.activity_drive_mask = activity_drive_mask_;
+
+    std::lock_guard<std::mutex> lock(ui_snapshot_mtx_);
+    ui_snapshot_ = std::move(snap);
+}
+
+EmulatorApp::UiSnapshot EmulatorApp::get_ui_snapshot() const {
+    std::lock_guard<std::mutex> lock(ui_snapshot_mtx_);
+    return ui_snapshot_;
 }
 
 }  // namespace czx::app

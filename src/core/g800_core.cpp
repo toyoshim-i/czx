@@ -116,6 +116,7 @@ public:
             std::lock_guard<std::mutex> lock(mtx_);
             key_queue_.clear();
             held_keys_.fill(0);
+            held_native_keys_.fill(false);
             joy_state_ = 0;
         }
         (void)start_session(initial_media_, hard);
@@ -139,6 +140,7 @@ public:
             std::lock_guard<std::mutex> lock(mtx_);
             key_queue_.clear();
             held_keys_.fill(0);
+            held_native_keys_.fill(false);
             joy_state_ = 0;
         }
         return start_session(initial_media_, false);
@@ -172,6 +174,27 @@ public:
     }
 
     void on_key(const czx_key_event_t& ev) {
+        if (ev.native_key != 0u) {
+            const size_t nidx = static_cast<size_t>(ev.native_key);
+            if (nidx >= held_native_keys_.size()) return;
+            const uint16_t gkey = static_cast<uint16_t>(ev.native_key);
+            if (ev.pressed) {
+                if (ev.repeat) return;
+                std::lock_guard<std::mutex> lock(mtx_);
+                if (!held_native_keys_[nidx]) {
+                    held_native_keys_[nidx] = true;
+                    key_queue_.push_back({gkey, 1});
+                }
+            } else {
+                std::lock_guard<std::mutex> lock(mtx_);
+                if (held_native_keys_[nidx]) {
+                    held_native_keys_[nidx] = false;
+                    key_queue_.push_back({gkey, 0});
+                }
+            }
+            return;
+        }
+
         const size_t idx = static_cast<size_t>(ev.key);
         if (idx >= held_keys_.size()) return;
 
@@ -568,6 +591,7 @@ private:
 
     std::deque<QueuedKey> key_queue_;
     std::array<uint16_t, 256> held_keys_{};
+    std::array<bool, 256> held_native_keys_{};
     uint32_t joy_state_ = 0;
     std::string pending_media_;
     bool has_pending_media_ = false;

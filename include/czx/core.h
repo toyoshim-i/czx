@@ -139,6 +139,7 @@ typedef struct czx_key_event {
     bool repeat;
     uint32_t mods;
     uint32_t codepoint;
+    uint32_t native_key;
 } czx_key_event_t;
 
 typedef struct czx_host {

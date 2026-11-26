@@ -12,8 +12,10 @@
 #include "video/scaler.hpp"
 
 #include <array>
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <mutex>
 #include <string>
@@ -50,10 +52,30 @@ struct AppConfig {
 
 class EmulatorApp {
 public:
+    struct UiSnapshot {
+        bool ui_active = false;
+        bool in_launcher = false;
+        bool menu_open = false;
+        bool browser_open = false;
+        std::string core_id;
+        std::string core_name;
+        int preset_index = 0;
+        int aspect_policy = 0;
+        int input_mode = 0;
+        uint32_t activity_flags = 0;
+        int8_t activity_tape_percent = -1;
+        uint8_t activity_drive_mask = 0;
+    };
+
     explicit EmulatorApp(AppConfig cfg);
     ~EmulatorApp();
 
     int run();
+
+    void enqueue_host_command(czx::input::HostCommand cmd);
+    void request_stop() noexcept;
+    void notify_surface_resized() noexcept;
+    UiSnapshot get_ui_snapshot() const;
 
 private:
     AppConfig cfg_;
@@ -95,6 +117,12 @@ private:
     int last_src_h_ = 0;
     uint32_t preset_index_ = 0;
     bool running_ = true;
+    std::atomic<bool> stop_requested_{false};
+    std::atomic<bool> surface_resize_requested_{false};
+    mutable std::mutex ui_snapshot_mtx_;
+    UiSnapshot ui_snapshot_{};
+    std::mutex host_cmd_mtx_;
+    std::deque<czx::input::HostCommand> pending_host_cmds_;
     bool saw_nonblank_frame_ = false;
     uint32_t pending_drive_ = 0;
     struct DriveD88State {
@@ -225,6 +253,7 @@ private:
     void eject_drive_slot(uint32_t drive);
 
     void show_toast(const char* text);
+    void update_ui_snapshot();
     bool is_fullscreen_display() const noexcept;
     void set_display_mode(czx::video::DisplayMode mode);
     void set_desktop_scale(int scale);

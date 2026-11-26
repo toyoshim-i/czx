@@ -54,6 +54,7 @@ public:
     InputMode input_mode() const noexcept { return input_mode_; }
 
     void set_native_pan_enabled(bool enabled) noexcept { native_pan_enabled_ = enabled; }
+    void set_host_shortcuts_enabled(bool enabled) noexcept { host_shortcuts_enabled_ = enabled; }
 
     bool alt_held() const noexcept { return lalt_held_ || ralt_held_; }
     bool panning_held() const noexcept { return pan_up_ || pan_down_ || pan_left_ || pan_right_; }
@@ -72,6 +73,7 @@ private:
     InputMode input_mode_ = InputMode::Keyboard;
     bool menu_open_ = false;
     bool native_pan_enabled_ = false;
+    bool host_shortcuts_enabled_ = true;
 
     bool lshift_held_ = false;
     bool rshift_held_ = false;

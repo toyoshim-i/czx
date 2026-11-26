@@ -24,6 +24,8 @@ struct PlatformOptions {
     bool fullscreen = false;
     int max_fullscreen_height = 0;  // 0 = native desktop resolution; >0 caps fullscreen EGL buffer height for low-CMA GPUs
     bool prefer_rgb565 = false;     // Request 16-bit RGB565 window surface when supported
+    bool suppress_alt_bar = false;
+    bool disable_host_shortcuts = false;
 };
 
 struct NativeFrameView {
@@ -114,6 +116,8 @@ public:
     virtual bool is_vsync_enabled() const { return false; }
     virtual bool set_vsync_enabled(bool /*enabled*/) { return false; }
     virtual bool is_fullscreen() const { return false; }
+    virtual double physical_display_dar() const { return is_fullscreen() ? (16.0 / 9.0) : 0.0; }
+    virtual bool is_paused() const { return false; }
     virtual bool supports_hw_gles2() const { return false; }
     virtual bool hw_make_current() { return false; }
     virtual void* hw_get_proc_address(const char* /*sym*/) const { return nullptr; }

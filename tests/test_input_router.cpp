@@ -296,6 +296,31 @@ void test_volume_shortcuts() {
     CHECK(!has_asd(spy.guest_keys));
 }
 
+void test_native_key_and_disabled_shortcuts() {
+    Spy spy;
+    InputRouter router;
+    router.set_callbacks(RouterCallbacks{on_cmd, on_pan, on_menu, on_guest, on_joy, on_mouse, &spy});
+    router.set_host_shortcuts_enabled(false);
+    router.set_native_pan_enabled(true);
+
+    // Alt and Alt+8 pass straight through to guest when host shortcuts are disabled
+    router.handle_raw_key({CZX_KEY_LALT, true, false, 0, 0});
+    router.handle_raw_key({CZX_KEY_8, true, false, '8', 0});
+    router.handle_raw_key({CZX_KEY_8, false, false, 0, 0});
+    router.handle_raw_key({CZX_KEY_LALT, false, false, 0, 0});
+    CHECK(spy.cmds.empty());
+    CHECK(spy.guest_keys.size() == 4);
+    CHECK(spy.guest_keys[0].key == CZX_KEY_LALT);
+
+    // Direct native_key works even when CZX_KEY_NONE is used
+    spy.guest_keys.clear();
+    router.handle_raw_key({CZX_KEY_NONE, true, false, 0, 0x49});
+    router.handle_raw_key({CZX_KEY_NONE, false, false, 0, 0x49});
+    CHECK(spy.guest_keys.size() == 2);
+    CHECK(spy.guest_keys[0].key == CZX_KEY_NONE && spy.guest_keys[0].pressed && spy.guest_keys[0].native_key == 0x49);
+    CHECK(spy.guest_keys[1].key == CZX_KEY_NONE && !spy.guest_keys[1].pressed && spy.guest_keys[1].native_key == 0x49);
+}
+
 }  // namespace
 
 int main() {
@@ -305,6 +330,7 @@ int main() {
     test_fn_chords();
     test_mouse_mode();
     test_volume_shortcuts();
+    test_native_key_and_disabled_shortcuts();
     std::printf("test_input_router: all assertions passed\n");
     return 0;
 }

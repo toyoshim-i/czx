@@ -378,7 +378,7 @@ void render_hud(uint16_t* fb_rgb565, const HudState& hud, const ViewportLayout& 
         canvas.draw_text(bx + 7, by + 3, toast.c_str(), pack_rgb565(245, 250, 255));
     }
 
-    const bool show_alt_bar = hud.alt_held || hud.force_alt_bar;
+    const bool show_alt_bar = !hud.suppress_alt_bar && (hud.alt_held || hud.force_alt_bar);
     if (!show_alt_bar) return;
 
     // Amber "ALT +" folder tab perched on top-left of the y=144 bottom HUD bar.

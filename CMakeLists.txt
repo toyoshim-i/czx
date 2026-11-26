@@ -8,15 +8,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(CZX_TARGET_DEVICE "Force Cardputer Zero Linux device backend" OFF)
-set(CZX_BACKEND "AUTO" CACHE STRING "Platform backend: AUTO, DESKTOP_X11, DESKTOP_SDL2, DEVICE_LINUX")
-set_property(CACHE CZX_BACKEND PROPERTY STRINGS AUTO DESKTOP_X11 DESKTOP_SDL2 DEVICE_LINUX)
+set(CZX_BACKEND "AUTO" CACHE STRING "Platform backend: AUTO, DESKTOP_X11, DESKTOP_SDL2, DEVICE_LINUX, ANDROID")
+set_property(CACHE CZX_BACKEND PROPERTY STRINGS AUTO DESKTOP_X11 DESKTOP_SDL2 DEVICE_LINUX ANDROID)
 option(CZX_BUILD_DEVICE_LIB_CHECK "Compile device platform sources on Linux hosts for verification" ON)
 option(CZX_BUILD_TESTS "Build unit tests" ON)
 
 if(CZX_TARGET_DEVICE)
     set(CZX_SELECTED_BACKEND "DEVICE_LINUX")
 elseif(CZX_BACKEND STREQUAL "AUTO")
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|arm)")
+    if(ANDROID)
+        set(CZX_SELECTED_BACKEND "ANDROID")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|arm)")
         set(CZX_SELECTED_BACKEND "DEVICE_LINUX")
     else()
         find_package(PkgConfig QUIET)
@@ -125,7 +127,7 @@ target_include_directories(czx_runtime PUBLIC
 target_link_libraries(czx_runtime PUBLIC czx_warnings Threads::Threads ${CMAKE_DL_LIBS} PRIVATE czx_g800_upstream MT32Emu::mt32emu m)
 
 # Device Linux platform library (DRM + fbdev + evdev + dynamic ALSA)
-if(UNIX AND NOT APPLE)
+if(UNIX AND NOT APPLE AND NOT ANDROID AND NOT CZX_SELECTED_BACKEND STREQUAL "ANDROID")
     if(CZX_BUILD_DEVICE_LIB_CHECK OR CZX_SELECTED_BACKEND STREQUAL "DEVICE_LINUX")
         add_library(czx_device_platform STATIC
             src/platform/gles2_presenter.cpp
@@ -147,7 +149,11 @@ if(UNIX AND NOT APPLE)
 endif()
 
 # Selected platform backend library
-if(CZX_SELECTED_BACKEND STREQUAL "DEVICE_LINUX")
+if(CZX_SELECTED_BACKEND STREQUAL "ANDROID")
+    add_library(czx_platform INTERFACE)
+    target_link_libraries(czx_platform INTERFACE czx_runtime)
+    target_compile_definitions(czx_platform INTERFACE CZX_BACKEND_ANDROID=1)
+elseif(CZX_SELECTED_BACKEND STREQUAL "DEVICE_LINUX")
     add_library(czx_platform INTERFACE)
     target_link_libraries(czx_platform INTERFACE czx_device_platform)
     target_compile_definitions(czx_platform INTERFACE CZX_BACKEND_DEVICE_LINUX=1)
@@ -196,10 +202,12 @@ else()
     message(FATAL_ERROR "Unknown CZX_BACKEND: ${CZX_SELECTED_BACKEND}")
 endif()
 
-add_executable(czx src/main.cpp)
-target_link_libraries(czx PRIVATE czx_runtime czx_platform)
+if(NOT CZX_SELECTED_BACKEND STREQUAL "ANDROID")
+    add_executable(czx src/main.cpp)
+    target_link_libraries(czx PRIVATE czx_runtime czx_platform)
+endif()
 
-if(CZX_BUILD_TESTS)
+if(CZX_BUILD_TESTS AND NOT CZX_SELECTED_BACKEND STREQUAL "ANDROID")
     enable_testing()
 
     add_executable(test_scaler tests/test_scaler.cpp)

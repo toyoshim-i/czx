@@ -329,7 +329,12 @@ CoreRegistry CoreRegistry::create_default(const std::string& explicit_core_dir,
         const std::string sb = fs::path(b).stem().string();
         auto strip = [](std::string s) {
             constexpr const char* kSuf = "_libretro";
-            if (s.size() > 9 && s.compare(s.size() - 9, 9, kSuf) == 0) s.resize(s.size() - 9);
+            if (s.size() > 9 && s.compare(s.size() - 9, 9, kSuf) == 0) {
+                s.resize(s.size() - 9);
+                if (s.size() > 3 && s.compare(0, 3, "lib") == 0) {
+                    s.erase(0, 3);
+                }
+            }
             return s;
         };
         const std::string ia = strip(sa);

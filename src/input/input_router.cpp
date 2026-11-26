@@ -398,21 +398,23 @@ uint32_t InputRouter::resolve_codepoint(const RawKeyEvent& raw) const noexcept {
 }
 
 void InputRouter::handle_raw_key(const RawKeyEvent& raw) {
-    if (raw.key == CZX_KEY_NONE) return;
+    if (raw.key == CZX_KEY_NONE && raw.native_key == 0u) return;
 
     update_modifier(raw.key, raw.pressed);
 
-    // Alt itself stays purely a host modifier so retro PCs never get stray Alt state.
-    if (raw.key == CZX_KEY_LALT || raw.key == CZX_KEY_RALT) {
-        return;
-    }
+    if (host_shortcuts_enabled_) {
+        // Alt itself stays purely a host modifier so retro PCs never get stray Alt state.
+        if (raw.key == CZX_KEY_LALT || raw.key == CZX_KEY_RALT) {
+            return;
+        }
 
-    if (handle_alt_shortcut(raw)) {
-        return;
-    }
+        if (handle_alt_shortcut(raw)) {
+            return;
+        }
 
-    if (handle_volume_shortcut(raw)) {
-        return;
+        if (handle_volume_shortcut(raw)) {
+            return;
+        }
     }
 
     if (menu_open_) {
@@ -426,12 +428,13 @@ void InputRouter::handle_raw_key(const RawKeyEvent& raw) {
             ev.repeat = raw.repeat;
             ev.mods = modifiers();
             ev.codepoint = resolve_codepoint(raw);
+            ev.native_key = raw.native_key;
             cb_.on_menu_key(cb_.user_data, ev);
         }
         return;
     }
 
-    if (handle_pan_key(raw.key, raw.pressed, raw.repeat)) {
+    if (host_shortcuts_enabled_ && handle_pan_key(raw.key, raw.pressed, raw.repeat)) {
         consume_if_tracked_release(raw.key, raw.pressed);
         return;
     }
@@ -440,7 +443,7 @@ void InputRouter::handle_raw_key(const RawKeyEvent& raw) {
         return;
     }
 
-    const RawKeyEvent eff = apply_fn_chord(raw);
+    const RawKeyEvent eff = host_shortcuts_enabled_ ? apply_fn_chord(raw) : raw;
 
     if (handle_joystick_key(eff.key, eff.pressed)) {
         return;
@@ -457,6 +460,7 @@ void InputRouter::handle_raw_key(const RawKeyEvent& raw) {
         ev.repeat = eff.repeat;
         ev.mods = modifiers();
         ev.codepoint = resolve_codepoint(eff);
+        ev.native_key = eff.native_key;
         cb_.on_guest_key(cb_.user_data, ev);
     }
 }

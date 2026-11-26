@@ -11,6 +11,7 @@ struct RawKeyEvent {
     bool pressed = false;
     bool repeat = false;
     uint32_t codepoint = 0;  // 0 = compute from key + modifiers if printable
+    uint32_t native_key = 0; // 0 = map from key/codepoint, non-zero = direct core physical keycode
 };
 
 }  // namespace czx::input

@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         val dataDir = File(filesDir, "czx").apply { mkdirs() }.absolutePath
+        seedBluemsxOpenData(File(dataDir, "roms/bluemsx"))
         val coreDir = applicationInfo.nativeLibraryDir
         CzxNative.nativeStart(dataDir, coreDir, "")
 
@@ -302,5 +303,31 @@ class MainActivity : ComponentActivity() {
             }
         }
         return uri.lastPathSegment?.substringAfterLast('/')
+    }
+
+    private fun seedBluemsxOpenData(dstRoot: File) {
+        val hasCbios = File(dstRoot, "Machines/MSX2+ - C-BIOS/cbios_main_msx2+.rom").isFile
+        val hasDb = File(dstRoot, "Databases/msxromdb.xml").isFile
+        if (hasCbios && hasDb) return
+        copyAssetTree("bluemsx-data/Databases", File(dstRoot, "Databases"))
+        copyAssetTree("bluemsx-data/Machines", File(dstRoot, "Machines"))
+    }
+
+    private fun copyAssetTree(assetPath: String, dst: File) {
+        val children = runCatching { assets.list(assetPath) }.getOrNull()
+        if (children != null && children.isNotEmpty()) {
+            dst.mkdirs()
+            children.forEach { name ->
+                copyAssetTree("$assetPath/$name", File(dst, name))
+            }
+            return
+        }
+        if (dst.exists()) return
+        runCatching {
+            assets.open(assetPath).use { input ->
+                dst.parentFile?.mkdirs()
+                dst.outputStream().use { output -> input.copyTo(output) }
+            }
+        }
     }
 }

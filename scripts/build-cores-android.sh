@@ -130,10 +130,10 @@ build_for_abi() {
             local midi_obj="$ROOT_DIR/build-android-${abi}-np2kai_midi_bridge.o"
             "$cc_bin" -O3 -fPIC -D__LIBRETRO__ -I. -I.. -Ilibretro -Ilibretro/libretro-common/include \
                 -c "$ROOT_DIR/cmake/np2kai_czx/midi_bridge.c" -o "$midi_obj"
-            CFLAGS="-O3 -Wno-incompatible-pointer-types -Wno-implicit-function-declaration -Wno-unknown-warning-option" \
-            CXXFLAGS="-O3 -Wno-unknown-warning-option" \
+            CFLAGS="-O3 -fsigned-char -Wno-incompatible-pointer-types -Wno-implicit-function-declaration -Wno-unknown-warning-option" \
+            CXXFLAGS="-O3 -fno-rtti -Wno-unknown-warning-option" \
             LDFLAGS="$midi_obj -Wl,--wrap=pccore_reset -Wl,--wrap=commng_create -lm -static-libstdc++" \
-            make -f Makefile.libretro -j"$NPROC" platform=unix \
+            make -f Makefile.libretro -j"$NPROC" platform=unix HAS_GCC=0 \
                 CC="$cc_bin" CXX="$cxx_bin" AR="$AR_BIN" \
                 NP2KAI_VERSION=rev.22 NP2KAI_HASH="$np2_hash"
             cp -f "np2kai_libretro.so" "$out_dir/libnp2kai_libretro.so"

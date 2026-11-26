@@ -2,6 +2,7 @@ package com.czx.android.keyboard
 
 import android.content.Context
 import androidx.compose.ui.graphics.Color
+import org.json.JSONArray
 import org.json.JSONObject
 
 enum class KeyKind {
@@ -114,10 +115,15 @@ data class KeySpec(
     val sub: String = "",
     val style: KeyStyle = KeyStyle.ALPHA,
     val kind: KeyKind = KeyKind.NORMAL,
-) {
-    val isModifier: Boolean
-        get() = kind != KeyKind.NORMAL
-}
+)
+
+data class KeyboardPage(
+    val id: String,
+    val label: String,
+    val totalWidthU: Float,
+    val totalHeightU: Float,
+    val keys: List<KeySpec>,
+)
 
 data class KeyboardLayout(
     val id: String,
@@ -125,10 +131,15 @@ data class KeyboardLayout(
     val targetIds: List<String>,
     val boardColor: Color,
     val bezelColor: Color,
-    val totalWidthU: Float,
-    val totalHeightU: Float,
-    val keys: List<KeySpec>,
-)
+    val pages: List<KeyboardPage>,
+) {
+    fun page(index: Int): KeyboardPage {
+        if (pages.isEmpty()) {
+            return KeyboardPage("main", "MAIN", 1f, 1f, emptyList())
+        }
+        return pages[index.mod(pages.size)]
+    }
+}
 
 object KeyboardRepository {
     fun loadAll(context: Context): List<KeyboardLayout> {
@@ -159,8 +170,47 @@ object KeyboardRepository {
                 }
             }
         }
-        val keysArr = obj.getJSONArray("keys")
-        val keys = buildList(keysArr.length()) {
+
+        val pagesArr = obj.optJSONArray("pages")
+        val pages = if (pagesArr != null && pagesArr.length() > 0) {
+            buildList(pagesArr.length()) {
+                for (i in 0 until pagesArr.length()) {
+                    val p = pagesArr.getJSONObject(i)
+                    add(
+                        KeyboardPage(
+                            id = p.optString("id", "page_$i"),
+                            label = p.optString("label", "P${i + 1}"),
+                            totalWidthU = p.getDouble("totalWidthU").toFloat(),
+                            totalHeightU = p.getDouble("totalHeightU").toFloat(),
+                            keys = parseKeys(p.getJSONArray("keys")),
+                        )
+                    )
+                }
+            }
+        } else {
+            listOf(
+                KeyboardPage(
+                    id = "main",
+                    label = "MAIN",
+                    totalWidthU = obj.getDouble("totalWidthU").toFloat(),
+                    totalHeightU = obj.getDouble("totalHeightU").toFloat(),
+                    keys = parseKeys(obj.getJSONArray("keys")),
+                )
+            )
+        }
+
+        return KeyboardLayout(
+            id = obj.getString("id"),
+            name = obj.optString("name", obj.getString("id")),
+            targetIds = targetIds,
+            boardColor = parseColor(obj.optString("boardColor", "#2A2E36")),
+            bezelColor = parseColor(obj.optString("bezelColor", "#181B20")),
+            pages = pages,
+        )
+    }
+
+    private fun parseKeys(keysArr: JSONArray): List<KeySpec> {
+        return buildList(keysArr.length()) {
             for (i in 0 until keysArr.length()) {
                 val k = keysArr.getJSONObject(i)
                 val kind = when (k.optString("kind", "NORMAL")) {
@@ -188,16 +238,6 @@ object KeyboardRepository {
                 )
             }
         }
-        return KeyboardLayout(
-            id = obj.getString("id"),
-            name = obj.optString("name", obj.getString("id")),
-            targetIds = targetIds,
-            boardColor = parseColor(obj.optString("boardColor", "#2A2E36")),
-            bezelColor = parseColor(obj.optString("bezelColor", "#181B20")),
-            totalWidthU = obj.getDouble("totalWidthU").toFloat(),
-            totalHeightU = obj.getDouble("totalHeightU").toFloat(),
-            keys = keys,
-        )
     }
 
     private fun parseColor(hex: String): Color {

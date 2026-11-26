@@ -29,9 +29,11 @@ endif
 OBJ_DIR  ?= $(DEFAULT_OB)
 OUT_SO   ?= $(DEFAULT_SO)
 
-CXX       ?= g++
-OPT_FLAGS ?= -O3
-LDFLAGS   ?=
+CXX             ?= g++
+OPT_FLAGS       ?= -O3
+LDFLAGS         ?=
+GNU_UNIQUE_FLAG ?= -fno-gnu-unique
+EXTRA_LIBS      ?= -lm -lpthread
 
 CPPFLAGS_COMMON := \
 	$(MODEL_DEF) \
@@ -46,10 +48,11 @@ CXXFLAGS_COMMON := \
 	$(OPT_FLAGS) \
 	-fPIC \
 	-fvisibility=hidden \
-	-fno-gnu-unique
+	$(GNU_UNIQUE_FLAG)
 
 CXXFLAGS_UPSTREAM := \
 	$(CXXFLAGS_COMMON) \
+	-Wno-unknown-warning-option \
 	-Wno-narrowing \
 	-Wno-unused-parameter \
 	-Wno-sign-compare \
@@ -126,7 +129,7 @@ $(OUT_SO): $(OBJS) $(CZX_DIR)/link.T
 	$(CXX) -shared -o $@ $(OBJS) \
 		-Wl,--version-script=$(CZX_DIR)/link.T \
 		-Wl,--no-undefined \
-		$(LDFLAGS) -lm -lpthread
+		$(LDFLAGS) $(EXTRA_LIBS)
 
 $(OBJ_DIR)/upstream/%.o: $(CSCP_SRC)/%.cpp
 	@mkdir -p $(dir $@)

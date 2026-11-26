@@ -60,6 +60,7 @@ class MainActivity : ComponentActivity() {
             var snapshot by remember { mutableStateOf(UiSnapshot()) }
             var bottomMode by remember { mutableStateOf(BottomLayoutMode.KBD_AND_PAD) }
             var previewLayoutIdx by remember { mutableIntStateOf(0) }
+            var keyboardPageIdx by remember { mutableIntStateOf(0) }
 
             LaunchedEffect(Unit) {
                 while (true) {
@@ -78,6 +79,14 @@ class MainActivity : ComponentActivity() {
                 layouts[previewLayoutIdx % layouts.size]
             } else {
                 autoLayout
+            }
+            val activePageLabel = if (activeLayout != null && activeLayout.pages.size > 1) {
+                activeLayout.page(keyboardPageIdx).label
+            } else {
+                null
+            }
+            LaunchedEffect(activeLayout?.id) {
+                keyboardPageIdx = 0
             }
 
             Column(
@@ -124,6 +133,7 @@ class MainActivity : ComponentActivity() {
                     snapshot = snapshot,
                     bottomMode = bottomMode,
                     activeKeyboardName = activeLayout?.name ?: "Keyboard",
+                    activePageLabel = activePageLabel,
                     canTogglePreviewLayout = canTogglePreview,
                     onToggleMenu = { CzxNative.nativeSendHostCommand(HostCommands.TOGGLE_MENU) },
                     onCycleAspect = {
@@ -137,6 +147,11 @@ class MainActivity : ComponentActivity() {
                     onCycleBottomMode = {
                         val all = BottomLayoutMode.entries
                         bottomMode = all[(bottomMode.ordinal + 1) % all.size]
+                    },
+                    onCycleKeyboardPage = {
+                        if (activeLayout != null && activeLayout.pages.isNotEmpty()) {
+                            keyboardPageIdx = (keyboardPageIdx + 1) % activeLayout.pages.size
+                        }
                     },
                     onCyclePreviewKeyboard = {
                         if (layouts.isNotEmpty()) {
@@ -164,6 +179,7 @@ class MainActivity : ComponentActivity() {
                                 Column(modifier = Modifier.fillMaxSize()) {
                                     RetroKeyboardView(
                                         layout = activeLayout,
+                                        pageIndex = keyboardPageIdx,
                                         modifier = Modifier
                                             .weight(0.56f)
                                             .fillMaxWidth(),
@@ -198,6 +214,7 @@ class MainActivity : ComponentActivity() {
                             BottomLayoutMode.KBD_LARGE -> {
                                 RetroKeyboardView(
                                     layout = activeLayout,
+                                    pageIndex = keyboardPageIdx,
                                     modifier = Modifier.fillMaxSize(),
                                     onSendKey = { key, pressed ->
                                         if (key.nativeKey != 0) {

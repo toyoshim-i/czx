@@ -37,10 +37,12 @@ fun TouchMenuBar(
     snapshot: UiSnapshot,
     bottomMode: BottomLayoutMode,
     activeKeyboardName: String,
+    activePageLabel: String?,
     canTogglePreviewLayout: Boolean,
     onToggleMenu: () -> Unit,
     onCycleAspect: () -> Unit,
     onCycleBottomMode: () -> Unit,
+    onCycleKeyboardPage: () -> Unit,
     onCyclePreviewKeyboard: () -> Unit,
     onImportMedia: () -> Unit,
     modifier: Modifier = Modifier,
@@ -110,6 +112,15 @@ fun TouchMenuBar(
             accent = Color(0xFF7AA7D9),
             onClick = onCycleAspect,
         )
+
+        if (!snapshot.uiActive && activePageLabel != null) {
+            BarChip(
+                label = activePageLabel,
+                active = activePageLabel != "MAIN",
+                accent = Color(0xFFB98EFF),
+                onClick = onCycleKeyboardPage,
+            )
+        }
 
         BarChip(
             label = if (snapshot.uiActive) "UI PAD" else bottomMode.label,

@@ -42,6 +42,7 @@ private enum class StickyState {
 @Composable
 fun RetroKeyboardView(
     layout: KeyboardLayout?,
+    pageIndex: Int = 0,
     modifier: Modifier = Modifier,
     onSendKey: (KeySpec, Boolean) -> Unit,
 ) {
@@ -55,27 +56,29 @@ fun RetroKeyboardView(
         return
     }
 
+    val page = layout.page(pageIndex)
+    val pageKey = "${layout.id}:${page.id}"
     val haptics = LocalHapticFeedback.current
-    val activePointers = remember(layout.id) { mutableStateMapOf<PointerId, Int>() }
-    val stickyModifiers = remember(layout.id) { mutableStateMapOf<Int, StickyState>() }
-    val toggleModifiers = remember(layout.id) { mutableStateMapOf<Int, Boolean>() }
-    val stickyUsedWithOtherKey = remember(layout.id) { mutableStateMapOf<Int, Boolean>() }
-    val lastTapTimeMs = remember(layout.id) { mutableStateMapOf<Int, Long>() }
-    var lastCanvasSize by remember(layout.id) { mutableStateOf(Size.Zero) }
+    val activePointers = remember(pageKey) { mutableStateMapOf<PointerId, Int>() }
+    val stickyModifiers = remember(pageKey) { mutableStateMapOf<Int, StickyState>() }
+    val toggleModifiers = remember(pageKey) { mutableStateMapOf<Int, Boolean>() }
+    val stickyUsedWithOtherKey = remember(pageKey) { mutableStateMapOf<Int, Boolean>() }
+    val lastTapTimeMs = remember(pageKey) { mutableStateMapOf<Int, Long>() }
+    var lastCanvasSize by remember(pageKey) { mutableStateOf(Size.Zero) }
 
-    DisposableEffect(layout.id) {
+    DisposableEffect(pageKey) {
         onDispose {
             activePointers.values.distinct().forEach { idx ->
-                layout.keys.getOrNull(idx)?.let { onSendKey(it, false) }
+                page.keys.getOrNull(idx)?.let { onSendKey(it, false) }
             }
             stickyModifiers.forEach { (idx, state) ->
                 if (state != StickyState.OFF) {
-                    layout.keys.getOrNull(idx)?.let { onSendKey(it, false) }
+                    page.keys.getOrNull(idx)?.let { onSendKey(it, false) }
                 }
             }
             toggleModifiers.forEach { (idx, on) ->
                 if (on) {
-                    layout.keys.getOrNull(idx)?.let { onSendKey(it, false) }
+                    page.keys.getOrNull(idx)?.let { onSendKey(it, false) }
                 }
             }
         }
@@ -86,9 +89,9 @@ fun RetroKeyboardView(
         val padY = size.height * 0.025f
         val availW = (size.width - padX * 2f).coerceAtLeast(1f)
         val availH = (size.height - padY * 2f).coerceAtLeast(1f)
-        val unitPx = min(availW / layout.totalWidthU, availH / layout.totalHeightU)
-        val originX = (size.width - layout.totalWidthU * unitPx) * 0.5f
-        val originY = (size.height - layout.totalHeightU * unitPx) * 0.5f
+        val unitPx = min(availW / page.totalWidthU, availH / page.totalHeightU)
+        val originX = (size.width - page.totalWidthU * unitPx) * 0.5f
+        val originY = (size.height - page.totalHeightU * unitPx) * 0.5f
         return Triple(originX, originY, unitPx)
     }
 
@@ -102,7 +105,7 @@ fun RetroKeyboardView(
         if (size.width <= 0f || size.height <= 0f) return null
         val (ox, oy, u) = computeMetrics(size)
         val pad = u * 0.08f
-        return layout.keys.firstOrNull { spec ->
+        return page.keys.firstOrNull { spec ->
             val r = keyRect(spec, ox, oy, u)
             pos.x in (r.left - pad)..(r.right + pad) &&
                 pos.y in (r.top - pad)..(r.bottom + pad)
@@ -116,7 +119,7 @@ fun RetroKeyboardView(
     }
 
     fun pressKey(idx: Int) {
-        val spec = layout.keys.getOrNull(idx) ?: return
+        val spec = page.keys.getOrNull(idx) ?: return
         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         when (spec.kind) {
             KeyKind.NORMAL -> {
@@ -143,7 +146,7 @@ fun RetroKeyboardView(
     }
 
     fun releaseKey(idx: Int) {
-        val spec = layout.keys.getOrNull(idx) ?: return
+        val spec = page.keys.getOrNull(idx) ?: return
         when (spec.kind) {
             KeyKind.NORMAL -> {
                 onSendKey(spec, false)
@@ -153,7 +156,7 @@ fun RetroKeyboardView(
                     ) {
                         stickyModifiers[modIdx] = StickyState.OFF
                         stickyUsedWithOtherKey.remove(modIdx)
-                        layout.keys.getOrNull(modIdx)?.let { onSendKey(it, false) }
+                        page.keys.getOrNull(modIdx)?.let { onSendKey(it, false) }
                     }
                 }
             }
@@ -223,7 +226,7 @@ fun RetroKeyboardView(
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
-                .pointerInput(layout.id) {
+                .pointerInput(pageKey) {
                     awaitPointerEventScope {
                         while (true) {
                             val event = awaitPointerEvent()
@@ -267,13 +270,13 @@ fun RetroKeyboardView(
             drawRoundRect(
                 color = layout.boardColor,
                 topLeft = Offset(ox - u * 0.14f, oy - u * 0.12f),
-                size = Size(layout.totalWidthU * u + u * 0.28f, layout.totalHeightU * u + u * 0.24f),
+                size = Size(page.totalWidthU * u + u * 0.28f, page.totalHeightU * u + u * 0.24f),
                 cornerRadius = CornerRadius(u * 0.2f, u * 0.2f),
             )
 
             val topLabelSpace = u * 0.18f
 
-            layout.keys.forEach { spec ->
+            page.keys.forEach { spec ->
                 val rect = keyRect(spec, ox, oy, u)
                 val held = isKeyHeld(spec.index)
                 val sticky = stickyModifiers[spec.index] ?: StickyState.OFF

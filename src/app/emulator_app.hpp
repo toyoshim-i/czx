@@ -57,6 +57,7 @@ public:
         bool in_launcher = false;
         bool menu_open = false;
         bool browser_open = false;
+        bool has_core_error = false;
         std::string core_id;
         std::string core_name;
         int preset_index = 0;

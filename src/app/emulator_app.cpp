@@ -1301,7 +1301,10 @@ void EmulatorApp::render_core_error_screen() {
     }
 
     canvas.draw_hline(kBoxX + 6, kBoxY + kBoxH - 18, kBoxW - 12, pack_rgb565(56, 72, 98));
-    canvas.draw_text(kBoxX + 7, kBoxY + kBoxH - 13, "Alt+8: System Menu / Switch Core", pack_rgb565(180, 200, 225));
+    const char* footer = hud_.suppress_alt_bar
+                             ? "Tap SETUP or MENU to add ROMs"
+                             : "Alt+8: Menu / Open SETUP in Launcher";
+    canvas.draw_text(kBoxX + 7, kBoxY + kBoxH - 13, footer, pack_rgb565(180, 200, 225));
 }
 
 void EmulatorApp::show_toast(const char* text) {
@@ -1950,6 +1953,13 @@ void EmulatorApp::handle_host_command(czx::input::HostCommand cmd) {
                 show_toast("VOL: N/A");
             }
             force_present_ = true;
+            break;
+        }
+        case czx::input::HostCommand::ReloadCore: {
+            if (!in_launcher_ && active_target_index_ >= 0) {
+                (void)launch_target(active_target_index_, false);
+                force_present_ = true;
+            }
             break;
         }
         case czx::input::HostCommand::None:
@@ -3693,6 +3703,7 @@ void EmulatorApp::update_ui_snapshot() {
     snap.in_launcher = in_launcher_;
     snap.menu_open = menu_.is_open();
     snap.browser_open = browser_.is_open();
+    snap.has_core_error = !core_error_.empty();
     snap.ui_active = snap.in_launcher || snap.menu_open || snap.browser_open;
     if (!in_launcher_ && core_api_ && core_api_->get_desc) {
         if (const czx_core_desc_t* d = core_api_->get_desc(core_api_)) {

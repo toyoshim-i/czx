@@ -192,6 +192,9 @@ TargetDescriptor describe_core_id(const std::string& raw_id, const char* raw_nam
     if (id == "g800") {
         return {"g800", "PC-G850", "g800", "", "", "", "g800", "PC-G850 (g800)"};
     }
+    if (id == "setup") {
+        return {"setup", "SETUP", "setup", "", "", "", "ROMs, Media & Guide", "Setup & Guide"};
+    }
     if (id == "test_pattern") {
         return {"test_pattern", "TEST", "test_pattern", "", "", "", "Test Pattern", "Test Pattern"};
     }

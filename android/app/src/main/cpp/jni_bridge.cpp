@@ -180,13 +180,14 @@ Java_com_czx_android_CzxNative_nativeGetUiSnapshot(JNIEnv* env, jobject) {
     char buf[512];
     std::snprintf(buf,
                   sizeof(buf),
-                  "{\"uiActive\":%s,\"inLauncher\":%s,\"menuOpen\":%s,\"browserOpen\":%s,"
+                  "{\"uiActive\":%s,\"inLauncher\":%s,\"menuOpen\":%s,\"browserOpen\":%s,\"hasCoreError\":%s,"
                   "\"coreId\":\"%s\",\"coreName\":\"%s\",\"presetIndex\":%d,"
                   "\"aspectPolicy\":%d,\"inputMode\":%d,\"activityFlags\":%u}",
                   snap.ui_active ? "true" : "false",
                   snap.in_launcher ? "true" : "false",
                   snap.menu_open ? "true" : "false",
                   snap.browser_open ? "true" : "false",
+                  snap.has_core_error ? "true" : "false",
                   json_escape(snap.core_id).c_str(),
                   json_escape(snap.core_name).c_str(),
                   snap.preset_index,

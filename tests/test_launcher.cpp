@@ -1,5 +1,6 @@
 #include "app/launcher_state.hpp"
 #include "core/core_registry.hpp"
+#include "core/setup_core.hpp"
 #include "czx/core.h"
 #include "video/core_icons.hpp"
 #include "video/launcher.hpp"
@@ -63,6 +64,7 @@ void test_core_icons() {
         "msx68k",
         "dosbox_pure",
         "g800",
+        "setup",
         "test_pattern",
         "quit",
     };
@@ -103,6 +105,9 @@ void test_core_icons() {
     }
 
     const CoreIconSprite test_sp = find_core_icon("test_pattern");
+    const CoreIconSprite setup_sp = find_core_icon("setup");
+    CHECK(setup_sp.pixels != nullptr);
+    CHECK(setup_sp.pixels != test_sp.pixels);
     const CoreIconSprite dos_sp = find_core_icon("dosbox_pure");
     CHECK(dos_sp.pixels != nullptr);
     CHECK(dos_sp.pixels != test_sp.pixels);
@@ -476,6 +481,50 @@ void test_launcher_view() {
     CHECK(count_nonzero(fb) > 10000);
 }
 
+void test_setup_core_smoke() {
+    const czx_core_api_t* api = czx::core::get_setup_core_api();
+    CHECK(api != nullptr);
+    const czx_core_desc_t* desc = api->get_desc(api);
+    CHECK(desc != nullptr);
+    CHECK(std::string(desc->id) == "setup");
+
+    struct Sink {
+        int frames = 0;
+        uint16_t w = 0;
+        uint16_t h = 0;
+        size_t nonzero = 0;
+    } sink;
+
+    czx_host_t host{};
+    host.user_data = &sink;
+    host.video_frame = [](void* u, const czx_frame_t* f) {
+        auto* s = static_cast<Sink*>(u);
+        ++s->frames;
+        s->w = f->width;
+        s->h = f->height;
+        const auto* px = static_cast<const uint16_t*>(f->data);
+        for (size_t i = 0; i < static_cast<size_t>(f->width) * f->height; ++i) {
+            if (px[i] != 0) ++s->nonzero;
+        }
+    };
+
+    czx_core_instance_t* inst = api->create(api, &host);
+    CHECK(inst != nullptr);
+    api->set_data_dir(inst, "/tmp/czx_nonexistent_setup_test");
+    api->run_frame(inst);
+    CHECK(sink.frames == 1);
+    CHECK(sink.w == 320 && sink.h == 170);
+    CHECK(sink.nonzero > 10000);
+
+    czx_key_event_t enter{CZX_KEY_ENTER, true, false, 0, 0, 0};
+    api->on_key(inst, &enter);
+    czx_key_event_t right{CZX_KEY_RIGHT, true, false, 0, 0, 0};
+    api->on_key(inst, &right);
+    api->run_frame(inst);
+    CHECK(sink.frames == 2);
+    api->destroy(inst);
+}
+
 }  // namespace
 
 int main() {
@@ -483,6 +532,7 @@ int main() {
     test_build_machine_targets();
     test_launcher_state_persistence();
     test_launcher_view();
+    test_setup_core_smoke();
     std::printf("test_launcher: all checks passed\n");
     return 0;
 }

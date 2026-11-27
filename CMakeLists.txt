@@ -114,6 +114,7 @@ add_library(czx_runtime STATIC
     src/core/g800_core.cpp
     src/core/libretro_keys.cpp
     src/core/libretro_core.cpp
+    src/core/setup_core.cpp
     src/core/test_core.cpp
     src/app/launcher_state.cpp
     src/app/emulator_app.cpp

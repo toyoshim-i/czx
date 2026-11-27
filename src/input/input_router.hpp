@@ -26,6 +26,7 @@ enum class HostCommand {
     VolumeDown,
     VolumeUp,
     VolumeMute,
+    ReloadCore,
 };
 
 struct PanDelta {

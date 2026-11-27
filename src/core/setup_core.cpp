@@ -231,7 +231,7 @@ struct SetupCoreState {
             lines.push_back({"  Shared Roms/ for full BASIC/Disk BIOS.", cMuted});
         } else if (t == kTabAbout) {
             lines.push_back({"CZX RETRO COMPUTER MULTI-EMULATOR", cHead});
-            lines.push_back({"  Version: 0.9.1   License: GPL-3.0-or-later", cText});
+            lines.push_back({"  Version: 0.9.2   License: GPL-3.0-or-later", cText});
             lines.push_back({"", cText});
             lines.push_back({"ROM POLICY:", cHead});
             lines.push_back({"  No copyrighted BIOS/ROMs are bundled.", cMissOrOk(true)});

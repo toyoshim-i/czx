@@ -66,6 +66,23 @@ struct MediaFileInfo {
     uint64_t size_bytes = 0;
 };
 
+struct KnownRomEntry {
+    const char* sha1;        // 40 lowercase hex chars
+    size_t size_bytes;
+    const char* machine_id;
+    const char* slot_id;
+    const char* save_name;   // exact filename to save inside slot_dir
+    const char* label;       // human-readable revision name
+};
+
+std::string sha1_hex(const uint8_t* data, size_t size);
+const std::vector<KnownRomEntry>& get_known_rom_hashes();
+const KnownRomEntry* identify_rom_by_hash(const uint8_t* data,
+                                          size_t size,
+                                          const std::string& scope_machine_id = "");
+const KnownRomEntry* identify_rom_file_by_hash(const std::string& file_path,
+                                               const std::string& scope_machine_id = "");
+
 const std::vector<MachineDoc>& get_machine_docs();
 const MachineDoc* find_machine_doc(const std::string& id);
 

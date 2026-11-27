@@ -61,7 +61,22 @@ class MainActivity : ComponentActivity() {
         RomInstaller.installSingleRom(this, uri, czxRoot(), machine, slot)
             .onSuccess { dst ->
                 refreshNonceState.intValue++
-                importReportState.value = ImportReport(placed = listOf("${machine.title}:${dst.name}"))
+                val bytes = runCatching { dst.readBytes() }.getOrNull()
+                val anyHit = if (bytes != null) RomInstaller.identifyRomByHash(bytes) else null
+                if (anyHit != null && anyHit.machineId == machine.id && anyHit.slotId == slot.id) {
+                    importReportState.value = ImportReport(
+                        placed = listOf("${machine.title}:${dst.name} (検証済: ${anyHit.label})")
+                    )
+                } else if (anyHit != null) {
+                    importReportState.value = ImportReport(
+                        placed = listOf("${machine.title}:${dst.name} (手動配置)"),
+                        warnings = listOf("SHA-1 は別スロット (${anyHit.label}) と一致していますが手動配置しました"),
+                    )
+                } else {
+                    importReportState.value = ImportReport(
+                        placed = listOf("${machine.title}:${dst.name} (手動/未登録SHA-1)")
+                    )
+                }
             }
             .onFailure { err ->
                 Toast.makeText(this, "配置失敗: ${err.message}", Toast.LENGTH_SHORT).show()

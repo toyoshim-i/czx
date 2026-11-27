@@ -272,5 +272,6 @@ if(CZX_BUILD_TESTS AND NOT CZX_SELECTED_BACKEND STREQUAL "ANDROID")
 
     add_executable(test_setup_web tests/test_setup_web.cpp)
     target_link_libraries(test_setup_web PRIVATE czx_runtime)
+    target_compile_definitions(test_setup_web PRIVATE CZX_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME test_setup_web COMMAND test_setup_web)
 endif()

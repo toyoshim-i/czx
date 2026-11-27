@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <sstream>
 #include <unordered_map>
 #include <utility>
@@ -265,6 +266,21 @@ std::string build_status_json(const std::string& data_dir) {
             if (s > 0) js << ',';
             const RomSlotSpec& sl = m.slots[s];
             const RomSlotStatus& ss = st.slots[s];
+            bool verified = false;
+            std::string verified_label;
+            if (ss.installed) {
+                std::filesystem::path full = std::filesystem::path(data_dir) / "roms" / m.roms_sub_dir;
+                if (sl.rel_dir && sl.rel_dir[0] != '\0') {
+                    full /= sl.rel_dir;
+                }
+                full /= ss.filename;
+                if (const KnownRomEntry* hit = identify_rom_file_by_hash(full.string(), m.id)) {
+                    if (std::string(hit->slot_id) == sl.id) {
+                        verified = true;
+                        verified_label = hit->label;
+                    }
+                }
+            }
             js << '{'
                << "\"id\":\"" << json_escape(sl.id) << "\","
                << "\"canonical\":\"" << json_escape(sl.canonical) << "\","
@@ -274,7 +290,9 @@ std::string build_status_json(const std::string& data_dir) {
                << "\"note\":\"" << json_escape(sl.note ? sl.note : "") << "\","
                << "\"installed\":" << (ss.installed ? "true" : "false") << ','
                << "\"filename\":\"" << json_escape(ss.filename) << "\","
-               << "\"sizeBytes\":" << ss.size_bytes
+               << "\"sizeBytes\":" << ss.size_bytes << ','
+               << "\"verified\":" << (verified ? "true" : "false") << ','
+               << "\"verifiedLabel\":\"" << json_escape(verified_label) << "\""
                << '}';
         }
         js << "],\"media\":[";
@@ -351,7 +369,7 @@ const char kWebUiHtml[] = R"CZXHTML(<!DOCTYPE html>
 <main>
   <section class="dropzone" id="dropzone">
     <h2>Quick Upload: .zip Archive or Single ROM</h2>
-    <p>Drop a BIOS/ROM <code>.zip</code> or single ROM file here. Files are automatically matched and placed into the proper directories.</p>
+    <p>Drop a BIOS/ROM <code>.zip</code> or ROM file here. Auto-placement matches known ROMs strictly by SHA-1 hash (filename does not matter). Use per-slot Upload below for custom/unlisted dumps.</p>
     <div class="row">
       <label style="font-size:13px;color:var(--muted)">Target scope:
         <select id="zipScope"><option value="auto">Auto-detect across all machines</option></select>
@@ -436,14 +454,18 @@ function renderDetail() {
     slotsHtml = `<div class="snote">No external ROM files needed (${esc(m.builtinTag || 'Built-in')}).</div>`;
   } else {
     slotsHtml = m.slots.map(s => {
-      const tag = s.installed ? `<span class="badge ok">OK (${fmtBytes(s.sizeBytes)})</span>`
-                              : (s.required ? `<span class="badge miss">REQUIRED</span>` : `<span class="badge">OPTIONAL</span>`);
+      const tag = s.installed
+        ? (s.verified
+            ? `<span class="badge ok">OK Verified (${fmtBytes(s.sizeBytes)})</span>`
+            : `<span class="badge builtin">OK Custom (${fmtBytes(s.sizeBytes)})</span>`)
+        : (s.required ? `<span class="badge miss">REQUIRED</span>` : `<span class="badge">OPTIONAL</span>`);
       const del = s.installed ? `<button class="btn danger" onclick="deleteRom('${esc(m.id)}','${esc(s.id)}')">Delete</button>` : '';
       const dirPrefix = s.relDir ? (s.relDir + '/') : '';
+      const vnote = (s.installed && s.verifiedLabel) ? (' [' + esc(s.verifiedLabel) + ']') : '';
       return `<div class="slot">
         <div class="sinfo">
           <div class="sname">${esc(dirPrefix + s.canonical)} ${tag}</div>
-          <div class="snote">${esc(s.note)}${s.installed && s.filename ? ' — installed: ' + esc(s.filename) : ''}</div>
+          <div class="snote">${esc(s.note)}${s.installed && s.filename ? ' — installed: ' + esc(s.filename) + vnote : ''}</div>
         </div>
         <div class="sacts">
           <input type="file" id="rom_${esc(m.id)}_${esc(s.id)}" style="display:none" onchange="uploadSlot('${esc(m.id)}','${esc(s.id)}',this)">
@@ -494,7 +516,11 @@ async function uploadSlot(machineId, slotId, input) {
     });
     const j = await res.json();
     if (!res.ok || !j.ok) throw new Error(j.error || 'Upload failed');
-    showLog('Installed ROM: ' + j.savedPath, false);
+    let msg = 'Installed ROM: ' + j.savedPath;
+    if (j.verified) msg += ' [Verified: ' + j.label + ']';
+    else msg += ' (custom SHA-1: ' + (j.sha1 ? j.sha1.slice(0, 8) : '?') + '...)';
+    if (j.warning) msg += '\nWarning: ' + j.warning;
+    showLog(msg, false);
     await loadStatus();
   } catch (e) {
     showLog('Error: ' + e.message, true);
@@ -868,10 +894,23 @@ void SetupWebServer::handle_client(int client_fd) {
                       "{\"ok\":false,\"error\":\"" + json_escape(err) + "\"}");
             return;
         }
+        const KnownRomEntry* hit = identify_rom_by_hash(body.data(), body.size());
+        const std::string digest = sha1_hex(body.data(), body.size());
+        const bool same_slot = (hit != nullptr && machine_id == hit->machine_id && slot_id == hit->slot_id);
+        const std::string label = hit ? std::string(hit->label) : std::string("Custom / unlisted ROM");
+        std::string warning;
+        if (hit != nullptr && !same_slot) {
+            warning = std::string("Uploaded bytes match ") + hit->machine_id + "/" + hit->slot_id +
+                      " [" + hit->label + "] (saved manually here anyway)";
+        }
         upload_count_.fetch_add(1, std::memory_order_relaxed);
         set_last_event("Placed " + saved_rel);
         send_json(client_fd, 200, "OK",
-                  "{\"ok\":true,\"savedPath\":\"" + json_escape(saved_rel) + "\"}");
+                  std::string("{\"ok\":true,\"savedPath\":\"") + json_escape(saved_rel) +
+                      "\",\"sha1\":\"" + digest +
+                      "\",\"verified\":" + (same_slot ? "true" : "false") +
+                      ",\"label\":\"" + json_escape(label) +
+                      "\",\"warning\":\"" + json_escape(warning) + "\"}");
         return;
     }
 

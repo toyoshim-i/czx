@@ -282,6 +282,12 @@ private fun RomSetupContent(
                 ActionButton("全機種ZIP一括", Color(0xFF4AF2A1)) { onPickZip(null) }
                 ActionButton("複数ファイル選択", Color(0xFFD1A4FF)) { onPickMultipleRoms(machine) }
             }
+            Text(
+                text = "自動配置は SHA-1 ハッシュで厳密判定します。独自 / 未登録 ROM は下の個別スロット「配置」から指定できます。",
+                color = Color(0xFF8CA0BA),
+                fontSize = 10.sp,
+                lineHeight = 13.sp,
+            )
         }
 
         if (machine.slots.isEmpty()) {
@@ -309,6 +315,9 @@ private fun RomSetupContent(
                 items(machine.slots, key = { it.id }) { slot ->
                     val installed = remember(machine.id, slot.id, refreshNonce) {
                         RomInstaller.findInstalledFile(dataRoot, machine, slot)
+                    }
+                    val verifiedHit = remember(installed?.absolutePath, installed?.length(), refreshNonce) {
+                        installed?.let { RomInstaller.identifyInstalledFile(it, machine, slot) }
                     }
                     Row(
                         modifier = Modifier
@@ -354,7 +363,11 @@ private fun RomSetupContent(
                                 }
                             }
                             val subText = if (installed != null) {
-                                "✓ 配置済: ${installed.name} (${installed.length() / 1024}KB)"
+                                if (verifiedHit != null) {
+                                    "✓ 検証済: ${installed.name} (${installed.length() / 1024}KB) [${verifiedHit.label}]"
+                                } else {
+                                    "✓ 手動配置: ${installed.name} (${installed.length() / 1024}KB)"
+                                }
                             } else {
                                 buildString {
                                     append(slot.description)
@@ -365,7 +378,11 @@ private fun RomSetupContent(
                             }
                             Text(
                                 text = subText,
-                                color = if (installed != null) Color(0xFF7BE8AC) else Color(0xFF93A4BC),
+                                color = when {
+                                    verifiedHit != null -> Color(0xFF7BE8AC)
+                                    installed != null -> Color(0xFF7EC8FF)
+                                    else -> Color(0xFF93A4BC)
+                                },
                                 fontSize = 10.sp,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,

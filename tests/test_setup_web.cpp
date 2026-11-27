@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,10 @@ namespace fs = std::filesystem;
 
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
+#endif
+
+#ifndef CZX_SOURCE_DIR
+#define CZX_SOURCE_DIR "."
 #endif
 
 #define CHECK(cond)                                                                           \
@@ -30,6 +35,20 @@ namespace fs = std::filesystem;
     } while (0)
 
 namespace {
+
+std::vector<uint8_t> read_fixture(const fs::path& rel) {
+    const fs::path p = fs::path(CZX_SOURCE_DIR) / rel;
+    std::ifstream ifs(p, std::ios::binary);
+    CHECK(static_cast<bool>(ifs));
+    ifs.seekg(0, std::ios::end);
+    const std::streamoff len = ifs.tellg();
+    CHECK(len > 0);
+    ifs.seekg(0, std::ios::beg);
+    std::vector<uint8_t> out(static_cast<size_t>(len));
+    ifs.read(reinterpret_cast<char*>(out.data()), len);
+    CHECK(static_cast<bool>(ifs));
+    return out;
+}
 
 void append_le16(std::vector<uint8_t>& out, uint16_t v) {
     out.push_back(static_cast<uint8_t>(v & 0xffu));
@@ -197,52 +216,80 @@ HttpResponse http_request(uint16_t port,
     return res;
 }
 
-void test_catalog_and_zip(const fs::path& tmp_dir) {
+void test_sha1_rfc3174() {
+    CHECK(czx::core::sha1_hex(nullptr, 0) == "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+    const char* abc = "abc";
+    CHECK(czx::core::sha1_hex(reinterpret_cast<const uint8_t*>(abc), 3) ==
+          "a9993e364706816aba3e25717850c26c9cd0d89d");
+}
+
+void test_catalog_and_hash_auto_import(const fs::path& tmp_dir,
+                                       const std::vector<uint8_t>& apple2_rom,
+                                       const std::vector<uint8_t>& c64_kernal) {
     const auto& docs = czx::core::get_machine_docs();
     CHECK(docs.size() == 11);
     CHECK(czx::core::find_machine_doc("quasi88") != nullptr);
     CHECK(czx::core::find_machine_doc("np2kai") != nullptr);
     CHECK(czx::core::find_machine_doc("does_not_exist") == nullptr);
 
+    // Known real ROM hash lookups (regardless of filename)
+    const auto* a2_hit = czx::core::identify_rom_by_hash(apple2_rom.data(), apple2_rom.size());
+    CHECK(a2_hit != nullptr);
+    CHECK(std::string(a2_hit->machine_id) == "apple2");
+    CHECK(std::string(a2_hit->slot_id) == "a2_main");
+
+    // Manual per-slot installation accepts unknown/custom ROM payloads
     std::string saved;
     std::string err;
-    const std::vector<uint8_t> rom_bytes = {0x11, 0x22, 0x33, 0x44};
+    const std::vector<uint8_t> custom_bytes = {0x11, 0x22, 0x33, 0x44};
     CHECK(czx::core::install_single_rom(
-        tmp_dir.string(), "quasi88", "q88_n88", "n88.rom", rom_bytes.data(), rom_bytes.size(), saved, err));
+        tmp_dir.string(), "quasi88", "q88_n88", "custom.rom", custom_bytes.data(), custom_bytes.size(), saved, err));
     CHECK(saved == "roms/quasi88/N88.ROM");
     CHECK(fs::exists(tmp_dir / "roms/quasi88/N88.ROM"));
-
-    // Apple II required check: index 0 has req_total == 3.
-    CHECK(czx::core::install_single_rom(
-        tmp_dir.string(), "apple2", "a2_main", "Apple2e_Enhanced.rom", rom_bytes.data(), rom_bytes.size(), saved, err));
-    auto statuses = czx::core::inspect_machines(tmp_dir.string());
-    CHECK(statuses[0].req_found == 1);
-    CHECK(statuses[2].opt_found == 1);
     CHECK(czx::core::delete_slot_rom(tmp_dir.string(), "quasi88", "q88_n88"));
     CHECK(!fs::exists(tmp_dir / "roms/quasi88/N88.ROM"));
 
-    // ZIP with Stored (IPLROM.DAT -> x68000), Deflate (N88_0.ROM -> quasi88),
-    // D8000.ROM warning, and Zip Slip traversal entry safely sanitized.
-    const std::vector<uint8_t> x68_bytes(64, 0x55);
-    const std::vector<uint8_t> n88_0_bytes(128, 0x77);
+    // Auto-import ZIP MUST identify solely by SHA-1 hash:
+    // - Renamed Apple IIe ROM -> roms/apple2/Apple2e_Enhanced.rom
+    // - Renamed C64 Kernal ROM (deflated) -> roms/vice/C64/kernal-901227-03.bin
+    // - Fake payload named N88.ROM -> MUST BE SKIPPED (not matched by name!)
+    // - Fake payload named D8000.ROM -> skipped with warning
+    // - Traversal entry ../../etc/passwd -> safely skipped
+    const std::vector<uint8_t> fake_n88(128, 0x77);
     const std::vector<uint8_t> bad_bytes = {'X'};
     const auto zip = build_zip({
-        {"subdir/IPLROM.DAT", x68_bytes, false},
-        {"N88_0.ROM", n88_0_bytes, true},
+        {"subdir/random_a2.bin", apple2_rom, false},
+        {"renamed_kernal.dat", c64_kernal, true},
+        {"N88.ROM", fake_n88, true},
         {"D8000.ROM", bad_bytes, false},
         {"../../etc/passwd", bad_bytes, false},
     });
 
     const auto rep = czx::core::import_rom_upload(tmp_dir.string(), "auto", "pack.zip", zip.data(), zip.size());
     CHECK(rep.placed.size() == 2);
-    CHECK(fs::exists(tmp_dir / "roms/x68000/IPLROM.DAT"));
-    CHECK(fs::exists(tmp_dir / "roms/quasi88/N88_0.ROM"));
+    CHECK(fs::exists(tmp_dir / "roms/apple2/Apple2e_Enhanced.rom"));
+    CHECK(fs::exists(tmp_dir / "roms/vice/C64/kernal-901227-03.bin"));
+    CHECK(!fs::exists(tmp_dir / "roms/quasi88/N88.ROM"));
     CHECK(!fs::exists(tmp_dir / "etc/passwd"));
-    CHECK(rep.skipped == 2);
+    CHECK(rep.skipped == 3);
     CHECK(!rep.warnings.empty());
+
+    // Scoped single-file auto-import rejects renamed Apple IIe ROM when scoped to c64,
+    // and rejects unknown bytes even if named KERNAL.BIN.
+    const auto wrong_scope = czx::core::import_rom_upload(
+        tmp_dir.string(), "c64", "Apple2e_Enhanced.rom", apple2_rom.data(), apple2_rom.size());
+    CHECK(wrong_scope.placed.empty());
+    CHECK(wrong_scope.skipped == 1);
+
+    const auto fake_single = czx::core::import_rom_upload(
+        tmp_dir.string(), "auto", "N88.ROM", fake_n88.data(), fake_n88.size());
+    CHECK(fake_single.placed.empty());
+    CHECK(fake_single.skipped == 1);
 }
 
-void test_web_server(const fs::path& tmp_dir) {
+void test_web_server(const fs::path& tmp_dir,
+                     const std::vector<uint8_t>& apple2_rom,
+                     const std::vector<uint8_t>& c64_kernal) {
     czx::core::SetupWebServer server;
     CHECK(server.start(tmp_dir.string(), 0));
     CHECK(server.is_running());
@@ -254,29 +301,50 @@ void test_web_server(const fs::path& tmp_dir) {
     CHECK(home.status == 200);
     CHECK(home.body.find("CZX Setup") != std::string::npos);
 
-    const auto status = http_request(port, "GET", "/api/status");
-    CHECK(status.status == 200);
-    CHECK(status.body.find("\"id\":\"quasi88\"") != std::string::npos);
-
-    const std::vector<uint8_t> n88_data = {0xAA, 0xBB, 0xCC, 0xDD};
-    const auto post_rom = http_request(
-        port, "POST", "/api/rom?machine=quasi88&slot=q88_n88&filename=n88.rom", n88_data.data(), n88_data.size());
-    CHECK(post_rom.status == 200);
-    CHECK(post_rom.body.find("\"ok\":true") != std::string::npos);
+    // Manual per-slot upload of custom/unknown bytes MUST succeed and report verified:false
+    const std::vector<uint8_t> custom_n88 = {0xAA, 0xBB, 0xCC, 0xDD};
+    const auto post_custom = http_request(
+        port, "POST", "/api/rom?machine=quasi88&slot=q88_n88&filename=my_n88.rom",
+        custom_n88.data(), custom_n88.size());
+    CHECK(post_custom.status == 200);
+    CHECK(post_custom.body.find("\"ok\":true") != std::string::npos);
+    CHECK(post_custom.body.find("\"verified\":false") != std::string::npos);
     CHECK(fs::exists(tmp_dir / "roms/quasi88/N88.ROM"));
     CHECK(server.upload_count() == 1);
+
+    // Manual per-slot upload of real Apple IIe ROM MUST succeed and report verified:true
+    const auto post_verified = http_request(
+        port, "POST", "/api/rom?machine=apple2&slot=a2_main&filename=Apple2e_Enhanced.rom",
+        apple2_rom.data(), apple2_rom.size());
+    CHECK(post_verified.status == 200);
+    CHECK(post_verified.body.find("\"verified\":true") != std::string::npos);
+    CHECK(fs::exists(tmp_dir / "roms/apple2/Apple2e_Enhanced.rom"));
+
+    // Auto-import ZIP over HTTP: renamed real C64 Kernal matches, fake FONT.ROM skipped
+    const std::vector<uint8_t> fake_font(32, 0x33);
+    const auto zip = build_zip({
+        {"any_name_here.bin", c64_kernal, true},
+        {"FONT.ROM", fake_font, true},
+    });
+    const auto post_zip = http_request(
+        port, "POST", "/api/upload?machine=auto&filename=bundle.zip", zip.data(), zip.size());
+    CHECK(post_zip.status == 200);
+    CHECK(fs::exists(tmp_dir / "roms/vice/C64/kernal-901227-03.bin"));
+    CHECK(!fs::exists(tmp_dir / "roms/quasi88/FONT.ROM"));
+    CHECK(!fs::exists(tmp_dir / "roms/np2kai/font.rom"));
+
+    // /api/status should reflect verified:true on real Apple IIe ROM and verified:false on custom N88.ROM
+    const auto status = http_request(port, "GET", "/api/status");
+    CHECK(status.status == 200);
+    CHECK(status.body.find("\"id\":\"apple2\"") != std::string::npos);
+    CHECK(status.body.find("\"verified\":true") != std::string::npos);
+    CHECK(status.body.find("\"verified\":false") != std::string::npos);
 
     const std::vector<uint8_t> disk_data = {0x01, 0x02, 0x03};
     const auto post_media = http_request(
         port, "POST", "/api/media?machine=quasi88&filename=../game.d88", disk_data.data(), disk_data.size());
     CHECK(post_media.status == 200);
     CHECK(fs::exists(tmp_dir / "media/pc88/game.d88"));
-
-    const auto zip = build_zip({{"FONT.ROM", std::vector<uint8_t>(32, 0x33), true}});
-    const auto post_zip = http_request(
-        port, "POST", "/api/upload?machine=np2kai&filename=pc98_roms.zip", zip.data(), zip.size());
-    CHECK(post_zip.status == 200);
-    CHECK(fs::exists(tmp_dir / "roms/np2kai/font.rom"));
 
     const auto del_rom = http_request(port, "DELETE", "/api/rom?machine=quasi88&slot=q88_n88");
     CHECK(del_rom.status == 200);
@@ -296,13 +364,18 @@ void test_web_server(const fs::path& tmp_dir) {
 }  // namespace
 
 int main() {
+    test_sha1_rfc3174();
+
+    const auto apple2_rom = read_fixture("third_party/AppleWin/resource/Apple2e_Enhanced.rom");
+    const auto c64_kernal = read_fixture("third_party/vice-libretro/vice/data/C64/kernal-901227-03.bin");
+
     const fs::path tmp_dir = fs::temp_directory_path() / ("czx_test_setup_web_" + std::to_string(::getpid()));
     std::error_code ec;
     fs::remove_all(tmp_dir, ec);
     fs::create_directories(tmp_dir, ec);
 
-    test_catalog_and_zip(tmp_dir / "cat");
-    test_web_server(tmp_dir / "web");
+    test_catalog_and_hash_auto_import(tmp_dir / "cat", apple2_rom, c64_kernal);
+    test_web_server(tmp_dir / "web", apple2_rom, c64_kernal);
 
     fs::remove_all(tmp_dir, ec);
     std::printf("test_setup_web: all assertions passed.\n");

@@ -137,20 +137,58 @@ const RomSlotSpec* find_slot_by_id(const MachineDoc& m, const std::string& slot_
     return nullptr;
 }
 
-std::pair<const MachineDoc*, const RomSlotSpec*> find_matching_slot(
-    const std::string& filename,
-    const std::vector<const MachineDoc*>& scope) {
-    const std::string low = to_lower_copy(base_filename_only(filename));
-    if (low.empty()) return {nullptr, nullptr};
-    for (const MachineDoc* m : scope) {
-        for (const auto& sl : m->slots) {
-            if (to_lower_copy(sl.canonical) == low) return {m, &sl};
-            for (const char* a : sl.aliases) {
-                if (a && to_lower_copy(a) == low) return {m, &sl};
-            }
-        }
+uint32_t rotl32(uint32_t x, unsigned n) noexcept {
+    return (x << n) | (x >> (32u - n));
+}
+
+void append_sha1_block(const uint8_t block[64], uint32_t state[5]) noexcept {
+    uint32_t w[80]{};
+    for (size_t i = 0; i < 16; ++i) {
+        const size_t j = i * 4u;
+        w[i] = (static_cast<uint32_t>(block[j]) << 24) |
+               (static_cast<uint32_t>(block[j + 1u]) << 16) |
+               (static_cast<uint32_t>(block[j + 2u]) << 8) |
+               static_cast<uint32_t>(block[j + 3u]);
     }
-    return {nullptr, nullptr};
+    for (size_t i = 16; i < 80; ++i) {
+        w[i] = rotl32(w[i - 3u] ^ w[i - 8u] ^ w[i - 14u] ^ w[i - 16u], 1u);
+    }
+
+    uint32_t a = state[0];
+    uint32_t b = state[1];
+    uint32_t c = state[2];
+    uint32_t d = state[3];
+    uint32_t e = state[4];
+
+    for (size_t i = 0; i < 80; ++i) {
+        uint32_t f = 0;
+        uint32_t k = 0;
+        if (i < 20) {
+            f = (b & c) | ((~b) & d);
+            k = 0x5a827999u;
+        } else if (i < 40) {
+            f = b ^ c ^ d;
+            k = 0x6ed9eba1u;
+        } else if (i < 60) {
+            f = (b & c) | (b & d) | (c & d);
+            k = 0x8f1bbcdcu;
+        } else {
+            f = b ^ c ^ d;
+            k = 0xca62c1d6u;
+        }
+        const uint32_t temp = rotl32(a, 5u) + f + e + k + w[i];
+        e = d;
+        d = c;
+        c = rotl32(b, 30u);
+        b = a;
+        a = temp;
+    }
+
+    state[0] += a;
+    state[1] += b;
+    state[2] += c;
+    state[3] += d;
+    state[4] += e;
 }
 
 uint16_t read_le16(const uint8_t* p) noexcept {
@@ -198,6 +236,188 @@ bool inflate_raw_deflate(const uint8_t* src,
 #endif
 
 }  // namespace
+
+std::string sha1_hex(const uint8_t* data, size_t size) {
+    uint32_t state[5] = {0x67452301u, 0xefcdab89u, 0x98badcfeu, 0x10325476u, 0xc3d2e1f0u};
+    uint8_t block[64]{};
+    size_t offset = 0;
+
+    while (size - offset >= 64u) {
+        append_sha1_block(data + offset, state);
+        offset += 64u;
+    }
+
+    const size_t rem = size - offset;
+    if (rem > 0u && data) {
+        std::memcpy(block, data + offset, rem);
+    }
+    block[rem] = 0x80u;
+    if (rem >= 56u) {
+        append_sha1_block(block, state);
+        std::memset(block, 0, sizeof(block));
+    }
+
+    const uint64_t bit_len = static_cast<uint64_t>(size) * 8ull;
+    for (size_t i = 0; i < 8u; ++i) {
+        block[56u + i] = static_cast<uint8_t>((bit_len >> ((7u - i) * 8u)) & 0xffull);
+    }
+    append_sha1_block(block, state);
+
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string out(40, '0');
+    for (size_t i = 0; i < 5u; ++i) {
+        for (size_t nib = 0; nib < 8u; ++nib) {
+            const unsigned shift = static_cast<unsigned>((7u - nib) * 4u);
+            out[i * 8u + nib] = kHex[(state[i] >> shift) & 0xfu];
+        }
+    }
+    return out;
+}
+
+const std::vector<KnownRomEntry>& get_known_rom_hashes() {
+    static const std::vector<KnownRomEntry> kHashes = {
+        // Apple II (AppleWin)
+        {"b8ea90abe135a0031065e01697c4a3a20d51198b", 16384u, "apple2", "a2_main", "Apple2e_Enhanced.rom", "Apple IIe Enhanced System ROM"},
+        {"b2b5d87f52693817fc747df087a4aa1ddcdb1f10", 4096u, "apple2", "a2_vid", "Apple2e_Enhanced_Video.rom", "Apple IIe Enhanced Video ROM"},
+        {"d4181c9f046aafc3fb326b381baac809d9e38d16", 256u, "apple2", "a2_disk", "DISK2.rom", "Apple II Disk II 16-sector ROM"},
+
+        // Commodore 64 (VICE)
+        {"1d503e56df85a62fee696e7618dc5b4e781df1bb", 8192u, "c64", "c64_kernal", "kernal-901227-03.bin", "C64 Kernal Rev.3 (901227-03)"},
+        {"0e2e4ee3f2d41f00bed72f9ab588b83e306fdb13", 8192u, "c64", "c64_kernal", "kernal-901227-03.bin", "C64 Kernal Rev.2 (901227-02)"},
+        {"87cc04d61fc748b82df09856847bb5c2754a2033", 8192u, "c64", "c64_kernal", "kernal-901227-03.bin", "C64 Kernal Rev.1 (901227-01)"},
+        {"79015323128650c742a3694c9429aa91f355905e", 8192u, "c64", "c64_basic", "basic-901226-01.bin", "C64 BASIC V2 (901226-01)"},
+        {"adc7c31e18c7c7413d54802ef2f4193da14711aa", 4096u, "c64", "c64_chargen", "chargen-901225-01.bin", "C64 Chargen (901225-01)"},
+        {"d3b78c3dbac55f5199f33f3fe0036439811f7fb3", 16384u, "c64", "c64_1541", "dos1541ii-251968-03.bin", "Commodore 1541-II DOS (251968-03)"},
+        {"ab16f56989b27d89babe5f89c5a8cb3da71a82f0", 16384u, "c64", "c64_1541", "dos1541ii-251968-03.bin", "Commodore 1541 DOS (325302-01+901229-05)"},
+
+        // PC-8801 (QUASI88)
+        {"3518193b8207bdebf22c1380c2db8c554baff329", 32768u, "quasi88", "q88_n88", "N88.ROM", "PC-8801 N88-BASIC ROM (MAME)"},
+        {"3b31fc68fa7f47b21c1a1cb027b86b9e87afbfff", 32768u, "quasi88", "q88_n88", "N88.ROM", "PC-8801mkIISR N88-BASIC ROM"},
+        {"d1ae642aed4f0584eeb81ff50180db694e5101d4", 8192u, "quasi88", "q88_n88_0", "N88_0.ROM", "PC-8801 4th ROM Bank 0 (MAME)"},
+        {"d239c26ad7ac5efac6e947b0e9549b1534aa970d", 8192u, "quasi88", "q88_n88_0", "N88_0.ROM", "PC-8801mkIISR 4th ROM Bank 0"},
+        {"4ae4d37409ff99411a623da9f6a44192170a854e", 8192u, "quasi88", "q88_n88_1", "N88_1.ROM", "PC-8801 4th ROM Bank 1 (Libretro)"},
+        {"8528eef7946edf6501a6ccb1f416b60c64efac7c", 8192u, "quasi88", "q88_n88_1", "N88_1.ROM", "PC-8801mkIISR 4th ROM Bank 1"},
+        {"e94278682ef9e9bbb82201f72c50382748dcea2a", 8192u, "quasi88", "q88_n88_2", "N88_2.ROM", "PC-8801 4th ROM Bank 2 (Libretro)"},
+        {"b7c8bcea219b77d9cc3ee0efafe343cc307425d1", 8192u, "quasi88", "q88_n88_2", "N88_2.ROM", "PC-8801mkIISR 4th ROM Bank 2"},
+        {"af452aed79b072c4d17985830b7c5dca64d4b412", 8192u, "quasi88", "q88_n88_3", "N88_3.ROM", "PC-8801 4th ROM Bank 3 (Libretro)"},
+        {"efce0b51cab9f0da6cf68507757f1245a2867a72", 8192u, "quasi88", "q88_n88_3", "N88_3.ROM", "PC-8801mkIISR 4th ROM Bank 3"},
+        {"063609dd518c124a4fc9ba35d1bae35771666a34", 32768u, "quasi88", "q88_n88n", "N88N.ROM", "PC-8801 N-BASIC ROM (MAME)"},
+        {"5b922ed9de07d2a729bdf1da7b57c50ddf08809a", 32768u, "quasi88", "q88_n88n", "N88N.ROM", "PC-8801mkIISR N-BASIC ROM"},
+        {"bb7103a0818850a039c67ff666a31ce49a8d516f", 2048u, "quasi88", "q88_disk", "DISK.ROM", "PC-8801 Floppy Subsystem ROM"},
+        {"84b90f69671d4b72e8f219e1fe7cd667e976cf7f", 2048u, "quasi88", "q88_font", "FONT.ROM", "PC-8801 Font ROM"},
+        {"82e11a177af6a5091dd67f50a2f4bafda84d6556", 131072u, "quasi88", "q88_kanji1", "KANJI1.ROM", "PC-8801 Kanji ROM Level 1"},
+        {"b86b932cb4ce34472e0fe0f01a4a4350e15dcb53", 131072u, "quasi88", "q88_kanji2", "KANJI2.ROM", "PC-8801 Kanji ROM Level 2"},
+
+        // PC-9801 (NP2kai)
+        {"76a7360502fa0296ea93b4c537174610a834d367", 98304u, "np2kai", "np2_bios", "bios.rom", "PC-9801 System BIOS"},
+        {"a2fb11c000ed7c976520622cfb7940ed6ddc904e", 32768u, "np2kai", "np2_itf", "itf.rom", "PC-9801 ITF ROM"},
+        {"d5dbc4fea3b8367024d363f5351baecd6adcd8ef", 16384u, "np2kai", "np2_sound", "sound.rom", "PC-9801-26K/86 Sound BIOS"},
+        {"78ba9960f135372825ab7244b5e4e73a810002ff", 288768u, "np2kai", "np2_font", "font.rom", "PC-9801 Font ROM"},
+        {"b4f14e58030ed40fff2dc312b58ea4440bdf8cc5", 524350u, "np2kai", "np2_font", "font.bmp", "PC-9801 Font BMP"},
+
+        // MSX / MSX2+ (blueMSX Shared Roms)
+        {"e998f0c441f4f1800ef44e42cd1659150206cf79", 32768u, "bluemsx", "msx_1", "MSX.rom", "MSX1 BIOS"},
+        {"6103b39f1e38d1aa2d84b1c3219c44f1abb5436e", 32768u, "bluemsx", "msx_2", "MSX2.rom", "MSX2 Main BIOS"},
+        {"5c1f9c7fb655e43d38e5dd1fcc6b942b2ff68b02", 16384u, "bluemsx", "msx_2ext", "MSX2EXT.rom", "MSX2 Sub/ExtROM"},
+        {"e2fbd56e42da637609d23ae9df9efd1b4241b18a", 32768u, "bluemsx", "msx_2p", "MSX2P.rom", "MSX2+ Main BIOS (Libretro)"},
+        {"e90f80a61d94c617850c415e12ad70ac41e66bb7", 32768u, "bluemsx", "msx_2p", "MSX2P.rom", "MSX2+ Main BIOS (blueMSX)"},
+        {"fe0254cbfc11405b79e7c86c7769bd6322b04995", 16384u, "bluemsx", "msx_2pext", "MSX2PEXT.rom", "MSX2+ Sub/ExtROM"},
+        {"7ed7c55e0359737ac5e68d38cb6903f9e5d7c2b6", 16384u, "bluemsx", "msx_pdisk", "PANASONICDISK.rom", "Panasonic MSX Disk BIOS"},
+        {"c3efedda7ab947a06d9345f7b8261076fa7ceeef", 16384u, "bluemsx", "msx_phdisk", "PHILIPSDISK.rom", "Philips MSX Disk BIOS"},
+        {"6354ccc5c100b1c558c9395fa8c00784d2e9b0a3", 16384u, "bluemsx", "msx_music", "MSX2PMUS.rom", "MSX-MUSIC FM-PAC BIOS"},
+        {"47370bec7ca1f0615a54eda548b07fbc0c7ef398", 16384u, "bluemsx", "msx_xbasic", "XBASIC2.rom", "MSX2+ XBASIC2 ROM"},
+        {"32760893ce06dbe3930627755ba065cc3d8ec6ca", 2097152u, "bluemsx", "msx_moon", "MOONSOUND.rom", "OPL4 MoonSound Wave ROM (YRW801)"},
+
+        // SHARP MZ-700 (EmuZ-700)
+        {"7b10d7965c541393e33a265bcf71a00314d2db7a", 4096u, "emuz700", "mz_ipl", "1Z-009B.ROM", "MZ-700 Monitor 1Z-009B (JP)"},
+        {"bd2cc750f2d2f63e50a59786668509e81a276e32", 4096u, "emuz700", "mz_font", "MZ700FON.JP", "MZ-700 CGROM (JP)"},
+        {"5eb1d42d273b1fd2cab120486279ab8ff6c85dc7", 4096u, "emuz700", "mz_font", "MZ700FON.JP", "MZ-700 CGROM (JP alt)"},
+        {"5128ad179a702f8e0bd9910a58bad8fbe4c20167", 4096u, "emuz700", "mz_font", "MZ700FON.DAT", "MZ-700 CGROM (INT)"},
+
+        // FM-7 / FM77AV / FM77AV40
+        {"50b7283db6fe1342c6063fc94046283f4feddc1c", 10240u, "fm7", "fm_subc", "SUBSYS_C.ROM", "FM-7/77AV Subsys C ROM"},
+        {"8d5f0cfe7e0d39bf2ab7e4c798a13004769c28b2", 31744u, "fm7", "fm_fbas", "FBASIC30.ROM", "FM-7/77AV F-BASIC V3.0 ROM"},
+        {"53b63a301cba7e3030e79c59a4d4291eab6e64b0", 512u, "fm7", "fm_boot", "BOOT_BAS.ROM", "FM-7 BASIC Boot ROM"},
+        {"037e5881bd3fed472a210ee894a6446965a8d2ef", 512u, "fm7", "fm_boot", "BOOT_DOS.ROM", "FM-NEW7 DOS Boot ROM"},
+        {"616c17155f84fb0e3731a31ef0eb0cbb664a5600", 512u, "fm7", "fm_boot", "BOOT_DOS.ROM", "FM-7 DOS Boot ROM"},
+        {"b65987e98a9564a82c85eadb86f0204eee5a5c93", 8192u, "fm7", "fm_init", "INITIATE.ROM", "FM77AV Initiate ROM"},
+        {"8ab466b1546d023ba54987790a79e9815d2b7bb2", 8192u, "fm7", "fm_cg", "SUBSYSCG.ROM", "FM77AV Subsys CG ROM"},
+        {"bf52d22b119d54410dad4949b0687bb0edf3e143", 131072u, "fm7", "fm_kanji", "KANJI.ROM", "FM-7/77AV Kanji ROM Level 1"},
+        {"038cb0b42aee9e933b20fccd6f19942e2f476c83", 8192u, "fm7", "fm_suba", "SUBSYS_A.ROM", "FM77AV Subsys A ROM"},
+        {"0305bdd44e7d9b7b6a17675aff0a3330a08d21a8", 8192u, "fm7", "fm_suba", "SUBSYS_B.ROM", "FM77AV Subsys B ROM"},
+        {"a1304457eeb400b4edd3c20af948d66a04df255e", 49152u, "fm7", "fm_suba", "EXTSUB.ROM", "FM77AV40 ExtSub ROM"},
+        {"fe9f92a8a2750bcba0a1d2895e75e83858e4f97f", 262144u, "fm7", "fm_suba", "DICROM.ROM", "FM77AV40 Dictionary ROM"},
+
+        // SHARP X68000 (PX68k / msx68k)
+        {"0ed038ed2133b9f78c6e37256807424e0d927560", 131072u, "msx68k", "x68_ipl", "IPLROM.DAT", "X68000 IPL-ROM v1.0"},
+        {"239e9124568c862c31d9ec0605e32373ea74b86a", 131072u, "msx68k", "x68_ipl", "IPLROM30.DAT", "X68030 IPL-ROM v1.3"},
+        {"e33cdcdb69cd257b0b211ef46e7a8b144637db57", 131072u, "msx68k", "x68_scsi", "IPLROMXV.DAT", "X68000 XVI IPL-ROM v1.1"},
+        {"77511fc58798404701f66b6bbc9cbde06596eba7", 131072u, "msx68k", "x68_scsi", "IPLROMCO.DAT", "X68000 Compact IPL-ROM v1.2"},
+        {"8d72c5b4d63bb14c5dbdac495244d659aa1498b6", 786432u, "msx68k", "x68_cg", "CGROM.DAT", "X68000 CGROM"},
+        {"3f063d4231cdf53da6adc4db96533725e260076a", 8192u, "msx68k", "x68_scsi", "SCSIINROM.DAT", "X68000 Internal SCSI ROM"},
+
+        // Roland MT-32 / CM-32L (munt)
+        {"73683d585cd6948cc19547942ca0e14a0319456d", 65536u, "mt32", "mt_ctrl", "CM32L_CONTROL.ROM", "CM-32L/LAPC-I Control v1.00"},
+        {"a439fbb390da38cada95a7cbb1d6ca199cd66ef8", 65536u, "mt32", "mt_ctrl", "CM32L_CONTROL.ROM", "CM-32L/LAPC-I Control v1.02"},
+        {"dc1c5b1b90a4646d00f7daf3679733c7badc7077", 65536u, "mt32", "mt_ctrl", "CM32L_CONTROL.ROM", "CM-32LN/CM-500 Control v1.00"},
+        {"5a5cb5a77d7d55ee69657c2f870416daed52dea7", 65536u, "mt32", "mt_ctrl", "MT32_CONTROL.ROM", "MT-32 Control v1.04"},
+        {"e17a3a6d265bf1fa150312061134293d2b58288c", 65536u, "mt32", "mt_ctrl", "MT32_CONTROL.ROM", "MT-32 Control v1.05"},
+        {"a553481f4e2794c10cfe597fef154eef0d8257de", 65536u, "mt32", "mt_ctrl", "MT32_CONTROL.ROM", "MT-32 Control v1.06"},
+        {"b083518fffb7f66b03c23b7eb4f868e62dc5a987", 65536u, "mt32", "mt_ctrl", "MT32_CONTROL.ROM", "MT-32 Control v1.07"},
+        {"7b8c2a5ddb42fd0732e2f22b3340dcf5360edf92", 65536u, "mt32", "mt_ctrl", "MT32_CONTROL.ROM", "MT-32 Control BlueRidge"},
+        {"5837064c9df4741a55f7c4d8787ac158dff2d3ce", 131072u, "mt32", "mt_ctrl", "MT32_CONTROL.ROM", "MT-32 Control v2.03"},
+        {"2c16432b6c73dd2a3947cba950a0f4c19d6180eb", 131072u, "mt32", "mt_ctrl", "MT32_CONTROL.ROM", "MT-32 Control v2.04"},
+        {"2869cf4c235d671668cfcb62415e2ce8323ad4ed", 131072u, "mt32", "mt_ctrl", "MT32_CONTROL.ROM", "MT-32 Control v2.06"},
+        {"47b52adefedaec475c925e54340e37673c11707c", 131072u, "mt32", "mt_ctrl", "MT32_CONTROL.ROM", "MT-32 Control v2.07"},
+        {"289cc298ad532b702461bfc738009d9ebe8025ea", 1048576u, "mt32", "mt_pcm", "CM32L_PCM.ROM", "CM-32L/CM-64/LAPC-I PCM ROM"},
+        {"f6b1eebc4b2d200ec6d3d21d51325d5b48c60252", 524288u, "mt32", "mt_pcm", "MT32_PCM.ROM", "MT-32 PCM ROM"},
+    };
+    return kHashes;
+}
+
+const KnownRomEntry* identify_rom_by_hash(const uint8_t* data,
+                                          size_t size,
+                                          const std::string& scope_machine_id) {
+    if (!data || size == 0) return nullptr;
+    const bool filter_machine = !scope_machine_id.empty() &&
+                                scope_machine_id != "all" &&
+                                scope_machine_id != "auto";
+    const auto& hashes = get_known_rom_hashes();
+    bool any_size_match = false;
+    for (const auto& e : hashes) {
+        if (e.size_bytes == size && (!filter_machine || scope_machine_id == e.machine_id)) {
+            any_size_match = true;
+            break;
+        }
+    }
+    if (!any_size_match) return nullptr;
+
+    const std::string digest = sha1_hex(data, size);
+    for (const auto& e : hashes) {
+        if (e.size_bytes == size &&
+            (!filter_machine || scope_machine_id == e.machine_id) &&
+            digest == e.sha1) {
+            return &e;
+        }
+    }
+    return nullptr;
+}
+
+const KnownRomEntry* identify_rom_file_by_hash(const std::string& file_path,
+                                               const std::string& scope_machine_id) {
+    std::error_code ec;
+    const fs::path p(file_path);
+    if (!fs::is_regular_file(p, ec) || ec) return nullptr;
+    const uintmax_t sz = fs::file_size(p, ec);
+    if (ec || sz == 0 || sz > kMaxEntryBytes) return nullptr;
+
+    std::ifstream ifs(p, std::ios::binary);
+    if (!ifs) return nullptr;
+    std::vector<uint8_t> buf(static_cast<size_t>(sz));
+    ifs.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(buf.size()));
+    if (!ifs) return nullptr;
+    return identify_rom_by_hash(buf.data(), buf.size(), scope_machine_id);
+}
 
 const std::vector<MachineDoc>& get_machine_docs() {
     static const std::vector<MachineDoc> kDocs = {
@@ -530,17 +750,28 @@ ImportReport import_rom_upload(const std::string& data_dir,
                                const uint8_t* data,
                                size_t size) {
     ImportReport report{};
-    std::vector<const MachineDoc*> scope;
-    if (scope_machine_id.empty() || scope_machine_id == "all" || scope_machine_id == "auto") {
-        for (const auto& d : get_machine_docs()) {
-            scope.push_back(&d);
-        }
-    } else if (const MachineDoc* m = find_machine_doc(scope_machine_id)) {
-        scope.push_back(m);
-    } else {
+    const bool all_machines = scope_machine_id.empty() || scope_machine_id == "all" || scope_machine_id == "auto";
+    if (!all_machines && !find_machine_doc(scope_machine_id)) {
         report.warnings.push_back("Unknown machine scope: " + scope_machine_id);
         return report;
     }
+
+    auto place_matched = [&](const KnownRomEntry& hit, const std::string& raw_name,
+                             const uint8_t* payload, size_t payload_len) {
+        const MachineDoc* m = find_machine_doc(hit.machine_id);
+        if (!m) {
+            ++report.skipped;
+            return;
+        }
+        std::string saved;
+        std::string err;
+        if (install_single_rom(data_dir, hit.machine_id, hit.slot_id, hit.save_name,
+                               payload, payload_len, saved, err)) {
+            report.placed.push_back(std::string(m->name) + ": " + saved + " [" + hit.label + "]");
+        } else {
+            report.warnings.push_back(raw_name + ": " + err);
+        }
+    };
 
     const bool is_zip_magic = (size >= 4 && data && data[0] == 0x50 && data[1] == 0x4B &&
                                data[2] == 0x03 && data[3] == 0x04);
@@ -555,18 +786,21 @@ ImportReport import_rom_upload(const std::string& data_dir,
             ++report.skipped;
             return report;
         }
-        const auto [m, sl] = find_matching_slot(base, scope);
-        if (!m || !sl) {
+        if (!data || size == 0 || size > kMaxEntryBytes) {
+            report.warnings.push_back(base + ": invalid file size");
             ++report.skipped;
             return report;
         }
-        std::string saved;
-        std::string err;
-        if (install_single_rom(data_dir, m->id, sl->id, base, data, size, saved, err)) {
-            report.placed.push_back(std::string(m->name) + ": " + saved);
-        } else {
-            report.warnings.push_back(base + ": " + err);
+        const KnownRomEntry* hit = identify_rom_by_hash(data, size, scope_machine_id);
+        if (!hit) {
+            const std::string digest = sha1_hex(data, size);
+            report.warnings.push_back(
+                base + ": unknown SHA-1 (" + digest.substr(0, 8) +
+                "...) - use per-slot manual upload for unlisted dumps");
+            ++report.skipped;
+            return report;
         }
+        place_matched(*hit, base, data, size);
         return report;
     }
 
@@ -598,6 +832,7 @@ ImportReport import_rom_upload(const std::string& data_dir,
     }
 
     size_t pos = cd_offset;
+    size_t unknown_warnings = 0;
     for (uint16_t i = 0; i < entry_count && pos + 46u <= size; ++i) {
         if (read_le32(data + pos) != 0x02014b50u) break;
         const uint16_t method = read_le16(data + pos + 10);
@@ -617,15 +852,11 @@ ImportReport import_rom_upload(const std::string& data_dir,
         }
         const std::string base = base_filename_only(entry_name);
         if (base.empty() || base[0] == '.') {
+            ++report.skipped;
             continue;
         }
         if (to_lower_copy(base) == "d8000.rom") {
             report.warnings.push_back("Skipped d8000.rom (can hang PC-98 floppy boots)");
-            ++report.skipped;
-            continue;
-        }
-        const auto [m, sl] = find_matching_slot(base, scope);
-        if (!m || !sl) {
             ++report.skipped;
             continue;
         }
@@ -676,13 +907,22 @@ ImportReport import_rom_upload(const std::string& data_dir,
             continue;
         }
 
-        std::string saved;
-        std::string err;
-        if (install_single_rom(data_dir, m->id, sl->id, base, out_ptr, out_len, saved, err)) {
-            report.placed.push_back(std::string(m->name) + ": " + saved);
-        } else {
-            report.warnings.push_back(base + ": " + err);
+        const KnownRomEntry* hit = identify_rom_by_hash(out_ptr, out_len, scope_machine_id);
+        if (!hit) {
+            ++report.skipped;
+            if (unknown_warnings < 8u) {
+                const std::string digest = sha1_hex(out_ptr, out_len);
+                report.warnings.push_back(
+                    base + ": unknown SHA-1 (" + digest.substr(0, 8) + "...)");
+            } else if (unknown_warnings == 8u) {
+                report.warnings.push_back(
+                    "More unlisted ROMs omitted from warnings; use per-slot manual upload if needed");
+            }
+            ++unknown_warnings;
+            continue;
         }
+
+        place_matched(*hit, base, out_ptr, out_len);
     }
 
     return report;

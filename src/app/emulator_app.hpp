@@ -199,6 +199,7 @@ private:
     uint64_t joy_core_epoch_ = 0;
     uint32_t pad_ui_repeat_dir_ = 0u;
     double pad_ui_repeat_timer_ = 0.0;
+    bool pending_return_to_launcher_ = false;
 
     void start_scale_worker();
     void stop_scale_worker();
@@ -280,6 +281,7 @@ private:
     static uintptr_t cb_hw_get_current_framebuffer(void* user_data);
     static bool cb_midi_output_enabled(void* user_data);
     static bool cb_midi_write(void* user_data, uint8_t byte, uint32_t delta_time);
+    static void cb_return_to_launcher(void* user_data);
     static void cb_host_command(void* user_data, czx::input::HostCommand cmd);
     static void cb_pan(void* user_data, int dx, int dy);
     static void cb_menu_key(void* user_data, const czx_key_event_t& ev);

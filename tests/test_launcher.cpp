@@ -493,6 +493,7 @@ void test_setup_core_smoke() {
         uint16_t w = 0;
         uint16_t h = 0;
         size_t nonzero = 0;
+        int returned = 0;
     } sink;
 
     czx_host_t host{};
@@ -507,6 +508,9 @@ void test_setup_core_smoke() {
             if (px[i] != 0) ++s->nonzero;
         }
     };
+    host.return_to_launcher = [](void* u) {
+        ++static_cast<Sink*>(u)->returned;
+    };
 
     czx_core_instance_t* inst = api->create(api, &host);
     CHECK(inst != nullptr);
@@ -520,6 +524,11 @@ void test_setup_core_smoke() {
     api->on_key(inst, &enter);
     czx_key_event_t right{CZX_KEY_RIGHT, true, false, 0, 0, 0};
     api->on_key(inst, &right);
+    czx_key_event_t esc{CZX_KEY_ESC, true, false, 0, 0, 0};
+    api->on_key(inst, &esc);
+    CHECK(sink.returned == 0);
+    api->on_key(inst, &esc);
+    CHECK(sink.returned == 1);
     api->run_frame(inst);
     CHECK(sink.frames == 2);
     api->destroy(inst);

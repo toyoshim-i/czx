@@ -158,6 +158,7 @@ typedef struct czx_host {
     uintptr_t (*hw_get_current_framebuffer)(void* user_data);
     bool (*midi_output_enabled)(void* user_data);
     bool (*midi_write)(void* user_data, uint8_t byte, uint32_t delta_time);
+    void (*return_to_launcher)(void* user_data);
 } czx_host_t;
 
 typedef struct czx_core_desc {

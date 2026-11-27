@@ -420,7 +420,11 @@ struct SetupCoreState {
         lines.push_back({std::string("EXTS   : ") + m.media_exts, cMuted});
         if (m.tip1 && m.tip1[0] != '\0') lines.push_back({m.tip1, cText});
         if (m.tip2 && m.tip2[0] != '\0') lines.push_back({m.tip2, cMiss});
-        lines.push_back({"Android: Press MENU -> SETUP tab to import!", cOk});
+#if defined(__ANDROID__)
+        lines.push_back({"Android: Tap SETUP panel below to import!", cOk});
+#else
+        lines.push_back({"Tip: Use WEB tab to upload ROMs via browser!", cOk});
+#endif
         return lines;
     }
 
@@ -436,16 +440,18 @@ struct SetupCoreState {
             lines.push_back({"  Alt+4: 1:1 Pan (Fn+Arrows to pan)", cText});
             lines.push_back({"  Alt+5: Axis Fit   Alt+6: Aspect Fit", cText});
             lines.push_back({"  Alt+7: Input Mode (Kbd/Joy1/Joy2/Mouse)", cText});
-            lines.push_back({"  Alt+8: Open System Menu (or Esc in UI)", cText});
+            lines.push_back({"  Alt+8: Open System Menu", cText});
             lines.push_back({"", cText});
-            lines.push_back({"USB GAMEPAD & UI NAVIGATION:", cHead});
-            lines.push_back({"  D-Pad: Move   A: Boot/OK   B: Back", cText});
+            lines.push_back({"USB GAMEPAD & SETUP NAVIGATION:", cHead});
+            lines.push_back({"  D-Pad: Move   A/Enter: OK   B/Esc: Exit/Back", cText});
             lines.push_back({"  X: Up Dir / Exit   L1/R1: PgUp / PgDn", cText});
             lines.push_back({"  UI keys: F=Up X=Down Z=Left C=Right", cMuted});
+#if defined(__ANDROID__)
             lines.push_back({"", cText});
             lines.push_back({"ANDROID PORTRAIT CONTROLS:", cHead});
             lines.push_back({"  Top menu bar: MENU, PAR/4:3, MAIN/NUM, SETUP", cText});
             lines.push_back({"  Menu/Launcher auto-switches pad for UI.", cOk});
+#endif
         } else if (t == 2) {
             lines.push_back({"DATA DIRECTORY (~/czx or app files/czx):", cHead});
             lines.push_back({"  roms/<target>/   System & BIOS ROMs", cText});
@@ -508,6 +514,13 @@ struct SetupCoreState {
             return;
         }
 
+        if (back) {
+            if (host.return_to_launcher) {
+                host.return_to_launcher(host.user_data);
+            }
+            return;
+        }
+
         if (tab == 0) {
             const int n = static_cast<int>(kMachines.size());
             if (dy != 0) {
@@ -519,11 +532,12 @@ struct SetupCoreState {
                 detail_scroll = 0;
             }
         } else {
-            const int max_s = std::max(0, static_cast<int>(build_info_lines(tab).size()) - 11);
+            const int max_s = static_cast<int>(build_info_lines(tab).size()) - 11;
+            const int clamped_max = std::max(0, max_s);
             if (dy != 0) {
-                info_scroll = std::clamp(info_scroll + dy, 0, max_s);
+                info_scroll = std::clamp(info_scroll + dy, 0, clamped_max);
             } else if (pg != 0) {
-                info_scroll = std::clamp(info_scroll + pg * 6, 0, max_s);
+                info_scroll = std::clamp(info_scroll + pg * 6, 0, clamped_max);
             }
         }
     }
@@ -599,7 +613,7 @@ struct SetupCoreState {
                 y += 14;
             }
             c.draw_hline(6, kH - 16, kW - 12, pack_rgb565(45, 62, 85));
-            c.draw_text(8, kH - 11, "Up/Dn:Machine  Enter:Details  L/R:Tabs", pack_rgb565(160, 180, 205));
+            c.draw_text(8, kH - 11, "Up/Dn:Sel  Enter:Info  L/R:Tab  Esc:Exit", pack_rgb565(160, 180, 205));
         } else {
             std::vector<DetailLine> lines;
             int scroll = 0;
@@ -618,7 +632,7 @@ struct SetupCoreState {
                 const int max_s = std::max(0, static_cast<int>(lines.size()) - 11);
                 info_scroll = std::clamp(info_scroll, 0, max_s);
                 scroll = info_scroll;
-                footer = "L/R:Switch Tab   Up/Dn:Scroll   Alt+8:Menu";
+                footer = "L/R:Switch Tab   Up/Dn:Scroll   Esc:Exit";
             }
 
             int y = (tab == 0) ? 34 : 22;

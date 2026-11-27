@@ -860,6 +860,7 @@ void EmulatorApp::enter_launcher(int focus_target_index) {
     clear_activity_state();
     hud_.fps_x10 = 0;
     core_error_.clear();
+    pending_return_to_launcher_ = false;
 
     in_launcher_ = true;
     menu_from_launcher_ = false;
@@ -1173,6 +1174,8 @@ bool EmulatorApp::activate_core(int index, const std::string& initial_media, con
     host.initial_region = (pre_id.rfind("vice", 0) == 0) ? c64_region_.c_str() : nullptr;
     host.midi_output_enabled = cb_midi_output_enabled;
     host.midi_write = cb_midi_write;
+    host.return_to_launcher = cb_return_to_launcher;
+    pending_return_to_launcher_ = false;
     if (cfg_.headless_frames == 0 && platform_.display &&
         platform_.display->supports_hw_gles2() &&
         (desktop_native_mode_ || platform_.display->is_fullscreen())) {
@@ -2967,6 +2970,13 @@ bool EmulatorApp::cb_midi_write(void* user_data, uint8_t byte, uint32_t /*delta_
     return true;
 }
 
+void EmulatorApp::cb_return_to_launcher(void* user_data) {
+    auto* self = static_cast<EmulatorApp*>(user_data);
+    if (self) {
+        self->pending_return_to_launcher_ = true;
+    }
+}
+
 void EmulatorApp::cb_host_command(void* user_data, czx::input::HostCommand cmd) {
     static_cast<EmulatorApp*>(user_data)->handle_host_command(cmd);
 }
@@ -3397,6 +3407,11 @@ int EmulatorApp::run() {
             }
         }
         router_.tick(dt_sec);
+
+        if (pending_return_to_launcher_ && !in_launcher_) {
+            pending_return_to_launcher_ = false;
+            enter_launcher(active_target_index_ >= 0 ? active_target_index_ : 0);
+        }
 
         const bool anim_dirty =
             in_launcher_ && !menu_.is_open() && !browser_.is_open() && launcher_.tick(dt_sec);

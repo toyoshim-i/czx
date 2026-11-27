@@ -39,6 +39,23 @@ message(STATUS "czx backend: ${CZX_SELECTED_BACKEND}")
 
 find_package(PkgConfig QUIET)
 find_package(Threads REQUIRED)
+find_package(ZLIB QUIET)
+if(ZLIB_FOUND)
+    add_library(czx_zlib INTERFACE)
+    target_link_libraries(czx_zlib INTERFACE ZLIB::ZLIB)
+else()
+    add_library(czx_zlib STATIC
+        third_party/AppleWin/zlib/adler32.c
+        third_party/AppleWin/zlib/crc32.c
+        third_party/AppleWin/zlib/inffast.c
+        third_party/AppleWin/zlib/inflate.c
+        third_party/AppleWin/zlib/inftrees.c
+        third_party/AppleWin/zlib/zutil.c
+    )
+    target_include_directories(czx_zlib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/AppleWin/zlib)
+    target_compile_options(czx_zlib PRIVATE -w)
+endif()
+target_compile_definitions(czx_zlib INTERFACE CZX_HAVE_ZLIB=1)
 
 add_library(czx_warnings INTERFACE)
 target_compile_options(czx_warnings INTERFACE
@@ -114,7 +131,9 @@ add_library(czx_runtime STATIC
     src/core/g800_core.cpp
     src/core/libretro_keys.cpp
     src/core/libretro_core.cpp
+    src/core/rom_catalog.cpp
     src/core/setup_core.cpp
+    src/core/setup_web_server.cpp
     src/core/test_core.cpp
     src/app/launcher_state.cpp
     src/app/emulator_app.cpp
@@ -125,7 +144,7 @@ target_include_directories(czx_runtime PUBLIC
     PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/cmake/g800_czx
 )
-target_link_libraries(czx_runtime PUBLIC czx_warnings Threads::Threads ${CMAKE_DL_LIBS} PRIVATE czx_g800_upstream MT32Emu::mt32emu m)
+target_link_libraries(czx_runtime PUBLIC czx_warnings Threads::Threads ${CMAKE_DL_LIBS} PRIVATE czx_g800_upstream MT32Emu::mt32emu czx_zlib m)
 
 # Device Linux platform library (DRM + fbdev + evdev + dynamic ALSA)
 if(UNIX AND NOT APPLE AND NOT ANDROID AND NOT CZX_SELECTED_BACKEND STREQUAL "ANDROID")
@@ -250,4 +269,8 @@ if(CZX_BUILD_TESTS AND NOT CZX_SELECTED_BACKEND STREQUAL "ANDROID")
     add_executable(test_mt32 tests/test_mt32.cpp)
     target_link_libraries(test_mt32 PRIVATE czx_runtime)
     add_test(NAME test_mt32 COMMAND test_mt32)
+
+    add_executable(test_setup_web tests/test_setup_web.cpp)
+    target_link_libraries(test_setup_web PRIVATE czx_runtime)
+    add_test(NAME test_setup_web COMMAND test_setup_web)
 endif()

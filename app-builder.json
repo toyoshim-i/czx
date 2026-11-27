@@ -25,7 +25,7 @@
       "camera": false,
       "microphone": false,
       "imu": false,
-      "network": false,
+      "network": true,
       "additional_hardware": false,
       "background_service": false,
       "external_display": true

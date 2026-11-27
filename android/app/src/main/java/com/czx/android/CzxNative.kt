@@ -9,6 +9,7 @@ data class UiSnapshot(
     val inLauncher: Boolean = true,
     val menuOpen: Boolean = false,
     val browserOpen: Boolean = false,
+    val hasCoreError: Boolean = false,
     val coreId: String = "",
     val coreName: String = "",
     val presetIndex: Int = 0,
@@ -24,6 +25,7 @@ object HostCommands {
     const val SET_MODE_ASPECT_FIT = 3
     const val TOGGLE_INPUT_MODE = 4
     const val TOGGLE_MENU = 5
+    const val RELOAD_CORE = 9
 }
 
 object CzxPad {
@@ -158,6 +160,7 @@ object CzxNative {
                 inLauncher = obj.optBoolean("inLauncher", true),
                 menuOpen = obj.optBoolean("menuOpen", false),
                 browserOpen = obj.optBoolean("browserOpen", false),
+                hasCoreError = obj.optBoolean("hasCoreError", false),
                 coreId = obj.optString("coreId", ""),
                 coreName = obj.optString("coreName", ""),
                 presetIndex = obj.optInt("presetIndex", 0),

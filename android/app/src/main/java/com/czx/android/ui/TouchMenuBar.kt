@@ -39,12 +39,13 @@ fun TouchMenuBar(
     activeKeyboardName: String,
     activePageLabel: String?,
     canTogglePreviewLayout: Boolean,
+    setupOpen: Boolean,
     onToggleMenu: () -> Unit,
     onCycleAspect: () -> Unit,
     onCycleBottomMode: () -> Unit,
     onCycleKeyboardPage: () -> Unit,
     onCyclePreviewKeyboard: () -> Unit,
-    onImportMedia: () -> Unit,
+    onToggleSetup: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val aspectLabel = when (snapshot.aspectPolicy) {
@@ -130,11 +131,12 @@ fun TouchMenuBar(
             onClick = onCycleBottomMode,
         )
 
+        val setupActive = setupOpen || snapshot.coreId == "setup"
         BarChip(
-            label = "+FILE",
-            active = false,
-            accent = Color(0xFF8BE28B),
-            onClick = onImportMedia,
+            label = "SETUP",
+            active = setupActive || snapshot.hasCoreError,
+            accent = if (snapshot.hasCoreError && !setupActive) Color(0xFFFFB74D) else Color(0xFF8BE28B),
+            onClick = onToggleSetup,
         )
     }
 }

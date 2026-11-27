@@ -2,7 +2,6 @@ package com.czx.android
 
 import android.net.Uri
 import android.os.Bundle
-import android.provider.OpenableColumns
 import android.view.KeyEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -30,21 +29,76 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.czx.android.keyboard.KeyboardRepository
 import com.czx.android.keyboard.RetroKeyboardView
+import com.czx.android.setup.ImportReport
+import com.czx.android.setup.MachineRomSpec
+import com.czx.android.setup.RomCatalog
+import com.czx.android.setup.RomInstaller
+import com.czx.android.setup.RomSlot
 import com.czx.android.ui.BottomLayoutMode
+import com.czx.android.ui.SetupPanel
 import com.czx.android.ui.TouchMenuBar
 import com.czx.android.ui.VirtualGamepad
 import java.io.File
 import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
-    private var activeCoreId: String = ""
+    private var refreshNonceState = mutableIntStateOf(0)
+    private var importReportState = mutableStateOf<ImportReport?>(null)
+    private var pendingSingleSlot: Pair<MachineRomSpec, RomSlot>? = null
+    private var pendingZipMachine: MachineRomSpec? = null
+    private var pendingMultiMachine: MachineRomSpec? = null
+    private var pendingMediaMachine: MachineRomSpec? = null
 
-    private val openMediaLauncher = registerForActivityResult(
+    private fun czxRoot(): File = File(filesDir, "czx").apply { mkdirs() }
+
+    private val pickSingleRomLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        if (uri != null) {
-            importMediaUri(uri)
-        }
+        val target = pendingSingleSlot ?: return@registerForActivityResult
+        pendingSingleSlot = null
+        if (uri == null) return@registerForActivityResult
+        val (machine, slot) = target
+        RomInstaller.installSingleRom(this, uri, czxRoot(), machine, slot)
+            .onSuccess { dst ->
+                refreshNonceState.intValue++
+                importReportState.value = ImportReport(placed = listOf("${machine.title}:${dst.name}"))
+            }
+            .onFailure { err ->
+                Toast.makeText(this, "配置失敗: ${err.message}", Toast.LENGTH_SHORT).show()
+            }
+    }
+
+    private val pickZipLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        val scope = pendingZipMachine
+        pendingZipMachine = null
+        if (uri == null) return@registerForActivityResult
+        val report = RomInstaller.importFromZip(this, uri, czxRoot(), scope)
+        refreshNonceState.intValue++
+        importReportState.value = report
+    }
+
+    private val pickMultiRomLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<Uri> ->
+        val scope = pendingMultiMachine
+        pendingMultiMachine = null
+        if (uris.isEmpty()) return@registerForActivityResult
+        val report = RomInstaller.importMultipleUris(this, uris, czxRoot(), scope)
+        refreshNonceState.intValue++
+        importReportState.value = report
+    }
+
+    private val pickMediaLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<Uri> ->
+        val machine = pendingMediaMachine ?: return@registerForActivityResult
+        pendingMediaMachine = null
+        if (uris.isEmpty()) return@registerForActivityResult
+        val count = RomInstaller.importMediaFiles(this, uris, czxRoot(), machine)
+        refreshNonceState.intValue++
+        Toast.makeText(this, "${machine.title}: メディア ${count}件追加", Toast.LENGTH_SHORT).show()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -62,13 +116,26 @@ class MainActivity : ComponentActivity() {
             var bottomMode by remember { mutableStateOf(BottomLayoutMode.KBD_AND_PAD) }
             var previewLayoutIdx by remember { mutableIntStateOf(0) }
             var keyboardPageIdx by remember { mutableIntStateOf(0) }
+            var setupSheetOpen by remember { mutableStateOf(false) }
+            var selectedSetupMachineId by remember { mutableStateOf(RomCatalog.machines.first().id) }
 
             LaunchedEffect(Unit) {
                 while (true) {
                     val next = CzxNative.getUiSnapshot()
                     snapshot = next
-                    activeCoreId = next.coreId
                     delay(50)
+                }
+            }
+            LaunchedEffect(snapshot.coreId, snapshot.inLauncher) {
+                if (snapshot.inLauncher) {
+                    setupSheetOpen = false
+                } else if (snapshot.coreId.isNotBlank() && snapshot.coreId != "setup") {
+                    selectedSetupMachineId = RomCatalog.specForCoreId(snapshot.coreId).id
+                }
+            }
+            LaunchedEffect(snapshot.menuOpen, snapshot.browserOpen) {
+                if (snapshot.menuOpen || snapshot.browserOpen) {
+                    setupSheetOpen = false
                 }
             }
 
@@ -89,6 +156,7 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(activeLayout?.id) {
                 keyboardPageIdx = 0
             }
+            val showSetupPanel = setupSheetOpen || (!snapshot.uiActive && snapshot.coreId == "setup")
 
             Column(
                 modifier = Modifier
@@ -136,6 +204,7 @@ class MainActivity : ComponentActivity() {
                     activeKeyboardName = activeLayout?.name ?: "Keyboard",
                     activePageLabel = activePageLabel,
                     canTogglePreviewLayout = canTogglePreview,
+                    setupOpen = showSetupPanel,
                     onToggleMenu = { CzxNative.nativeSendHostCommand(HostCommands.TOGGLE_MENU) },
                     onCycleAspect = {
                         val nextCmd = when (snapshot.aspectPolicy) {
@@ -159,7 +228,14 @@ class MainActivity : ComponentActivity() {
                             previewLayoutIdx = (previewLayoutIdx + 1) % layouts.size
                         }
                     },
-                    onImportMedia = { openMediaLauncher.launch(arrayOf("*/*")) },
+                    onToggleSetup = {
+                        if (snapshot.coreId != "setup") {
+                            if (!setupSheetOpen && !snapshot.inLauncher && snapshot.coreId.isNotBlank()) {
+                                selectedSetupMachineId = RomCatalog.specForCoreId(snapshot.coreId).id
+                            }
+                            setupSheetOpen = !setupSheetOpen
+                        }
+                    },
                 )
 
                 Box(
@@ -167,7 +243,57 @@ class MainActivity : ComponentActivity() {
                         .weight(1f)
                         .fillMaxWidth()
                 ) {
-                    if (snapshot.uiActive) {
+                    val dataRoot = remember { czxRoot() }
+                    val refreshNonce = refreshNonceState.intValue
+                    val activeReport = importReportState.value
+                    if (showSetupPanel) {
+                        SetupPanel(
+                            dataRoot = dataRoot,
+                            selectedMachineId = selectedSetupMachineId,
+                            onSelectMachine = { m -> selectedSetupMachineId = m.id },
+                            refreshNonce = refreshNonce,
+                            importReport = activeReport,
+                            onDismissReport = { importReportState.value = null },
+                            canReloadCore = !snapshot.inLauncher && snapshot.coreId != "setup",
+                            showCloseButton = setupSheetOpen && snapshot.coreId != "setup",
+                            onReloadCore = {
+                                setupSheetOpen = false
+                                CzxNative.nativeSendHostCommand(HostCommands.RELOAD_CORE)
+                            },
+                            onClose = { setupSheetOpen = false },
+                            onPickSingleRom = { machine, slot ->
+                                pendingSingleSlot = machine to slot
+                                pickSingleRomLauncher.launch(arrayOf("*/*"))
+                            },
+                            onDeleteRom = { machine, slot ->
+                                if (RomInstaller.deleteSlotRom(dataRoot, machine, slot)) {
+                                    refreshNonceState.intValue++
+                                    Toast.makeText(this@MainActivity, "${slot.canonical} を削除しました", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            onPickZip = { scopeMachine ->
+                                pendingZipMachine = scopeMachine
+                                pickZipLauncher.launch(
+                                    arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream", "*/*")
+                                )
+                            },
+                            onPickMultipleRoms = { machine ->
+                                pendingMultiMachine = machine
+                                pickMultiRomLauncher.launch(arrayOf("*/*"))
+                            },
+                            onAddMedia = { machine ->
+                                pendingMediaMachine = machine
+                                pickMediaLauncher.launch(arrayOf("*/*"))
+                            },
+                            onDeleteMedia = { file ->
+                                if (file.delete()) {
+                                    refreshNonceState.intValue++
+                                    Toast.makeText(this@MainActivity, "${file.name} を削除しました", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else if (snapshot.uiActive) {
                         VirtualGamepad(
                             compact = false,
                             uiGuideMode = true,
@@ -277,32 +403,6 @@ class MainActivity : ComponentActivity() {
             return true
         }
         return super.dispatchKeyEvent(event)
-    }
-
-    private fun importMediaUri(uri: Uri) {
-        val name = queryFileName(uri) ?: "imported.bin"
-        val subDir = if (activeCoreId.isNotBlank()) activeCoreId else "g800"
-        val dstDir = File(filesDir, "czx/media/$subDir").apply { mkdirs() }
-        val dstFile = File(dstDir, name)
-        runCatching {
-            contentResolver.openInputStream(uri)?.use { input ->
-                dstFile.outputStream().use { output -> input.copyTo(output) }
-            }
-        }.onSuccess {
-            Toast.makeText(this, "Imported: $name -> media/$subDir/", Toast.LENGTH_SHORT).show()
-        }.onFailure { err ->
-            Toast.makeText(this, "Import failed: ${err.message}", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun queryFileName(uri: Uri): String? {
-        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
-            if (c.moveToFirst()) {
-                val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (idx >= 0) return c.getString(idx)
-            }
-        }
-        return uri.lastPathSegment?.substringAfterLast('/')
     }
 
     private fun seedBluemsxOpenData(dstRoot: File) {
